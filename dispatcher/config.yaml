@@ -5,6 +5,13 @@ service:
 
 kafka:
   brokers: ["${KAFKA_BROKERS:-kafka:9092}"]
+  sasl:
+    mechanism: "${KAFKA_SASL_MECHANISM:-}"
+    username:  "${KAFKA_SASL_USERNAME:-}"
+    password:  "${KAFKA_SASL_PASSWORD:-}"
+  tls:
+    enabled:      ${KAFKA_TLS_ENABLED:-false}
+    ca_cert_path: "${KAFKA_CA_CERT_PATH:-}"
 
 s3:
   endpoint:   "${S3_ENDPOINT:-https://s3.fr-par.scw.cloud}"
