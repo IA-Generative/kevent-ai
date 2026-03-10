@@ -50,7 +50,9 @@ func (p *Producer) writerFor(topic string) *kafkago.Writer {
 		Balancer:               &kafkago.Hash{},
 		RequiredAcks:           kafkago.RequireOne,
 		AllowAutoTopicCreation: false, // topics must be pre-created by the operator
-		Transport:              p.transport,
+	}
+	if p.transport != nil {
+		w.Transport = p.transport
 	}
 	p.writers[topic] = w
 	return w
