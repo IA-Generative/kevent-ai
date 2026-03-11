@@ -13,6 +13,10 @@ kafka:
     enabled:      ${KAFKA_TLS_ENABLED:-false}
     ca_cert_path: "${KAFKA_CA_CERT_PATH:-}"
 
+encryption:
+  # Must match the key configured on the gateway.
+  key: "${ENCRYPTION_KEY:-}"
+
 s3:
   endpoint:   "${S3_ENDPOINT:-https://s3.fr-par.scw.cloud}"
   region:     "${S3_REGION:-fr-par}"

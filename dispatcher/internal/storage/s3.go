@@ -10,18 +10,25 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
 	"kevent/dispatcher/internal/config"
+	"kevent/dispatcher/internal/crypto"
 )
 
 // S3Client wraps the AWS SDK v2 S3 client for any S3-compatible object storage.
 type S3Client struct {
 	client *s3.Client
 	bucket string
+	encKey []byte // nil = encryption disabled
 }
 
 // NewS3Client builds an S3 client from the provided config.
-func NewS3Client(cfg config.S3Config) (*S3Client, error) {
+func NewS3Client(cfg config.S3Config, encCfg config.EncryptionConfig) (*S3Client, error) {
 	if cfg.AccessKey == "" || cfg.SecretKey == "" {
 		return nil, fmt.Errorf("s3: access_key and secret_key are required")
+	}
+
+	encKey, err := crypto.ParseKey(encCfg.Key)
+	if err != nil {
+		return nil, fmt.Errorf("s3: %w", err)
 	}
 
 	client := s3.New(s3.Options{
@@ -33,11 +40,12 @@ func NewS3Client(cfg config.S3Config) (*S3Client, error) {
 		UsePathStyle: true, // required for Scaleway with custom BaseEndpoint
 	})
 
-	return &S3Client{client: client, bucket: cfg.Bucket}, nil
+	return &S3Client{client: client, bucket: cfg.Bucket, encKey: encKey}, nil
 }
 
 // GetObject downloads an object and returns a streaming body, content-length
 // (-1 if unknown), content-type, and any error. The caller must close the body.
+// If encryption is enabled the stream is transparently decrypted.
 func (c *S3Client) GetObject(ctx context.Context, key string) (io.ReadCloser, int64, string, error) {
 	out, err := c.client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(c.bucket),
@@ -47,17 +55,14 @@ func (c *S3Client) GetObject(ctx context.Context, key string) (io.ReadCloser, in
 		return nil, 0, "", fmt.Errorf("getting S3 object %q: %w", key, err)
 	}
 
-	size := int64(-1)
-	if out.ContentLength != nil {
-		size = *out.ContentLength
-	}
-
 	ct := ""
 	if out.ContentType != nil {
 		ct = *out.ContentType
 	}
 
-	return out.Body, size, ct, nil
+	body := crypto.Decrypt(c.encKey, out.Body)
+	// Decrypted size is unknown (slightly smaller than ciphertext); pass -1.
+	return body, -1, ct, nil
 }
 
 // DeleteObject removes an object from the configured bucket.
@@ -72,15 +77,19 @@ func (c *S3Client) DeleteObject(ctx context.Context, key string) error {
 }
 
 // PutObject stores data at key in the configured bucket.
+// If encryption is enabled the data is encrypted before upload.
 func (c *S3Client) PutObject(ctx context.Context, key string, body io.Reader, size int64, contentType string) error {
+	enc := crypto.Encrypt(c.encKey, body)
+	defer enc.Close()
+
 	input := &s3.PutObjectInput{
 		Bucket:      aws.String(c.bucket),
 		Key:         aws.String(key),
-		Body:        body,
+		Body:        enc,
 		ContentType: aws.String(contentType),
 	}
-	if size >= 0 {
-		input.ContentLength = aws.Int64(size)
+	if encSize := crypto.EncryptedSize(size); encSize >= 0 {
+		input.ContentLength = aws.Int64(encSize)
 	}
 
 	if _, err := c.client.PutObject(ctx, input); err != nil {

@@ -10,6 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
 	"kevent/gateway/internal/config"
+	"kevent/gateway/internal/crypto"
 )
 
 // S3Client wraps the AWS SDK v2 S3 client for any S3-compatible object storage.
@@ -18,13 +19,19 @@ import (
 type S3Client struct {
 	s3     *s3.Client
 	bucket string
+	encKey []byte // nil = encryption disabled
 }
 
 // NewS3Client builds a standard S3 client from the provided config.
 // The BaseEndpoint field makes it compatible with any S3-compatible provider.
-func NewS3Client(cfg config.S3Config) (*S3Client, error) {
+func NewS3Client(cfg config.S3Config, encCfg config.EncryptionConfig) (*S3Client, error) {
 	if cfg.AccessKey == "" || cfg.SecretKey == "" {
 		return nil, fmt.Errorf("s3: access_key and secret_key are required")
+	}
+
+	encKey, err := crypto.ParseKey(encCfg.Key)
+	if err != nil {
+		return nil, fmt.Errorf("s3: %w", err)
 	}
 
 	s3Client := s3.New(s3.Options{
@@ -39,24 +46,25 @@ func NewS3Client(cfg config.S3Config) (*S3Client, error) {
 	return &S3Client{
 		s3:     s3Client,
 		bucket: cfg.Bucket,
+		encKey: encKey,
 	}, nil
 }
 
 // Upload stores a file stream as objectKey in the configured bucket.
-// size is the content length in bytes; pass -1 if unknown (the SDK will
-// attempt to seek the reader to determine the length automatically).
+// If encryption is enabled the stream is encrypted before upload.
+// size is the plaintext content length in bytes; pass -1 if unknown.
 func (c *S3Client) Upload(ctx context.Context, objectKey string, reader io.Reader, size int64, contentType string) error {
+	body := crypto.Encrypt(c.encKey, reader)
+	defer body.Close()
+
 	input := &s3.PutObjectInput{
 		Bucket:      aws.String(c.bucket),
 		Key:         aws.String(objectKey),
-		Body:        reader,
+		Body:        body,
 		ContentType: aws.String(contentType),
 	}
-
-	// Providing ContentLength avoids an extra seek round-trip and is required
-	// when the body is a plain io.Reader that does not implement io.ReadSeeker.
-	if size >= 0 {
-		input.ContentLength = aws.Int64(size)
+	if encSize := crypto.EncryptedSize(size); encSize >= 0 {
+		input.ContentLength = aws.Int64(encSize)
 	}
 
 	if _, err := c.s3.PutObject(ctx, input); err != nil {
@@ -66,6 +74,7 @@ func (c *S3Client) Upload(ctx context.Context, objectKey string, reader io.Reade
 }
 
 // GetObject downloads an object and returns its content as bytes.
+// If encryption is enabled the data is decrypted before being returned.
 func (c *S3Client) GetObject(ctx context.Context, objectKey string) ([]byte, error) {
 	out, err := c.s3.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(c.bucket),
@@ -74,9 +83,11 @@ func (c *S3Client) GetObject(ctx context.Context, objectKey string) ([]byte, err
 	if err != nil {
 		return nil, fmt.Errorf("getting S3 object %q: %w", objectKey, err)
 	}
-	defer out.Body.Close()
 
-	data, err := io.ReadAll(out.Body)
+	body := crypto.Decrypt(c.encKey, out.Body)
+	defer body.Close()
+
+	data, err := io.ReadAll(body)
 	if err != nil {
 		return nil, fmt.Errorf("reading S3 object %q: %w", objectKey, err)
 	}

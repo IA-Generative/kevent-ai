@@ -13,9 +13,15 @@ type Config struct {
 	Service       ServiceConfig       `yaml:"service"`
 	Kafka         KafkaConfig         `yaml:"kafka"`
 	S3            S3Config            `yaml:"s3"`
+	Encryption    EncryptionConfig    `yaml:"encryption"`
 	Transcription TranscriptionConfig `yaml:"transcription"`
 	Diarization   DiarizationConfig   `yaml:"diarization"`
 	OCR           OCRConfig           `yaml:"ocr"`
+}
+
+type EncryptionConfig struct {
+	// Key is a hex-encoded 32-byte AES-256 key. Empty = encryption disabled.
+	Key string `yaml:"key"`
 }
 
 type ServiceConfig struct {

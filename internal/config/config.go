@@ -10,11 +10,17 @@ import (
 )
 
 type Config struct {
-	Server   ServerConfig    `yaml:"server"`
-	Kafka    KafkaConfig     `yaml:"kafka"`
-	S3       S3Config  `yaml:"s3"`
-	Redis    RedisConfig     `yaml:"redis"`
-	Services []ServiceConfig `yaml:"services"`
+	Server     ServerConfig     `yaml:"server"`
+	Kafka      KafkaConfig      `yaml:"kafka"`
+	S3         S3Config         `yaml:"s3"`
+	Redis      RedisConfig      `yaml:"redis"`
+	Services   []ServiceConfig  `yaml:"services"`
+	Encryption EncryptionConfig `yaml:"encryption"`
+}
+
+type EncryptionConfig struct {
+	// Key is a hex-encoded 32-byte AES-256 key. Empty = encryption disabled.
+	Key string `yaml:"key"`
 }
 
 type ServerConfig struct {

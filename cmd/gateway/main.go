@@ -43,7 +43,7 @@ func main() {
 	slog.Info("service registry initialised", "types", registry.Types())
 
 	// ── Dependencies ──────────────────────────────────────────────────────────
-	s3Client, err := storage.NewS3Client(cfg.S3)
+	s3Client, err := storage.NewS3Client(cfg.S3, cfg.Encryption)
 	if err != nil {
 		slog.Error("failed to initialise S3 storage", "error", err)
 		os.Exit(1)

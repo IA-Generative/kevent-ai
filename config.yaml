@@ -21,6 +21,13 @@ s3:
   secret_key: "${S3_SECRET_KEY}"    # Scaleway API Secret Key
   bucket: "${S3_BUCKET:-kevent-jobs}"
 
+encryption:
+  # AES-256-GCM at-rest encryption for S3 objects.
+  # Generate with: openssl rand -hex 32
+  # Must be identical on all gateway and dispatcher instances.
+  # Empty = encryption disabled (default).
+  key: "${ENCRYPTION_KEY:-}"
+
 redis:
   addr: "${REDIS_ADDR:-redis:6379}"
   password: "${REDIS_PASSWORD:-}"
