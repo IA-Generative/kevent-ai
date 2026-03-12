@@ -16,6 +16,16 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Gateway
 
+### [v0.2.6] — 2026-03-12
+
+#### Fixed
+- S3 upload failing with `request stream is not seekable` when encryption is enabled — replaced `PutObject` with `s3manager.Uploader` (multipart) which handles non-seekable `io.Pipe` streams natively
+
+#### Changed
+- Removed provider-specific references (Scaleway) from log messages and code comments
+
+---
+
 ### [v0.2.5] — 2026-03-11
 
 #### Added
@@ -44,6 +54,16 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Dispatcher
 
+### [v0.2.6] — 2026-03-12
+
+#### Fixed
+- S3 upload failing with `request stream is not seekable` when encryption is enabled — replaced `PutObject` with `s3manager.Uploader` (multipart)
+
+#### Changed
+- Removed provider-specific references (Scaleway) from code comments
+
+---
+
 ### [v0.2.5] — 2026-03-11
 
 #### Added
@@ -64,6 +84,14 @@ Versioning: each component is versioned independently — see tag conventions be
 ---
 
 ## Helm chart (kevent-gateway)
+
+### [0.2.1] — 2026-03-12
+
+#### Changed
+- `appVersion` updated to `0.2.6`
+- `image.tag` default updated to `v0.2.6`
+
+---
 
 ### [0.2.0] — 2026-03-11
 
