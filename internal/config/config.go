@@ -48,15 +48,12 @@ type TLSConfig struct {
 	CACertPath string `yaml:"ca_cert_path"`
 }
 
-// S3Config holds Scaleway Object Storage credentials and settings.
-// Scaleway Object Storage is fully S3-compatible; endpoint format:
-//
-//	https://s3.<region>.scw.cloud  (fr-par | nl-ams | pl-waw)
+// S3Config holds S3-compatible object storage credentials and settings.
 type S3Config struct {
 	Endpoint  string `yaml:"endpoint"`   // e.g. https://s3.fr-par.scw.cloud
 	Region    string `yaml:"region"`     // e.g. fr-par
-	AccessKey string `yaml:"access_key"` // Scaleway API Access Key ID
-	SecretKey string `yaml:"secret_key"` // Scaleway API Secret Key
+	AccessKey string `yaml:"access_key"`
+	SecretKey string `yaml:"secret_key"`
 	Bucket    string `yaml:"bucket"`
 }
 

@@ -48,7 +48,6 @@ type TLSConfig struct {
 }
 
 // S3Config holds S3-compatible object storage credentials and settings.
-// Scaleway endpoint format: https://s3.<region>.scw.cloud
 type S3Config struct {
 	Endpoint  string `yaml:"endpoint"`
 	Region    string `yaml:"region"`

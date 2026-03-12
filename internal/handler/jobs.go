@@ -109,9 +109,9 @@ func (h *JobHandler) Submit(w http.ResponseWriter, r *http.Request) {
 	ext := filepath.Ext(header.Filename)
 	inputRef := fmt.Sprintf("%s/input%s", jobID, ext) // e.g. "abc123/input.wav"
 
-	// Step 1 — store the file in Scaleway Object Storage.
+	// Step 1 — store the file in S3.
 	if err := h.store.Upload(r.Context(), inputRef, file, header.Size, header.Header.Get("Content-Type")); err != nil {
-		slog.ErrorContext(r.Context(), "scaleway upload failed", "job_id", jobID, "error", err)
+		slog.ErrorContext(r.Context(), "s3 upload failed", "job_id", jobID, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to store file")
 		return
 	}

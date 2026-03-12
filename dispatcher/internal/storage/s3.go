@@ -7,6 +7,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
 	"kevent/dispatcher/internal/config"
@@ -15,9 +16,10 @@ import (
 
 // S3Client wraps the AWS SDK v2 S3 client for any S3-compatible object storage.
 type S3Client struct {
-	client *s3.Client
-	bucket string
-	encKey []byte // nil = encryption disabled
+	client   *s3.Client
+	uploader *manager.Uploader
+	bucket   string
+	encKey   []byte // nil = encryption disabled
 }
 
 // NewS3Client builds an S3 client from the provided config.
@@ -37,10 +39,10 @@ func NewS3Client(cfg config.S3Config, encCfg config.EncryptionConfig) (*S3Client
 		Credentials: aws.NewCredentialsCache(
 			credentials.NewStaticCredentialsProvider(cfg.AccessKey, cfg.SecretKey, ""),
 		),
-		UsePathStyle: true, // required for Scaleway with custom BaseEndpoint
+		UsePathStyle: true, // required for S3-compatible providers with custom BaseEndpoint
 	})
 
-	return &S3Client{client: client, bucket: cfg.Bucket, encKey: encKey}, nil
+	return &S3Client{client: client, uploader: manager.NewUploader(client), bucket: cfg.Bucket, encKey: encKey}, nil
 }
 
 // GetObject downloads an object and returns a streaming body, content-length
@@ -78,21 +80,18 @@ func (c *S3Client) DeleteObject(ctx context.Context, key string) error {
 
 // PutObject stores data at key in the configured bucket.
 // If encryption is enabled the data is encrypted before upload.
+// Uses multipart upload to support non-seekable streams (io.Pipe).
 func (c *S3Client) PutObject(ctx context.Context, key string, body io.Reader, size int64, contentType string) error {
 	enc := crypto.Encrypt(c.encKey, body)
 	defer enc.Close()
 
-	input := &s3.PutObjectInput{
+	_, err := c.uploader.Upload(ctx, &s3.PutObjectInput{
 		Bucket:      aws.String(c.bucket),
 		Key:         aws.String(key),
 		Body:        enc,
 		ContentType: aws.String(contentType),
-	}
-	if encSize := crypto.EncryptedSize(size); encSize >= 0 {
-		input.ContentLength = aws.Int64(encSize)
-	}
-
-	if _, err := c.client.PutObject(ctx, input); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("putting S3 object %q: %w", key, err)
 	}
 	return nil

@@ -7,6 +7,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
 	"kevent/gateway/internal/config"
@@ -14,12 +15,11 @@ import (
 )
 
 // S3Client wraps the AWS SDK v2 S3 client for any S3-compatible object storage.
-// It is configured via S3Config which carries the provider-specific endpoint and credentials
-// (e.g. Scaleway: https://s3.fr-par.scw.cloud, region fr-par).
 type S3Client struct {
-	s3     *s3.Client
-	bucket string
-	encKey []byte // nil = encryption disabled
+	s3       *s3.Client
+	uploader *manager.Uploader
+	bucket   string
+	encKey   []byte // nil = encryption disabled
 }
 
 // NewS3Client builds a standard S3 client from the provided config.
@@ -44,30 +44,27 @@ func NewS3Client(cfg config.S3Config, encCfg config.EncryptionConfig) (*S3Client
 	})
 
 	return &S3Client{
-		s3:     s3Client,
-		bucket: cfg.Bucket,
-		encKey: encKey,
+		s3:       s3Client,
+		uploader: manager.NewUploader(s3Client),
+		bucket:   cfg.Bucket,
+		encKey:   encKey,
 	}, nil
 }
 
 // Upload stores a file stream as objectKey in the configured bucket.
 // If encryption is enabled the stream is encrypted before upload.
-// size is the plaintext content length in bytes; pass -1 if unknown.
+// Uses multipart upload to support non-seekable streams (io.Pipe).
 func (c *S3Client) Upload(ctx context.Context, objectKey string, reader io.Reader, size int64, contentType string) error {
 	body := crypto.Encrypt(c.encKey, reader)
 	defer body.Close()
 
-	input := &s3.PutObjectInput{
+	_, err := c.uploader.Upload(ctx, &s3.PutObjectInput{
 		Bucket:      aws.String(c.bucket),
 		Key:         aws.String(objectKey),
 		Body:        body,
 		ContentType: aws.String(contentType),
-	}
-	if encSize := crypto.EncryptedSize(size); encSize >= 0 {
-		input.ContentLength = aws.Int64(encSize)
-	}
-
-	if _, err := c.s3.PutObject(ctx, input); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("uploading %q to S3 bucket %q: %w", objectKey, c.bucket, err)
 	}
 	return nil
