@@ -124,11 +124,15 @@ func (cm *ConsumerManager) handleResult(ctx context.Context, raw []byte) error {
 
 	cm.logger.Info("job result stored", "job_id", event.JobID, "status", event.Status)
 
-	// Retrieve the updated job to check for a registered callback URL.
+	// Retrieve the updated job BEFORE notifying sync waiters — this ensures the
+	// job record still exists in Redis when the sync handler wakes up and reads it.
 	job, err := cm.redis.GetJob(ctx, event.JobID)
 	if err != nil {
 		return fmt.Errorf("fetching job %q for webhook: %w", event.JobID, err)
 	}
+
+	// Wake up any sync handler waiting on this job (no-op for async jobs).
+	cm.redis.NotifyJobDone(ctx, event.JobID)
 
 	if job.CallbackURL != "" {
 		go cm.sendWebhook(job)

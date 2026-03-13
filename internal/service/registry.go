@@ -21,8 +21,9 @@ type Def struct {
 	MaxFileSizeMB int64
 
 	// Sync / OpenAI-compatible mode (optional).
-	InferenceURL string   // full URL of the backend endpoint
+	InferenceURL string   // full URL of the backend endpoint (direct proxy fallback)
 	OpenAIPaths  []string // e.g. ["/v1/audio/transcriptions", "/v1/audio/translations"]
+	SyncTopic    string   // Kafka topic for priority sync-over-Kafka jobs (overrides direct proxy)
 }
 
 // Registry maps (service_type, model) pairs to their runtime definitions.
@@ -50,6 +51,7 @@ func NewRegistry(cfgs []config.ServiceConfig) *Registry {
 			MaxFileSizeMB: cfg.MaxFileSizeMB,
 			InferenceURL:  cfg.InferenceURL,
 			OpenAIPaths:   cfg.OpenAIPaths,
+			SyncTopic:     cfg.SyncTopic,
 		}
 
 		if r.byTypeModel[cfg.Type] == nil {
@@ -58,7 +60,8 @@ func NewRegistry(cfgs []config.ServiceConfig) *Registry {
 		r.byTypeModel[cfg.Type][cfg.Model] = def
 
 		// Build the sync routing index — one entry per configured path.
-		if cfg.Model != "" && cfg.InferenceURL != "" {
+		// Index when either a direct proxy URL or a sync Kafka topic is configured.
+		if cfg.Model != "" && (cfg.InferenceURL != "" || cfg.SyncTopic != "") {
 			for _, path := range cfg.OpenAIPaths {
 				if path == "" {
 					continue

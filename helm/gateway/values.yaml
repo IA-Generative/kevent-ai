@@ -2,7 +2,7 @@ replicaCount: 1
 
 image:
   repository: ghcr.io/ronan-wescale/ai-kevent/gateway
-  tag: "v0.2.7"
+  tag: "v0.3.0"
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
@@ -86,6 +86,9 @@ services:
     # Async / Kafka
     inputTopic: "jobs.whisper-large-v3.input"
     resultTopic: "jobs.whisper-large-v3.results"
+    # Priority topic for sync-over-Kafka: POST /v1/* multipart requests are routed
+    # here instead of proxied directly. Leave empty to use direct proxy (inferenceURL).
+    syncTopic: "jobs.whisper-large-v3.sync"
     acceptedExts: [".mp3", ".wav", ".m4a", ".ogg", ".flac"]
     maxFileSizeMB: 500
 

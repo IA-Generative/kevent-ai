@@ -2,36 +2,56 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
+	"kevent/gateway/internal/kafka"
+	"kevent/gateway/internal/model"
 	"kevent/gateway/internal/service"
+	"kevent/gateway/internal/storage"
 )
 
-// SyncHandler proxies OpenAI-compatible requests directly to the matching
-// inference backend, selected by the "model" field in the request payload.
+// SyncHandler handles OpenAI-compatible POST /v1/* requests.
 //
-// Routing table: registry.RouteSync(r.URL.Path, model) → InferenceURL
-//
-// Supported content types:
-//   - multipart/form-data  — audio/document endpoints (model field in form)
-//   - application/json     — chat/completion endpoints (model field in JSON)
+// Routing strategy:
+//   - multipart/form-data + service has sync_topic configured → sync-over-Kafka:
+//     upload file to S3, publish to the priority sync topic, keep the connection
+//     open and wait for the result, then return it directly in the HTTP response.
+//   - application/json or no sync_topic configured → direct proxy to the inference
+//     backend (original behaviour).
 type SyncHandler struct {
 	registry   *service.Registry
+	s3         *storage.S3Client
+	redis      *storage.RedisClient
+	producer   *kafka.Producer
 	httpClient *http.Client
 }
 
-func NewSyncHandler(registry *service.Registry) *SyncHandler {
+func NewSyncHandler(
+	registry *service.Registry,
+	s3 *storage.S3Client,
+	redis *storage.RedisClient,
+	producer *kafka.Producer,
+) *SyncHandler {
 	return &SyncHandler{
 		registry: registry,
-		// Generous timeout: audio transcription can take several minutes.
-		// The real ceiling is Knative spec.template.spec.timeoutSeconds.
+		s3:       s3,
+		redis:    redis,
+		producer: producer,
+		// Generous timeout for direct-proxy path; Knative timeoutSeconds is the
+		// real ceiling for the sync-over-Kafka path (controlled by context).
 		httpClient: &http.Client{Timeout: 15 * time.Minute},
 	}
 }
@@ -44,64 +64,181 @@ func (h *SyncHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	ct, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 
-	var (
-		model       string
-		forwardBody io.ReadCloser
-		forwardCT   string
-	)
-
 	switch {
 	case strings.HasPrefix(ct, "multipart/form-data"):
-		// Parse multipart; files > 32 MB are spooled to disk automatically.
-		if err := r.ParseMultipartForm(32 << 20); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid multipart form: "+err.Error())
-			return
-		}
-		model = r.FormValue("model")
-
-		body, contentType, err := reconstructMultipart(r)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to rebuild request: "+err.Error())
-			return
-		}
-		forwardBody = body
-		forwardCT = contentType
+		h.handleMultipart(w, r)
 
 	case ct == "application/json":
-		// Read the JSON body to extract the model field, then restore it for
-		// forwarding. Cap at 1 MB — JSON payloads don't carry file data.
-		raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "failed to read body: "+err.Error())
-			return
-		}
-		var payload struct {
-			Model string `json:"model"`
-		}
-		_ = json.Unmarshal(raw, &payload)
-		model = payload.Model
-		forwardBody = io.NopCloser(bytes.NewReader(raw))
-		forwardCT = r.Header.Get("Content-Type")
+		h.handleJSON(w, r)
 
 	default:
 		writeError(w, http.StatusUnsupportedMediaType,
 			"Content-Type must be multipart/form-data or application/json")
+	}
+}
+
+func (h *SyncHandler) handleMultipart(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid multipart form: "+err.Error())
 		return
 	}
-	defer forwardBody.Close()
 
-	if model == "" {
+	modelName := r.FormValue("model")
+	if modelName == "" {
 		writeError(w, http.StatusBadRequest, "field 'model' is required")
 		return
 	}
 
-	def, err := h.registry.RouteSync(r.URL.Path, model)
+	def, err := h.registry.RouteSync(r.URL.Path, modelName)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	// Build the upstream URL: base URL from config + original request path + query.
+	if def.SyncTopic != "" {
+		h.handleMultipartViaKafka(w, r, def)
+	} else {
+		body, contentType, err := reconstructMultipart(r)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to rebuild request: "+err.Error())
+			return
+		}
+		h.proxyToInference(w, r, def, body, contentType)
+	}
+}
+
+func (h *SyncHandler) handleJSON(w http.ResponseWriter, r *http.Request) {
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "failed to read body: "+err.Error())
+		return
+	}
+
+	var payload struct {
+		Model string `json:"model"`
+	}
+	_ = json.Unmarshal(raw, &payload)
+	if payload.Model == "" {
+		writeError(w, http.StatusBadRequest, "field 'model' is required")
+		return
+	}
+
+	def, err := h.registry.RouteSync(r.URL.Path, payload.Model)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// JSON requests always use direct proxy (no file to route through Kafka).
+	h.proxyToInference(w, r, def,
+		io.NopCloser(bytes.NewReader(raw)),
+		r.Header.Get("Content-Type"),
+	)
+}
+
+// handleMultipartViaKafka uploads the file to S3, publishes to the priority sync
+// topic, waits for the result, and returns it in the HTTP response — keeping the
+// connection open throughout.
+func (h *SyncHandler) handleMultipartViaKafka(w http.ResponseWriter, r *http.Request, def *service.Def) {
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "field 'file' is required")
+		return
+	}
+	defer file.Close()
+
+	if err := h.registry.ValidateFileDef(def, header.Filename); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	jobID := uuid.New().String()
+	ext := filepath.Ext(header.Filename)
+	inputRef := fmt.Sprintf("%s/input%s", jobID, ext)
+
+	if err := h.s3.Upload(r.Context(), inputRef, file, header.Size, header.Header.Get("Content-Type")); err != nil {
+		slog.ErrorContext(r.Context(), "s3 upload failed", "job_id", jobID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to store file")
+		return
+	}
+
+	now := time.Now().UTC()
+	if err := h.redis.SaveJob(r.Context(), &model.Job{
+		ID:          jobID,
+		ServiceType: def.Type,
+		Model:       def.Model,
+		Status:      model.JobStatusPending,
+		InputRef:    inputRef,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}); err != nil {
+		slog.ErrorContext(r.Context(), "redis save failed", "job_id", jobID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to save job")
+		return
+	}
+
+	// Subscribe BEFORE publishing to Kafka — ensures we never miss the notification
+	// even if the dispatcher processes the job before we start waiting.
+	sub := h.redis.SubscribeJobDone(r.Context(), jobID)
+	defer sub.Close()
+
+	event := &model.InputEvent{
+		JobID:       jobID,
+		ServiceType: def.Type,
+		Model:       def.Model,
+		InputRef:    inputRef,
+		CreatedAt:   now,
+	}
+	if err := h.producer.PublishInputEvent(r.Context(), def.SyncTopic, event); err != nil {
+		slog.ErrorContext(r.Context(), "kafka publish failed", "job_id", jobID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to enqueue job")
+		return
+	}
+
+	slog.InfoContext(r.Context(), "sync job enqueued",
+		"job_id", jobID, "model", def.Model, "topic", def.SyncTopic)
+
+	// Block until the dispatcher publishes the result (or the client disconnects).
+	if err := sub.Wait(r.Context()); err != nil {
+		writeError(w, http.StatusGatewayTimeout, "timed out waiting for result")
+		return
+	}
+
+	job, err := h.redis.GetJob(r.Context(), jobID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to retrieve job")
+		return
+	}
+
+	if job.Status == model.JobStatusFailed {
+		writeError(w, http.StatusUnprocessableEntity, job.Error)
+		return
+	}
+
+	result, err := h.s3.GetObject(r.Context(), job.ResultRef)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to retrieve result")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(result)
+
+	go func(resultRef, jobID string) {
+		ctx := context.Background()
+		if err := h.s3.DeleteObject(ctx, resultRef); err != nil {
+			slog.Error("failed to delete sync result", "job_id", jobID, "error", err)
+		}
+		if err := h.redis.DeleteJob(ctx, jobID); err != nil {
+			slog.Error("failed to delete sync job record", "job_id", jobID, "error", err)
+		}
+	}(job.ResultRef, jobID)
+}
+
+// proxyToInference forwards the request body directly to the inference backend.
+func (h *SyncHandler) proxyToInference(w http.ResponseWriter, r *http.Request, def *service.Def, body io.ReadCloser, contentType string) {
+	defer body.Close()
+
 	target, err := url.Parse(def.InferenceURL)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "invalid inference_url configuration")
@@ -110,12 +247,12 @@ func (h *SyncHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	target.Path = r.URL.Path
 	target.RawQuery = r.URL.RawQuery
 
-	upstreamReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, target.String(), forwardBody)
+	upstreamReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, target.String(), body)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to build upstream request")
 		return
 	}
-	upstreamReq.Header.Set("Content-Type", forwardCT)
+	upstreamReq.Header.Set("Content-Type", contentType)
 	if auth := r.Header.Get("Authorization"); auth != "" {
 		upstreamReq.Header.Set("Authorization", auth)
 	}
@@ -127,7 +264,6 @@ func (h *SyncHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	// Stream response back to the client.
 	for key, values := range resp.Header {
 		for _, v := range values {
 			w.Header().Add(key, v)
@@ -137,45 +273,41 @@ func (h *SyncHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, resp.Body)
 }
 
-// reconstructMultipart rebuilds the multipart body from the already-parsed
-// form, streaming file parts from their on-disk spool files via an io.Pipe.
-// This avoids loading large files into memory a second time.
+// reconstructMultipart rebuilds the multipart body from the already-parsed form,
+// streaming file parts via an io.Pipe to avoid loading large files into memory.
 func reconstructMultipart(r *http.Request) (io.ReadCloser, string, error) {
 	pr, pw := io.Pipe()
 	mw := multipart.NewWriter(pw)
 
 	go func() {
-		// Text fields first.
-		for key, values := range r.MultipartForm.Value {
-			for _, value := range values {
-				if err := mw.WriteField(key, value); err != nil {
-					pw.CloseWithError(err)
-					return
+		err := func() error {
+			for key, values := range r.MultipartForm.Value {
+				for _, value := range values {
+					if err := mw.WriteField(key, value); err != nil {
+						return err
+					}
 				}
 			}
-		}
-		// File fields — streamed from temp files on disk.
-		for fieldName, fileHeaders := range r.MultipartForm.File {
-			for _, fh := range fileHeaders {
-				part, err := mw.CreateFormFile(fieldName, fh.Filename)
-				if err != nil {
-					pw.CloseWithError(err)
-					return
-				}
-				f, err := fh.Open()
-				if err != nil {
-					pw.CloseWithError(err)
-					return
-				}
-				_, err = io.Copy(part, f)
-				f.Close()
-				if err != nil {
-					pw.CloseWithError(err)
-					return
+			for fieldName, fileHeaders := range r.MultipartForm.File {
+				for _, fh := range fileHeaders {
+					part, err := mw.CreateFormFile(fieldName, fh.Filename)
+					if err != nil {
+						return err
+					}
+					f, err := fh.Open()
+					if err != nil {
+						return err
+					}
+					_, err = io.Copy(part, f)
+					f.Close()
+					if err != nil {
+						return err
+					}
 				}
 			}
-		}
-		pw.CloseWithError(mw.Close())
+			return mw.Close()
+		}()
+		pw.CloseWithError(err)
 	}()
 
 	return pr, mw.FormDataContentType(), nil

@@ -57,6 +57,9 @@ services:
     # Async / Kafka — topics named after the model
     input_topic: jobs.whisper-large-v3.input
     result_topic: jobs.whisper-large-v3.results
+    # Sync-over-Kafka: priority topic consumed by a dedicated KafkaSource → /sync
+    # Leave empty to fall back to direct proxy (inference_url).
+    sync_topic: jobs.whisper-large-v3.sync
     accepted_exts: [".mp3", ".wav", ".m4a", ".ogg", ".flac"]
     max_file_size_mb: 500
 
@@ -69,6 +72,7 @@ services:
     # Async / Kafka — topics named after the model
     input_topic: jobs.llava-v1.6-mistral-7b.input
     result_topic: jobs.llava-v1.6-mistral-7b.results
+    # OCR uses JSON payloads — sync-over-Kafka not supported for JSON; direct proxy used.
     accepted_exts: [".pdf", ".jpg", ".jpeg", ".png", ".tiff", ".bmp"]
     max_file_size_mb: 50
 

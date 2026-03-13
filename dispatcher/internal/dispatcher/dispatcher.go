@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"kevent/dispatcher/internal/adapter"
@@ -23,10 +24,11 @@ import (
 // requête HTTP en vol pour calibrer le nombre de replicas (= pods GPU actifs).
 // containerConcurrency dans le Knative Service spec remplace le sémaphore.
 type Dispatcher struct {
-	adapter     adapter.Adapter
-	s3          *storage.S3Client
-	publisher   *kafka.Publisher
-	resultTopic string
+	adapter      adapter.Adapter
+	s3           *storage.S3Client
+	publisher    *kafka.Publisher
+	resultTopic  string
+	syncPriority atomic.Int32 // 1 = sync job in progress, 0 = idle
 }
 
 func New(
@@ -43,13 +45,28 @@ func New(
 	}
 }
 
-// ServeHTTP reçoit un CloudEvent de KafkaSource et bloque jusqu'à la fin du job.
+// ServeHTTP is the async CloudEvent handler (KafkaSource → POST /).
 //
-// Sémantique des codes retour (pour la politique de retry de KafkaSource) :
-//   - 200 : job traité (succès ou échec métier publié via ResultEvent) — pas de retry
+// Returns 503 when a priority sync job is in progress so KafkaSource retries
+// after its configured backoffDelay — giving sync jobs the GPU first.
+//
+// Sémantique des codes retour :
+//   - 200 : job traité — pas de retry
 //   - 400 : message malformé — pas de retry
-//   - 500 : erreur infrastructure transitoire (S3, réseau) — KafkaSource doit retenter
+//   - 503 : sync job en cours — KafkaSource doit retenter après backoffDelay
+//   - 500 : erreur infra transitoire — KafkaSource doit retenter
 func (d *Dispatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if d.syncPriority.Load() == 1 {
+		slog.Info("async job deferred: sync job in progress")
+		http.Error(w, "sync job in progress, retry later", http.StatusServiceUnavailable)
+		return
+	}
+	d.serveHTTP(w, r)
+}
+
+// serveHTTP is the shared CloudEvent processing implementation used by both
+// ServeHTTP (async) and ServeHTTPSync (priority).
+func (d *Dispatcher) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -70,7 +87,6 @@ func (d *Dispatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	slog.Info("event received", "job_id", event.JobID, "service_type", event.ServiceType, "input_ref", event.InputRef)
 
 	if err := d.process(r.Context(), &event); err != nil {
-		// Erreur infra transitoire : KafkaSource retentera le message.
 		slog.Error("transient error, letting KafkaSource retry", "job_id", event.JobID, "error", err)
 		http.Error(w, "transient error", http.StatusInternalServerError)
 		return

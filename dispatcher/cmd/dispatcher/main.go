@@ -77,12 +77,9 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	// /v1/* — sync proxy: forward directly to the inference model (127.0.0.1:9000).
-	// More specific than "/" so it takes priority over the CloudEvent handler.
-	if base := inferenceBaseURL(cfg); base != "" {
-		mux.Handle("/v1/", dispatcher.NewSyncProxy(base))
-		slog.Info("sync proxy enabled", "inference_base", base)
-	}
+	// /sync — priority CloudEvent handler for sync-over-Kafka jobs.
+	// Sets syncPriority flag so async jobs on the same pod are deferred (503).
+	mux.HandleFunc("/sync", disp.ServeHTTPSync)
 
 	mux.Handle("/", disp) // async CloudEvent handler (KafkaSource → POST /)
 
@@ -135,16 +132,6 @@ func inferenceHostPort(cfg *config.Config) string {
 		return ""
 	}
 	return u.Host
-}
-
-// inferenceBaseURL returns scheme://host:port for the active service's endpoint
-// (e.g. "http://127.0.0.1:9000"). Used to build the sync proxy target.
-func inferenceBaseURL(cfg *config.Config) string {
-	u, err := url.Parse(inferenceEndpointURL(cfg))
-	if err != nil || u.Host == "" {
-		return ""
-	}
-	return u.Scheme + "://" + u.Host
 }
 
 // inferenceEndpointURL returns the full configured endpoint URL for the active

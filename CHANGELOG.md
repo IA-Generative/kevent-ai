@@ -16,6 +16,20 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Gateway
 
+### [v0.3.0] — 2026-03-13
+
+#### Added
+- Sync-over-Kafka: `POST /v1/*` multipart requests are now routed through a dedicated priority Kafka topic (`sync_topic`) instead of proxied directly, when `sync_topic` is configured for a service
+- `internal/storage/redis.go`: `SubscribeJobDone` / `NotifyJobDone` for Redis pub/sub result notification
+- `internal/kafka/consumer.go`: notifies sync waiters via pub/sub when a result arrives
+- `SyncTopic` field in `ServiceConfig` and `service.Def`
+
+#### Changed
+- `SyncHandler` now requires `s3`, `redis`, and `producer` dependencies (sync-over-Kafka path)
+- JSON requests (`/v1/chat/completions`) continue to use direct proxy regardless of `sync_topic`
+
+---
+
 ### [v0.2.7] — 2026-03-13
 
 #### Added
@@ -61,6 +75,18 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Dispatcher
 
+### [v0.3.0] — 2026-03-13
+
+#### Added
+- `ServeHTTPSync` endpoint (`POST /sync`): priority CloudEvent handler that sets an in-pod `syncPriority` flag for the duration of the job
+- `syncPriority atomic.Int32` field on `Dispatcher`
+
+#### Changed
+- `ServeHTTP` (async handler): returns `503 Service Unavailable` when a sync job is in progress, causing KafkaSource to retry with backoff — giving sync jobs first access to the GPU
+- Removed `SyncProxy` (`/v1/*` direct proxy): sync requests now arrive via the dedicated KafkaSource → `/sync` path
+
+---
+
 ### [v0.2.7] — 2026-03-13
 
 #### Added
@@ -98,6 +124,17 @@ Versioning: each component is versioned independently — see tag conventions be
 ---
 
 ## Helm chart (kevent-gateway)
+
+### [0.3.0] — 2026-03-13
+
+#### Added
+- `services[].syncTopic` — optional priority Kafka topic for sync-over-Kafka routing
+- ConfigMap template now renders `sync_topic` when set
+
+#### Changed
+- `appVersion` and `image.tag` updated to `0.3.0`
+
+---
 
 ### [0.2.3] — 2026-03-13
 

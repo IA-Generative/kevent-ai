@@ -81,7 +81,7 @@ func main() {
 
 	// OpenAI-compatible sync endpoints — routed by the "model" field in the payload.
 	if registry.HasSyncServices() {
-		syncHandler := handler.NewSyncHandler(registry)
+		syncHandler := handler.NewSyncHandler(registry, s3Client, redisClient, producer)
 		r.Get("/v1/models", handler.ListModels(registry))
 		r.Post("/v1/*", syncHandler.ServeHTTP)
 		slog.Info("sync proxy enabled", "paths", registry.SyncPaths())

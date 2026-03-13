@@ -77,6 +77,10 @@ type ServiceConfig struct {
 	// Async / Kafka mode.
 	InputTopic    string   `yaml:"input_topic"`
 	ResultTopic   string   `yaml:"result_topic"`
+	// SyncTopic is the dedicated Kafka topic for priority (sync-over-Kafka) jobs.
+	// When set, POST /v1/* multipart requests are routed through Kafka instead of
+	// proxied directly, giving them priority over async jobs via a second KafkaSource.
+	SyncTopic     string   `yaml:"sync_topic"`
 	AcceptedExts  []string `yaml:"accepted_exts"`
 	MaxFileSizeMB int64    `yaml:"max_file_size_mb"`
 }
