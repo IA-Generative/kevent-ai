@@ -53,8 +53,6 @@ services:
     openai_paths:
       - "/v1/audio/transcriptions"
       - "/v1/audio/translations"
-      - "/v2/models/{model}/infer"       # KServe v2 inference protocol — model from URL
-      - "/v1/models/{model}:predict"     # KServe v1 prediction protocol
     inference_url: "${TRANSCRIPTION_WHISPER_LARGE_V3_URL:-http://kevent-transcription-predictor.default.svc.cluster.local}"
     # Async / Kafka — topics named after the model
     input_topic: jobs.whisper-large-v3.input

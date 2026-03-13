@@ -82,8 +82,6 @@ services:
     openaiPaths:
       - "/v1/audio/transcriptions"
       - "/v1/audio/translations"
-      - "/v2/models/{model}/infer"
-      - "/v1/models/{model}:predict"
     inferenceURL: "http://kevent-transcription-predictor.default.svc.cluster.local"
     # Async / Kafka
     inputTopic: "jobs.whisper-large-v3.input"
