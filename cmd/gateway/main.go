@@ -48,6 +48,7 @@ func main() {
 		slog.Error("failed to initialise S3 storage", "error", err)
 		os.Exit(1)
 	}
+	slog.Info("S3 storage initialised", "encryption", cfg.Encryption.Key != "")
 
 	redisClient, err := storage.NewRedis(cfg.Redis)
 	if err != nil {

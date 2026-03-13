@@ -45,6 +45,7 @@ func main() {
 		slog.Error("failed to initialise S3 client", "error", err)
 		os.Exit(1)
 	}
+	slog.Info("S3 storage initialised", "encryption", cfg.Encryption.Key != "")
 
 	publisher, err := kafka.NewPublisher(cfg.Kafka)
 	if err != nil {
