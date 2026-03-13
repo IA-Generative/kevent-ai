@@ -35,6 +35,9 @@ data:
       secret_key: "${S3_SECRET_KEY}"
       bucket:     "{{ .Values.s3.bucket }}"
 
+    encryption:
+      key: "${ENCRYPTION_KEY:-}"
+
     redis:
       addr:         "{{ include "kevent-gateway.redisAddr" . }}"
       password:     ""

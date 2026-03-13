@@ -85,6 +85,13 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Helm chart (kevent-gateway)
 
+### [0.2.2] — 2026-03-13
+
+#### Fixed
+- ConfigMap template missing `encryption.key: "${ENCRYPTION_KEY:-}"` — the env var was injected in the pod but never referenced in `config.yaml`, so encryption was always disabled regardless of key configuration
+
+---
+
 ### [0.2.1] — 2026-03-12
 
 #### Changed
