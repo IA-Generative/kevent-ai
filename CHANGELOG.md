@@ -16,6 +16,13 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Gateway
 
+### [v0.2.7] — 2026-03-13
+
+#### Added
+- Startup log indicating whether at-rest encryption is enabled (`"S3 storage initialised" encryption=true/false`)
+
+---
+
 ### [v0.2.6] — 2026-03-12
 
 #### Fixed
@@ -54,6 +61,13 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Dispatcher
 
+### [v0.2.7] — 2026-03-13
+
+#### Added
+- Startup log indicating whether at-rest encryption is enabled (`"S3 storage initialised" encryption=true/false`)
+
+---
+
 ### [v0.2.6] — 2026-03-12
 
 #### Fixed
@@ -84,6 +98,14 @@ Versioning: each component is versioned independently — see tag conventions be
 ---
 
 ## Helm chart (kevent-gateway)
+
+### [0.2.3] — 2026-03-13
+
+#### Changed
+- `appVersion` updated to `0.2.7`
+- `image.tag` default updated to `v0.2.7`
+
+---
 
 ### [0.2.2] — 2026-03-13
 
