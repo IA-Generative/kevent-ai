@@ -102,11 +102,9 @@ func (h *SyncHandler) handleMultipart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// model is optional when the path pattern embeds the model name
+	// (e.g. /v2/models/{model}/infer). RouteSync extracts it from the URL.
 	modelName := r.FormValue("model")
-	if modelName == "" {
-		writeError(w, http.StatusBadRequest, "field 'model' is required")
-		return
-	}
 
 	def, err := h.registry.RouteSync(r.URL.Path, modelName)
 	if err != nil {
@@ -137,11 +135,7 @@ func (h *SyncHandler) handleJSON(w http.ResponseWriter, r *http.Request) {
 		Model string `json:"model"`
 	}
 	_ = json.Unmarshal(raw, &payload)
-	if payload.Model == "" {
-		writeError(w, http.StatusBadRequest, "field 'model' is required")
-		return
-	}
-
+	// model may be empty for path-pattern routes (e.g. /v2/models/{model}/infer).
 	def, err := h.registry.RouteSync(r.URL.Path, payload.Model)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())

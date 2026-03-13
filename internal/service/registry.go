@@ -22,14 +22,64 @@ type Def struct {
 
 	// Sync / OpenAI-compatible mode (optional).
 	InferenceURL string   // full URL of the backend endpoint (direct proxy fallback)
-	OpenAIPaths  []string // e.g. ["/v1/audio/transcriptions", "/v1/audio/translations"]
+	OpenAIPaths  []string // e.g. ["/v1/audio/transcriptions", "/v2/models/{model}/infer"]
 	SyncTopic    string   // Kafka topic for priority sync-over-Kafka jobs (overrides direct proxy)
+}
+
+// pathPattern supports openai_paths entries that contain a {model} placeholder,
+// e.g. "/v2/models/{model}/infer" or "/v1/models/{model}:predict".
+// The placeholder can be an entire path segment or embedded within one
+// (prefix/suffix around {model} in the same segment are matched literally).
+type pathPattern struct {
+	pattern     string
+	segments    []string        // pattern split by "/"
+	defsByModel map[string]*Def // model name → Def
+}
+
+// match returns the extracted model name if urlPath matches the pattern.
+func (p *pathPattern) match(urlPath string) (model string, ok bool) {
+	urlSegs := strings.Split(urlPath, "/")
+	if len(urlSegs) != len(p.segments) {
+		return "", false
+	}
+	for i, patSeg := range p.segments {
+		if strings.Contains(patSeg, "{model}") {
+			m, matched := matchModelSegment(patSeg, urlSegs[i])
+			if !matched || m == "" {
+				return "", false
+			}
+			model = m
+		} else if urlSegs[i] != patSeg {
+			return "", false
+		}
+	}
+	return model, model != ""
+}
+
+// matchModelSegment extracts the model name from a URL segment given a pattern
+// segment that contains exactly one {model} placeholder.
+// Examples:
+//
+//	pattern "{model}"         + actual "whisper-large-v3"         → "whisper-large-v3"
+//	pattern "{model}:predict" + actual "whisper-large-v3:predict" → "whisper-large-v3"
+func matchModelSegment(pattern, actual string) (model string, ok bool) {
+	parts := strings.SplitN(pattern, "{model}", 2)
+	prefix, suffix := parts[0], parts[1]
+	if !strings.HasPrefix(actual, prefix) || !strings.HasSuffix(actual, suffix) {
+		return "", false
+	}
+	// Guard against overlap when prefix+suffix is longer than actual.
+	if len(actual) < len(prefix)+len(suffix) {
+		return "", false
+	}
+	return actual[len(prefix) : len(actual)-len(suffix)], true
 }
 
 // Registry maps (service_type, model) pairs to their runtime definitions.
 type Registry struct {
 	byTypeModel map[string]map[string]*Def // type → model → Def
-	bySync      map[string]map[string]*Def // openai_path → model → Def
+	bySync      map[string]map[string]*Def // exact openai_path → model → Def
+	byPattern   []*pathPattern             // pattern paths containing {model}
 }
 
 func NewRegistry(cfgs []config.ServiceConfig) *Registry {
@@ -66,14 +116,36 @@ func NewRegistry(cfgs []config.ServiceConfig) *Registry {
 				if path == "" {
 					continue
 				}
-				if r.bySync[path] == nil {
-					r.bySync[path] = make(map[string]*Def)
+				if strings.Contains(path, "{model}") {
+					// Pattern path — model is embedded in the URL.
+					r.indexPattern(path, cfg.Model, def)
+				} else {
+					// Exact path — model is expected in the request body.
+					if r.bySync[path] == nil {
+						r.bySync[path] = make(map[string]*Def)
+					}
+					r.bySync[path][cfg.Model] = def
 				}
-				r.bySync[path][cfg.Model] = def
 			}
 		}
 	}
 	return r
+}
+
+// indexPattern adds def to the pattern index, merging into an existing pattern
+// entry when the same path template is shared by multiple service configs.
+func (r *Registry) indexPattern(pattern, model string, def *Def) {
+	for _, p := range r.byPattern {
+		if p.pattern == pattern {
+			p.defsByModel[model] = def
+			return
+		}
+	}
+	r.byPattern = append(r.byPattern, &pathPattern{
+		pattern:     pattern,
+		segments:    strings.Split(pattern, "/"),
+		defsByModel: map[string]*Def{model: def},
+	})
 }
 
 // RouteAsync returns the Def for the given (service_type, model) pair.
@@ -106,35 +178,92 @@ func (r *Registry) RouteAsync(serviceType, model string) (*Def, error) {
 	return d, nil
 }
 
-// RouteSync returns the Def whose OpenAIPath and Model match the request,
-// enabling model-field-based routing for OpenAI-compatible endpoints.
+// RouteSync returns the service Def for the incoming request.
+//
+// Lookup order:
+//  1. Exact path match (model from request body, required unless only one model
+//     is registered for that path).
+//  2. Pattern path match — the model name is extracted from the URL itself
+//     (e.g. "/v2/models/whisper-large-v3/infer" matches "/v2/models/{model}/infer").
+//     In this case model may be empty.
 func (r *Registry) RouteSync(openaiPath, model string) (*Def, error) {
-	models, ok := r.bySync[openaiPath]
-	if !ok {
-		return nil, fmt.Errorf("no sync service configured for path %q", openaiPath)
+	// 1. Exact path.
+	if models, ok := r.bySync[openaiPath]; ok {
+		if d, ok := models[model]; ok {
+			return d, nil
+		}
+		// model not in body — succeed only if there is exactly one model.
+		if model == "" && len(models) == 1 {
+			for _, d := range models {
+				return d, nil
+			}
+		}
+		available := make([]string, 0, len(models))
+		for m := range models {
+			available = append(available, m)
+		}
+		return nil, fmt.Errorf("no service for path %q with model %q (available: %v)", openaiPath, model, available)
 	}
-	if d, ok := models[model]; ok {
-		return d, nil
+
+	// 2. Pattern path — model extracted from URL.
+	for _, p := range r.byPattern {
+		extracted, ok := p.match(openaiPath)
+		if !ok {
+			continue
+		}
+		if d, ok := p.defsByModel[extracted]; ok {
+			return d, nil
+		}
+		available := make([]string, 0, len(p.defsByModel))
+		for m := range p.defsByModel {
+			available = append(available, m)
+		}
+		return nil, fmt.Errorf("path %q matched pattern %q but model %q is not registered (available: %v)",
+			openaiPath, p.pattern, extracted, available)
 	}
-	available := make([]string, 0, len(models))
-	for m := range models {
-		available = append(available, m)
-	}
-	return nil, fmt.Errorf("no service configured for path %q with model %q (available: %v)", openaiPath, model, available)
+
+	return nil, fmt.Errorf("no sync service configured for path %q", openaiPath)
 }
 
 // HasSyncServices reports whether at least one service has sync mode configured.
 func (r *Registry) HasSyncServices() bool {
-	return len(r.bySync) > 0
+	return len(r.bySync) > 0 || len(r.byPattern) > 0
 }
 
-// SyncPaths returns the unique OpenAI paths that have a sync backend configured.
+// SyncPaths returns the unique OpenAI paths/patterns that have a sync backend.
 func (r *Registry) SyncPaths() []string {
-	paths := make([]string, 0, len(r.bySync))
+	paths := make([]string, 0, len(r.bySync)+len(r.byPattern))
 	for p := range r.bySync {
 		paths = append(paths, p)
 	}
+	for _, p := range r.byPattern {
+		paths = append(paths, p.pattern)
+	}
 	return paths
+}
+
+// SyncPathPrefixes returns unique first-level path prefixes (e.g. "/v1", "/v2")
+// across all registered sync paths. Used to register chi wildcard routes.
+func (r *Registry) SyncPathPrefixes() []string {
+	seen := make(map[string]struct{})
+	for path := range r.bySync {
+		seen[pathPrefix(path)] = struct{}{}
+	}
+	for _, p := range r.byPattern {
+		seen[pathPrefix(p.pattern)] = struct{}{}
+	}
+	prefixes := make([]string, 0, len(seen))
+	for prefix := range seen {
+		prefixes = append(prefixes, prefix)
+	}
+	return prefixes
+}
+
+// pathPrefix returns the first non-empty path segment with a leading slash,
+// e.g. "/v1/audio/transcriptions" → "/v1", "/v2/models/{model}/infer" → "/v2".
+func pathPrefix(path string) string {
+	parts := strings.SplitN(strings.TrimPrefix(path, "/"), "/", 2)
+	return "/" + parts[0]
 }
 
 // MaxFileSizeForType returns the largest MaxFileSizeMB across all models for

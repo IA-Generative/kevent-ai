@@ -79,11 +79,16 @@ func main() {
 	r.Post("/jobs/{service_type}", jobHandler.Submit)
 	r.Get("/jobs/{service_type}/{id}", jobHandler.GetStatus)
 
-	// OpenAI-compatible sync endpoints — routed by the "model" field in the payload.
+	// OpenAI-compatible sync endpoints — routed by the "model" field in the
+	// request body or extracted from the URL for pattern paths like
+	// /v2/models/{model}/infer. Routes are registered dynamically from config
+	// so no code change is needed when adding new endpoint paths or versions.
 	if registry.HasSyncServices() {
 		syncHandler := handler.NewSyncHandler(registry, s3Client, redisClient, producer)
 		r.Get("/v1/models", handler.ListModels(registry))
-		r.Post("/v1/*", syncHandler.ServeHTTP)
+		for _, prefix := range registry.SyncPathPrefixes() {
+			r.Post(prefix+"/*", syncHandler.ServeHTTP)
+		}
 		slog.Info("sync proxy enabled", "paths", registry.SyncPaths())
 	}
 

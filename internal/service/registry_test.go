@@ -119,6 +119,86 @@ func TestRegistry_MultipleServices(t *testing.T) {
 	}
 }
 
+// TestRouteSync_PatternPath_ModelInURL verifies that a path pattern like
+// "/v2/models/{model}/infer" routes correctly by extracting the model from the URL.
+func TestRouteSync_PatternPath_ModelInURL(t *testing.T) {
+	cfg := baseServiceConfig()
+	cfg.OpenAIPaths = []string{"/v2/models/{model}/infer"}
+	cfg.SyncTopic = ""
+
+	reg := service.NewRegistry([]config.ServiceConfig{cfg})
+
+	def, err := reg.RouteSync("/v2/models/whisper-large-v3/infer", "")
+	if err != nil {
+		t.Fatalf("RouteSync failed: %v", err)
+	}
+	if def.Model != "whisper-large-v3" {
+		t.Errorf("expected model whisper-large-v3, got %q", def.Model)
+	}
+}
+
+// TestRouteSync_PatternPath_SuffixSeparator verifies patterns like
+// "/v1/models/{model}:predict" where the model is embedded with a suffix.
+func TestRouteSync_PatternPath_SuffixSeparator(t *testing.T) {
+	cfg := baseServiceConfig()
+	cfg.OpenAIPaths = []string{"/v1/models/{model}:predict"}
+	cfg.SyncTopic = ""
+
+	reg := service.NewRegistry([]config.ServiceConfig{cfg})
+
+	def, err := reg.RouteSync("/v1/models/whisper-large-v3:predict", "")
+	if err != nil {
+		t.Fatalf("RouteSync failed: %v", err)
+	}
+	if def.Model != "whisper-large-v3" {
+		t.Errorf("expected model whisper-large-v3, got %q", def.Model)
+	}
+}
+
+// TestRouteSync_PatternPath_UnknownModelReturnsError verifies that a pattern
+// path with an unregistered model name returns an error.
+func TestRouteSync_PatternPath_UnknownModelReturnsError(t *testing.T) {
+	cfg := baseServiceConfig()
+	cfg.OpenAIPaths = []string{"/v2/models/{model}/infer"}
+	cfg.SyncTopic = ""
+
+	reg := service.NewRegistry([]config.ServiceConfig{cfg})
+
+	_, err := reg.RouteSync("/v2/models/unknown-model/infer", "")
+	if err == nil {
+		t.Error("expected error for unregistered model in pattern path")
+	}
+}
+
+// TestSyncPathPrefixes verifies that SyncPathPrefixes returns unique prefixes
+// for all registered paths (exact and pattern).
+func TestSyncPathPrefixes(t *testing.T) {
+	cfgs := []config.ServiceConfig{
+		{
+			Type:         "transcription",
+			Model:        "whisper-large-v3",
+			OpenAIPaths:  []string{"/v1/audio/transcriptions", "/v2/models/{model}/infer"},
+			InferenceURL: "http://inference.example.com",
+			InputTopic:   "jobs.whisper-large-v3.input",
+			ResultTopic:  "jobs.whisper-large-v3.results",
+		},
+	}
+	reg := service.NewRegistry(cfgs)
+
+	prefixes := reg.SyncPathPrefixes()
+	prefixSet := make(map[string]struct{}, len(prefixes))
+	for _, p := range prefixes {
+		prefixSet[p] = struct{}{}
+	}
+
+	if _, ok := prefixSet["/v1"]; !ok {
+		t.Error("expected /v1 prefix")
+	}
+	if _, ok := prefixSet["/v2"]; !ok {
+		t.Error("expected /v2 prefix")
+	}
+}
+
 // TestRouteAsync_SyncTopicPreserved verifies that RouteAsync also exposes SyncTopic.
 func TestRouteAsync_SyncTopicPreserved(t *testing.T) {
 	reg := service.NewRegistry([]config.ServiceConfig{baseServiceConfig()})

@@ -329,10 +329,66 @@ func TestSyncHandler_InferenceFailure(t *testing.T) {
 	}
 }
 
-// TestSyncHandler_MissingModelField verifies that requests without a "model" field
-// return 400.
-func TestSyncHandler_MissingModelField(t *testing.T) {
+// TestSyncHandler_MissingModelField_SingleModel verifies that when only one model
+// is registered for a path, omitting the "model" field auto-selects that model.
+func TestSyncHandler_MissingModelField_SingleModel(t *testing.T) {
+	sub := &mockSub{ch: make(chan struct{}, 1)}
+	s3 := &mockS3{getResult: []byte(`{"text":"ok"}`)}
+	redis := &mockRedis{
+		sub: sub,
+		job: &model.Job{
+			ID:        "test-job",
+			Status:    model.JobStatusCompleted,
+			ResultRef: "test-job/result.json",
+		},
+	}
+	prod := &mockProducer{sub: sub}
+
 	reg := buildRegistry("jobs.whisper-large-v3.sync")
+	h := handler.NewSyncHandler(reg, s3, redis, prod)
+
+	body := &bytes.Buffer{}
+	mw := multipart.NewWriter(body)
+	fw, _ := mw.CreateFormFile("file", "audio.wav")
+	_, _ = fw.Write([]byte("audio"))
+	_ = mw.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	w := httptest.NewRecorder()
+
+	h.ServeHTTP(w, req)
+
+	// Single registered model → auto-selected, request succeeds.
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 when single model is auto-selected, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestSyncHandler_MissingModelField_MultipleModels verifies that when multiple
+// models are registered for a path, omitting "model" returns 400.
+func TestSyncHandler_MissingModelField_MultipleModels(t *testing.T) {
+	cfgs := []config.ServiceConfig{
+		{
+			Type:         "transcription",
+			Model:        "whisper-large-v3",
+			OpenAIPaths:  []string{"/v1/audio/transcriptions"},
+			InferenceURL: "http://inference.example.com",
+			InputTopic:   "jobs.whisper-large-v3.input",
+			ResultTopic:  "jobs.whisper-large-v3.results",
+			SyncTopic:    "jobs.whisper-large-v3.sync",
+		},
+		{
+			Type:         "transcription",
+			Model:        "whisper-turbo",
+			OpenAIPaths:  []string{"/v1/audio/transcriptions"},
+			InferenceURL: "http://inference-turbo.example.com",
+			InputTopic:   "jobs.whisper-turbo.input",
+			ResultTopic:  "jobs.whisper-turbo.results",
+			SyncTopic:    "jobs.whisper-turbo.sync",
+		},
+	}
+	reg := service.NewRegistry(cfgs)
 	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{})
 
 	body := &bytes.Buffer{}
@@ -348,7 +404,7 @@ func TestSyncHandler_MissingModelField(t *testing.T) {
 	h.ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
-		t.Errorf("expected 400 for missing model, got %d", w.Code)
+		t.Errorf("expected 400 when multiple models and no model field, got %d", w.Code)
 	}
 }
 
