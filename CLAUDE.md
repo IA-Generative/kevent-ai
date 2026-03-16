@@ -39,7 +39,7 @@ Images:
 - Gateway:    `ghcr.io/ronan-wescale/ai-kevent/gateway:vX.Y.Z`
 - Relay: `ghcr.io/ronan-wescale/ai-kevent/relay:vX.Y.Z`
 
-Current tags: gateway `v0.4.0`, relay `v0.4.0`.
+Current tags: gateway `v0.4.2`, relay `v0.4.0`.
 
 After tagging, also update:
 1. `helm/gateway/values.yaml` → `image.tag`
@@ -55,7 +55,7 @@ After tagging, also update:
 **Async** (`POST /jobs/{service_type}`):
 ```
 Client
-  │  POST /jobs/{service_type} (multipart)
+  │  POST /jobs/{service_type} (multipart: file, model?, operation?)
   ▼
 Gateway (:8080)
   ├── Upload file → S3
@@ -68,7 +68,7 @@ Gateway (:8080)
                          Relay sidecar (:8080)
                               ├── Check syncPriority flag — if 1, return 503 (KafkaSource retries)
                               ├── Download file from S3
-                              ├── POST to local inference model (127.0.0.1:9000)
+                              ├── POST to local inference model (127.0.0.1:9000/<inference_url>)
                               ├── Upload result.json → S3
                               └── Publish ResultEvent → jobs.<model>.results
                                                                 │
@@ -93,7 +93,7 @@ Gateway
                               KafkaSource sync (Knative Eventing)        │
                                     │  CloudEvent → POST /sync           │
                                     ▼                                    │
-                         Relay sidecar                              │
+                         Relay sidecar                                   │
                               ├── Set syncPriority=1 (defers async jobs) │
                               ├── Process job (S3 → inference → S3)      │
                               ├── Publish ResultEvent → results topic     │
@@ -122,7 +122,37 @@ Gateway → HTTP proxy → InferenceService URL (inference_url in config)
 | `multipart/form-data` | no | Direct proxy to `inference_url` |
 | `application/json` | any | Direct proxy to `inference_url` |
 
-Configured via `services[].sync_topic`, `services[].openai_paths`, `services[].model`, `services[].inference_url` in `config.yaml`.
+Configured via `services[].sync_topic`, `services[].operations`, `services[].model`, `services[].inference_url` in `config.yaml`.
+
+### Service registry — key concepts
+
+**`operations` map** (`map[string][]string`): replaces the old `openai_paths` flat list. Each service entry maps operation names to URL paths. All paths are indexed for sync routing; the first path of the selected operation is used as `inference_url` in async `InputEvent`.
+
+```yaml
+operations:
+  transcription:
+    - "/v1/audio/transcriptions"
+  translation:
+    - "/v1/audio/translations"
+```
+
+**`default: true`**: designates the fallback model for a service type when the request omits the `model` field and multiple models are registered. Resolution order:
+1. Explicit `model` field → exact lookup
+2. Single model registered for the type/path → auto-selected
+3. Model marked `default: true` → fallback
+4. Error listing available models
+
+**`operation` form field** (async only): selects the operation when a model has multiple operations (`-F operation=transcription`). Auto-selected if only one operation is configured.
+
+**Multiple models per type**: multiple service entries may share the same `type` with different `model` values. The gateway routes by `model` field in the request.
+
+### Dynamic OpenAPI spec
+
+`handler.GenerateSpec(registry, version)` builds the full OpenAPI 3.0.3 spec at startup from the live registry. No static file — the spec always reflects the current config. Served at:
+- `GET /openapi.yaml` — raw spec
+- `GET /docs` — Swagger UI
+
+Version injected at build time: `go build -ldflags "-X main.version=v0.4.2" ./cmd/gateway`.
 
 ### Priority mechanism
 
@@ -175,7 +205,8 @@ kubectl get secret kevent-relay-kafka -n default \
 | `helm/gateway/` | Helm chart — generates ConfigMap, Secret, Deployment, Ingress |
 | `k8s/kafka-users.yaml` | Strimzi KafkaUser ACLs (apply in `infra-kafka` namespace) |
 | `k8s/inference-transcription.yaml` | KServe InferenceService + ServingRuntime for Whisper |
-| `internal/service/registry.go` | Config-driven service registry (no code change needed to add services) |
+| `internal/service/registry.go` | Config-driven service registry (routing, default model, operations map) |
+| `internal/handler/docs.go` | Dynamic OpenAPI spec generator + Swagger UI handler |
 | `internal/kafka/auth.go` | SASL/TLS dialer+transport construction for gateway |
 | `relay/internal/kafka/auth.go` | SASL/TLS transport construction for relay |
 

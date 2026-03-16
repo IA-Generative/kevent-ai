@@ -15,7 +15,7 @@ API Gateway pour les services d'inférence KServe. Deux modes de fonctionnement 
 Client
   │
   ▼
-POST /jobs/{service_type} (multipart: file)
+POST /jobs/{service_type} (multipart: file, model, operation?)
   │
   ├─ 1. Fichier → S3
   ├─ 2. Job record → Redis (status: pending)
@@ -25,7 +25,7 @@ POST /jobs/{service_type} (multipart: file)
                     KafkaSource → POST / → Relay sidecar
                                               │
                                               ├─ Download fichier S3
-                                              ├─ POST multipart → modèle GPU (127.0.0.1:9000/<path>)
+                                              ├─ POST multipart → modèle GPU (127.0.0.1:9000/<inference_url>)
                                               ├─ Upload result.json → S3
                                               └─ ResultEvent → Kafka (jobs.<model>.results)
                                                                     │
@@ -99,7 +99,7 @@ Client
 
 ```bash
 # Gateway
-go build -o gateway ./cmd/gateway
+go build -ldflags "-X main.version=v0.4.2" -o gateway ./cmd/gateway
 CONFIG_PATH=/etc/kevent/config.yaml ./gateway
 
 # Relay sidecar
@@ -165,30 +165,49 @@ redis:
   job_ttl_hours: 72
 
 services:
-  - type: transcription
+  - type: audio
     model: "whisper-large-v3"
-    openai_paths:
-      - "/v1/audio/transcriptions"
-      - "/v1/audio/translations"
+    default: true           # modèle utilisé par défaut si non précisé et plusieurs modèles configurés
+    operations:
+      transcription:
+        - "/v1/audio/transcriptions"
+      translation:
+        - "/v1/audio/translations"
     inference_url: "http://kevent-transcription-predictor.default.svc.cluster.local"
     input_topic: jobs.whisper-large-v3.input
     result_topic: jobs.whisper-large-v3.results
-    # sync_topic: active le mode sync-over-Kafka pour les requêtes multipart sur openai_paths
-    sync_topic: jobs.whisper-large-v3.sync
+    sync_topic: jobs.whisper-large-v3.sync   # active le mode sync-over-Kafka pour les multipart
     accepted_exts: [".mp3", ".wav", ".m4a", ".ogg", ".flac"]
     max_file_size_mb: 500
 
   - type: ocr
     model: "deepseek-ocr"
-    openai_paths:
-      - "/v1/ocr"
-      - "/v1/vision/ocr"
+    default: true
+    operations:
+      ocr:
+        - "/v1/ocr"
+        - "/v1/vision/ocr"    # alias — toutes les paths d'une opération sont indexées
     inference_url: "http://kevent-ocr-predictor.default.svc.cluster.local"
     input_topic: jobs.deepseek-ocr.input
     result_topic: jobs.deepseek-ocr.results
     accepted_exts: [".pdf", ".jpg", ".jpeg", ".png", ".tiff", ".bmp"]
     max_file_size_mb: 50
 ```
+
+#### Champs `services[]`
+
+| Champ | Description |
+|---|---|
+| `type` | Nom du type de service (ex: `audio`, `ocr`). Plusieurs entrées peuvent partager le même type avec des modèles différents. |
+| `model` | Identifiant du modèle, transmis dans le payload OpenAI pour le routage. |
+| `default` | `true` → modèle par défaut pour ce type quand aucun `model` n'est précisé dans la requête. |
+| `operations` | Map `nom_opération → liste de paths URL`. Tous les paths sont indexés pour le routage sync ; le premier est utilisé comme `inference_url` dans les events async. |
+| `inference_url` | URL de base du backend pour le direct proxy. Le chemin de la requête d'origine y est appendé. |
+| `input_topic` | Topic Kafka pour les jobs async en entrée. |
+| `result_topic` | Topic Kafka pour les résultats. |
+| `sync_topic` | Topic Kafka prioritaire pour le sync-over-Kafka (optionnel). |
+| `accepted_exts` | Extensions acceptées (vide = tout). |
+| `max_file_size_mb` | Taille max du fichier (défaut : 100 MB). |
 
 ### Relay sidecar (`relay/config.yaml`)
 
@@ -312,7 +331,7 @@ helm upgrade --install kevent-gateway ./helm/gateway \
 ```yaml
 image:
   repository: ghcr.io/ronan-wescale/ai-kevent/gateway
-  tag: v0.4.0
+  tag: v0.4.2
 
 kafka:
   brokers: "default-kafka-bootstrap.infra-kafka.svc.cluster.local:9093"
@@ -326,11 +345,14 @@ kafka:
     existingCACertSecret: "default-cluster-ca-cert"
 
 services:
-  - type: transcription
+  - type: audio
     model: "whisper-large-v3"
-    openaiPaths:
-      - "/v1/audio/transcriptions"
-      - "/v1/audio/translations"
+    default: true
+    operations:
+      transcription:
+        - "/v1/audio/transcriptions"
+      translation:
+        - "/v1/audio/translations"
     inferenceURL: "http://kevent-transcription-predictor.default.svc.cluster.local"
     inputTopic: "jobs.whisper-large-v3.input"
     resultTopic: "jobs.whisper-large-v3.results"
@@ -349,10 +371,11 @@ Aucun changement de code n'est nécessaire. Il suffit d'ajouter un bloc dans `co
 
 ```yaml
 services:
-  - type: diarization
+  - type: audio
     model: "pyannote-audio-3.1"
-    openai_paths:
-      - "/v1/audio/diarizations"
+    operations:
+      diarization:
+        - "/v1/audio/diarizations"
     inference_url: "http://kevent-diarization-predictor.default.svc.cluster.local"
     input_topic: jobs.pyannote-audio-3.1.input
     result_topic: jobs.pyannote-audio-3.1.results
@@ -370,7 +393,9 @@ services:
   value: "9000"
 ```
 
-> **Routing sync multi-modèles** : plusieurs services peuvent partager le même path (ex: `/v1/audio/transcriptions`) — le gateway sélectionne le backend d'après la valeur du champ `model` dans le payload. Un même modèle peut exposer plusieurs paths via `openai_paths`.
+> **Multi-modèles par type** : plusieurs entrées peuvent partager le même `type` avec des `model` différents. Le gateway sélectionne le backend d'après le champ `model` de la requête. Le champ `default: true` désigne le modèle utilisé si `model` est absent et que plusieurs modèles sont configurés.
+
+> **Multi-opérations par modèle** : un même modèle peut exposer plusieurs opérations (ex: transcription et translation) via `operations`. En mode async, préciser l'opération avec `-F operation=transcription` quand le modèle en propose plusieurs.
 
 > **Pré-requis Kafka** : les topics `input_topic`, `result_topic` et `sync_topic` doivent être créés avant le démarrage (`AllowAutoTopicCreation: false`).
 
@@ -378,9 +403,16 @@ services:
 
 ## API
 
+### Documentation interactive
+
+Le gateway génère le spec OpenAPI 3.0 à chaque démarrage depuis le registre de services :
+
+- **Swagger UI** : `GET /docs`
+- **Spec brut** : `GET /openapi.yaml`
+
 ### Mode sync — Endpoints OpenAI-compatibles
 
-Ces endpoints sont exposés si `openai_paths` et `inference_url` sont configurés pour au moins un service.
+Ces endpoints sont exposés dynamiquement d'après les `operations` configurées dans `config.yaml`.
 
 #### `POST /v1/audio/transcriptions` — Transcription audio
 
@@ -388,16 +420,13 @@ Ces endpoints sont exposés si `openai_paths` et `inference_url` sont configuré
 
 | Champ | Type | Requis | Description |
 |---|---|---|---|
-| `model` | string | si plusieurs modèles | Ex: `whisper-large-v3`. Optionnel si un seul modèle pour ce path. |
+| `model` | string | si plusieurs modèles | Ex: `whisper-large-v3`. Optionnel si un seul modèle ou un défaut configuré. |
 | `file` | file | oui | Fichier audio (.mp3, .wav, .m4a, .ogg, .flac) |
-| `language` | string | non | Code langue ISO-639-1 (ex: `fr`, `en`) |
-| `response_format` | string | non | `json` (défaut) \| `text` \| `verbose_json` |
 
 ```bash
 curl https://api.kevent.example.com/v1/audio/transcriptions \
   -F model=whisper-large-v3 \
-  -F file=@interview.wav \
-  -F language=fr
+  -F file=@interview.wav
 ```
 
 **Avec le SDK OpenAI Python**
@@ -411,7 +440,6 @@ with open("interview.wav", "rb") as f:
     transcript = client.audio.transcriptions.create(
         model="whisper-large-v3",
         file=f,
-        language="fr",
     )
 print(transcript.text)
 ```
@@ -426,9 +454,6 @@ print(transcript.text)
 |---|---|---|---|
 | `model` | string | si plusieurs modèles | Ex: `deepseek-ocr` |
 | `file` | file | oui | Document (.pdf, .jpg, .jpeg, .png, .tiff, .bmp) |
-| `prompt` | string | non | Instruction personnalisée |
-| `languages` | string | non | Code(s) langue pour guider l'OCR |
-| `response_format` | string | non | `json` (défaut) |
 
 ```bash
 curl https://api.kevent.example.com/v1/ocr \
@@ -446,7 +471,8 @@ curl https://api.kevent.example.com/v1/ocr \
 
 | Champ | Type | Requis | Description |
 |---|---|---|---|
-| `model` | string | si plusieurs modèles | Ex: `whisper-large-v3`. Optionnel si un seul modèle configuré pour le type. |
+| `model` | string | si plusieurs modèles sans défaut | Ex: `whisper-large-v3`. Optionnel si un seul modèle ou `default: true` configuré. |
+| `operation` | string | si plusieurs opérations | Ex: `transcription` ou `translation`. Optionnel si une seule opération pour le modèle. |
 | `file` | file | oui | Fichier à traiter |
 | `callback_url` | string | non | URL appelée en POST à la complétion du job |
 
@@ -455,17 +481,23 @@ curl https://api.kevent.example.com/v1/ocr \
 ```json
 {
   "job_id": "550e8400-e29b-41d4-a716-446655440000",
-  "service_type": "transcription",
+  "service_type": "audio",
   "model": "whisper-large-v3",
   "status": "pending"
 }
 ```
 
 ```bash
-curl -X POST http://localhost:8080/jobs/transcription \
+# Modèle et opération explicites
+curl -X POST http://localhost:8080/jobs/audio \
   -F "model=whisper-large-v3" \
+  -F "operation=transcription" \
   -F "file=@interview.wav" \
   -F "callback_url=https://mon-app.example.com/hooks/inference"
+
+# Modèle par défaut, opération unique → champs optionnels
+curl -X POST http://localhost:8080/jobs/audio \
+  -F "file=@interview.wav"
 ```
 
 ---
@@ -477,7 +509,7 @@ curl -X POST http://localhost:8080/jobs/transcription \
 ```json
 {
   "job_id": "550e8400-e29b-41d4-a716-446655440000",
-  "service_type": "transcription",
+  "service_type": "audio",
   "model": "whisper-large-v3",
   "status": "completed",
   "result": { "text": "Bonjour, bienvenue à cette réunion..." },
@@ -492,12 +524,14 @@ curl -X POST http://localhost:8080/jobs/transcription \
 | `result` | Payload JSON du résultat d'inférence (présent uniquement si `completed`) |
 | `error` | Message d'erreur (présent uniquement si `failed`) |
 
+> **Attention** : le fichier résultat S3 est supprimé après cet appel — les appels suivants retournent 404.
+
 **Polling simple**
 
 ```bash
 JOB_ID="550e8400-e29b-41d4-a716-446655440000"
 while true; do
-  RESPONSE=$(curl -s http://localhost:8080/jobs/transcription/$JOB_ID)
+  RESPONSE=$(curl -s http://localhost:8080/jobs/audio/$JOB_ID)
   STATUS=$(echo $RESPONSE | jq -r '.status')
   [ "$STATUS" = "completed" ] && echo $RESPONSE | jq '.result' && break
   [ "$STATUS" = "failed" ]    && echo "Erreur : $(echo $RESPONSE | jq -r '.error')" && break
@@ -522,7 +556,7 @@ done
 ```json
 {
   "job_id": "550e8400-e29b-41d4-a716-446655440000",
-  "service_type": "transcription",
+  "service_type": "audio",
   "model": "whisper-large-v3",
   "input_ref": "550e8400-.../input.wav",
   "inference_url": "/v1/audio/transcriptions",
@@ -533,14 +567,14 @@ done
 | Champ | Description |
 |---|---|
 | `input_ref` | Clé objet S3 du fichier d'entrée |
-| `inference_url` | Chemin OpenAI à appeler sur le modèle local (appendé à `inference.base_url` du relay) |
+| `inference_url` | Chemin OpenAI à appeler sur le modèle local (appendé à `inference.base_url` du relay) — dérivé du premier path de l'opération choisie |
 
 ### ResultEvent — publié par le relay sur `result_topic`
 
 ```json
 {
   "job_id": "550e8400-e29b-41d4-a716-446655440000",
-  "service_type": "transcription",
+  "service_type": "audio",
   "status": "completed",
   "result_ref": "550e8400-.../result.json",
   "completed_at": "2026-03-05T10:04:32Z"
@@ -562,7 +596,7 @@ Si `callback_url` est fourni à la soumission, le gateway effectue un `POST` sur
 ```json
 {
   "job_id": "550e8400-e29b-41d4-a716-446655440000",
-  "service_type": "transcription",
+  "service_type": "audio",
   "status": "completed",
   "result_ref": "550e8400-.../result.json",
   "completed_at": "2026-03-05T10:04:32Z"
@@ -579,7 +613,7 @@ Si `callback_url` est fourni à la soumission, le gateway effectue un `POST` sur
 ├── internal/
 │   ├── config/config.go         # Chargement YAML + expansion des variables d'env
 │   ├── model/job.go             # Types partagés : Job, InputEvent, ResultEvent
-│   ├── service/registry.go      # Registre config-driven (routing sync + async)
+│   ├── service/registry.go      # Registre config-driven (routing sync + async, défaut par type)
 │   ├── storage/
 │   │   ├── s3.go                # Client S3 (AWS SDK v2)
 │   │   └── redis.go             # Persistance des jobs (JSON blob + TTL)
@@ -590,6 +624,7 @@ Si `callback_url` est fourni à la soumission, le gateway effectue un `POST` sur
 │   └── handler/
 │       ├── jobs.go              # POST /jobs/{service_type}  •  GET /jobs/{service_type}/{id}
 │       ├── sync.go              # POST /v1/*  (sync-over-Kafka ou direct proxy)
+│       ├── docs.go              # GET /docs (Swagger UI)  •  GET /openapi.yaml (spec généré dynamiquement)
 │       ├── health.go            # GET /health
 │       └── middleware.go        # Logger structuré (slog/JSON)
 ├── relay/                       # Relay sidecar (module Go séparé : kevent/relay)
