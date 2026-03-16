@@ -36,8 +36,8 @@ func main() {
 	}
 
 	slog.Info("sidecar starting",
-		"service_type", cfg.Service.Type,
 		"result_topic", cfg.Service.ResultTopic,
+		"inference_base_url", cfg.Inference.BaseURL,
 	)
 
 	s3Client, err := storage.NewS3Client(cfg.S3, cfg.Encryption)

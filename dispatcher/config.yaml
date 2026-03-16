@@ -1,7 +1,7 @@
 service:
-  type: "${SERVICE_TYPE}"
-  result_topic: ""    # auto-dérivé: "jobs.{model}.results" si vide (ex: jobs.whisper-large-v3.results)
-  # Pas de max_concurrency : géré par containerConcurrency dans le Knative Service spec.
+  # Topic where result events are published. Must match the gateway's result_topic
+  # for this model (e.g. jobs.whisper-large-v3.results).
+  result_topic: "${RESULT_TOPIC}"
 
 kafka:
   brokers: ["${KAFKA_BROKERS:-kafka:9092}"]
@@ -24,24 +24,19 @@ s3:
   secret_key: "${S3_SECRET_KEY}"
   bucket:     "${S3_BUCKET:-kevent-jobs}"
 
-# Base URL du container d'inférence local (sidecar dans le même pod).
-# Le chemin OpenAI (ex: /v1/audio/transcriptions) est fourni par le gateway dans InputEvent.InferenceURL
-# et appendé dynamiquement : inference.base_url + event.inference_url.
-# INFERENCE_PORT est le port du serveur de modèle dans le pod.
+# Local inference endpoint (sidecar in the same pod).
+# INFERENCE_PORT is the port of the model server in the pod.
+# The OpenAI path (e.g. /v1/audio/transcriptions) is provided per-event by the
+# gateway (InputEvent.inference_url) and appended at runtime:
+#   final URL = base_url + inference_url
+#
+# extra_fields: optional form fields added to every multipart request.
+# Use them to pass model-specific parameters (empty values are skipped).
 inference:
   base_url: "http://127.0.0.1:${INFERENCE_PORT:-9000}"
-  api_key:  ""      # pas d'auth sur localhost
+  api_key:  ""
   timeout:  "300s"
-
-# Paramètres spécifiques par type de service (format de la requête, options modèle).
-# model et endpoint_url ne sont plus nécessaires : ils viennent de l'InputEvent.
-transcription:
-  language:        ""
-  response_format: "json"
-
-diarization:
-  num_speakers: 0    # 0 = auto-detect
-
-ocr:
-  prompt:     "Extract all text visible in this document. Return only the extracted text."
-  max_tokens: 4096
+  extra_fields:
+    response_format: "json"
+    # language: "fr"
+    # prompt: "Extract all text visible in this document."

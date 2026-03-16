@@ -2,16 +2,14 @@ package adapter
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"kevent/dispatcher/internal/config"
 )
 
-// CallInput contains the data passed to an adapter for inference.
+// CallInput contains the data passed to the adapter for inference.
 type CallInput struct {
 	JobID        string
 	Filename     string
@@ -22,43 +20,20 @@ type CallInput struct {
 	InferenceURL string    // OpenAI path from InputEvent (e.g. "/v1/audio/transcriptions")
 }
 
-// Adapter sends an inference request to a KServe-compatible endpoint
-// and returns the raw JSON response body.
+// Adapter sends an inference request to the local model and returns the raw JSON response.
 type Adapter interface {
 	Call(ctx context.Context, input CallInput) ([]byte, error)
 }
 
-// New returns the Adapter implementation matching cfg.Service.Type.
+// New returns the single multipart adapter backed by cfg.Inference.
 func New(cfg *config.Config) (Adapter, error) {
-	inf := cfg.Inference
-	switch cfg.Service.Type {
-	case "transcription":
-		return newTranscription(cfg.Transcription, inf), nil
-	case "diarization":
-		return newDiarization(cfg.Diarization, inf), nil
-	case "ocr":
-		return newOCR(cfg.OCR, inf), nil
-	default:
-		return nil, fmt.Errorf("unknown service type: %q", cfg.Service.Type)
-	}
+	return &multipartAdapter{
+		inf:    cfg.Inference,
+		client: &http.Client{Timeout: cfg.Inference.TimeoutDuration()},
+	}, nil
 }
 
-// buildURL constructs the full inference endpoint URL.
-// If input.InferenceURL is set (path from the gateway event), it is appended
-// to inf.BaseURL. Otherwise returns an empty string (adapter should handle fallback).
-func buildURL(inf config.InferenceConfig, input CallInput) string {
-	if inf.BaseURL != "" && input.InferenceURL != "" {
-		return strings.TrimRight(inf.BaseURL, "/") + input.InferenceURL
-	}
-	return ""
-}
-
-// newHTTPClient creates an HTTP client with the given timeout, falling back to
-// the InferenceConfig timeout if the per-type timeout is empty.
-func newHTTPClient(perTypeTimeout string, inf config.InferenceConfig) *http.Client {
-	d := inf.TimeoutDuration()
-	if t, err := time.ParseDuration(perTypeTimeout); err == nil && t > 0 {
-		d = t
-	}
-	return &http.Client{Timeout: d}
+// endpointURL constructs the full inference URL from the base and the per-event path.
+func endpointURL(inf config.InferenceConfig, input CallInput) string {
+	return strings.TrimRight(inf.BaseURL, "/") + input.InferenceURL
 }
