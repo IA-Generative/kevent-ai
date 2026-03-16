@@ -14,19 +14,26 @@ import (
 
 type ocrAdapter struct {
 	cfg    config.OCRConfig
+	inf    config.InferenceConfig
 	client *http.Client
 }
 
-func newOCR(cfg config.OCRConfig) *ocrAdapter {
+func newOCR(cfg config.OCRConfig, inf config.InferenceConfig) *ocrAdapter {
 	return &ocrAdapter{
 		cfg:    cfg,
-		client: &http.Client{Timeout: cfg.TimeoutDuration()},
+		inf:    inf,
+		client: newHTTPClient("", inf),
 	}
 }
 
 // Call reads the image file into memory, base64-encodes it, and sends it to
 // the OCR endpoint using the OpenAI vision chat completions format.
 func (a *ocrAdapter) Call(ctx context.Context, input CallInput) ([]byte, error) {
+	endpointURL := buildURL(a.inf, input)
+	if endpointURL == "" {
+		return nil, fmt.Errorf("ocr: cannot build endpoint URL (inference.base_url or InferenceURL missing)")
+	}
+
 	data, err := io.ReadAll(input.Body)
 	if err != nil {
 		return nil, fmt.Errorf("reading file: %w", err)
@@ -36,7 +43,7 @@ func (a *ocrAdapter) Call(ctx context.Context, input CallInput) ([]byte, error) 
 	dataURL := fmt.Sprintf("data:%s;base64,%s", input.ContentType, encoded)
 
 	reqBody := map[string]any{
-		"model": a.cfg.Model,
+		"model": input.Model,
 		"messages": []map[string]any{
 			{
 				"role": "user",
@@ -54,13 +61,13 @@ func (a *ocrAdapter) Call(ctx context.Context, input CallInput) ([]byte, error) 
 		return nil, fmt.Errorf("marshaling OCR request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.cfg.EndpointURL, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpointURL, bytes.NewReader(payload))
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if a.cfg.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+a.cfg.APIKey)
+	if a.inf.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+a.inf.APIKey)
 	}
 
 	resp, err := a.client.Do(req)

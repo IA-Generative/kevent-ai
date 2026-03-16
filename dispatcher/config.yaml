@@ -24,27 +24,24 @@ s3:
   secret_key: "${S3_SECRET_KEY}"
   bucket:     "${S3_BUCKET:-kevent-jobs}"
 
-# Les endpoints pointent vers le container d'inférence local (sidecar dans le même pod).
+# Base URL du container d'inférence local (sidecar dans le même pod).
+# Le chemin OpenAI (ex: /v1/audio/transcriptions) est fourni par le gateway dans InputEvent.InferenceURL
+# et appendé dynamiquement : inference.base_url + event.inference_url.
 # INFERENCE_PORT est le port du serveur de modèle dans le pod.
+inference:
+  base_url: "http://127.0.0.1:${INFERENCE_PORT:-9000}"
+  api_key:  ""      # pas d'auth sur localhost
+  timeout:  "300s"
+
+# Paramètres spécifiques par type de service (format de la requête, options modèle).
+# model et endpoint_url ne sont plus nécessaires : ils viennent de l'InputEvent.
 transcription:
-  endpoint_url:    "http://127.0.0.1:${INFERENCE_PORT:-9000}/v1/audio/transcriptions"
-  model:           "whisper-large-v3"
   language:        ""
   response_format: "json"
-  api_key:         ""      # pas d'auth sur localhost
-  timeout:         "300s"
 
 diarization:
-  endpoint_url: "http://127.0.0.1:${INFERENCE_PORT:-9000}/v1/audio/diarizations"
-  model:        "pyannote-audio-3.1"
-  num_speakers: 0          # 0 = auto-detect
-  api_key:      ""
-  timeout:      "600s"
+  num_speakers: 0    # 0 = auto-detect
 
 ocr:
-  endpoint_url: "http://127.0.0.1:${INFERENCE_PORT:-9000}/v1/chat/completions"
-  model:        "llava-v1.6-mistral-7b"
-  prompt:       "Extract all text visible in this document. Return only the extracted text."
-  max_tokens:   4096
-  api_key:      ""
-  timeout:      "120s"
+  prompt:     "Extract all text visible in this document. Return only the extracted text."
+  max_tokens: 4096

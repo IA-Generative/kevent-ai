@@ -124,26 +124,12 @@ func main() {
 	slog.Info("server stopped")
 }
 
-// inferenceHostPort extracts host:port from the active service's endpoint URL
-// (e.g. "127.0.0.1:9000"). Used by the /health TCP readiness check.
+// inferenceHostPort extracts host:port from inference.base_url (e.g. "127.0.0.1:9000").
+// Used by the /health TCP readiness check.
 func inferenceHostPort(cfg *config.Config) string {
-	u, err := url.Parse(inferenceEndpointURL(cfg))
+	u, err := url.Parse(cfg.Inference.BaseURL)
 	if err != nil || u.Host == "" {
 		return ""
 	}
 	return u.Host
-}
-
-// inferenceEndpointURL returns the full configured endpoint URL for the active
-// service type.
-func inferenceEndpointURL(cfg *config.Config) string {
-	switch cfg.Service.Type {
-	case "transcription":
-		return cfg.Transcription.EndpointURL
-	case "diarization":
-		return cfg.Diarization.EndpointURL
-	case "ocr":
-		return cfg.OCR.EndpointURL
-	}
-	return ""
 }

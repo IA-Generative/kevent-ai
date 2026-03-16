@@ -14,9 +14,26 @@ type Config struct {
 	Kafka         KafkaConfig         `yaml:"kafka"`
 	S3            S3Config            `yaml:"s3"`
 	Encryption    EncryptionConfig    `yaml:"encryption"`
+	Inference     InferenceConfig     `yaml:"inference"`
 	Transcription TranscriptionConfig `yaml:"transcription"`
 	Diarization   DiarizationConfig   `yaml:"diarization"`
 	OCR           OCRConfig           `yaml:"ocr"`
+}
+
+// InferenceConfig holds the shared local inference endpoint configuration.
+// The base_url is combined with the OpenAI path supplied per-event (InputEvent.InferenceURL)
+// to build the actual request URL: base_url + inference_url (e.g. "/v1/audio/transcriptions").
+type InferenceConfig struct {
+	BaseURL string `yaml:"base_url"`
+	APIKey  string `yaml:"api_key"`
+	Timeout string `yaml:"timeout"`
+}
+
+func (c InferenceConfig) TimeoutDuration() time.Duration {
+	if d, err := time.ParseDuration(c.Timeout); err == nil && d > 0 {
+		return d
+	}
+	return 300 * time.Second
 }
 
 type EncryptionConfig struct {
@@ -57,50 +74,17 @@ type S3Config struct {
 }
 
 type TranscriptionConfig struct {
-	EndpointURL    string `yaml:"endpoint_url"`
-	Model          string `yaml:"model"`
 	Language       string `yaml:"language"`
 	ResponseFormat string `yaml:"response_format"`
-	APIKey         string `yaml:"api_key"`
-	Timeout        string `yaml:"timeout"`
-}
-
-func (c TranscriptionConfig) TimeoutDuration() time.Duration {
-	if d, err := time.ParseDuration(c.Timeout); err == nil && d > 0 {
-		return d
-	}
-	return 300 * time.Second
 }
 
 type DiarizationConfig struct {
-	EndpointURL string `yaml:"endpoint_url"`
-	Model       string `yaml:"model"`
-	NumSpeakers int    `yaml:"num_speakers"`
-	APIKey      string `yaml:"api_key"`
-	Timeout     string `yaml:"timeout"`
-}
-
-func (c DiarizationConfig) TimeoutDuration() time.Duration {
-	if d, err := time.ParseDuration(c.Timeout); err == nil && d > 0 {
-		return d
-	}
-	return 600 * time.Second
+	NumSpeakers int `yaml:"num_speakers"`
 }
 
 type OCRConfig struct {
-	EndpointURL string `yaml:"endpoint_url"`
-	Model       string `yaml:"model"`
-	Prompt      string `yaml:"prompt"`
-	MaxTokens   int    `yaml:"max_tokens"`
-	APIKey      string `yaml:"api_key"`
-	Timeout     string `yaml:"timeout"`
-}
-
-func (c OCRConfig) TimeoutDuration() time.Duration {
-	if d, err := time.ParseDuration(c.Timeout); err == nil && d > 0 {
-		return d
-	}
-	return 120 * time.Second
+	Prompt    string `yaml:"prompt"`
+	MaxTokens int    `yaml:"max_tokens"`
 }
 
 // Load reads, env-expands, and validates the YAML config at path.
@@ -139,20 +123,6 @@ func expandWithDefault(key string) string {
 }
 
 func (c *Config) applyDefaults() {
-	// Apply model defaults first so auto-derivation of result_topic uses the model name.
-	if c.Transcription.Model == "" {
-		c.Transcription.Model = "whisper-large-v3"
-	}
-	if c.Diarization.Model == "" {
-		c.Diarization.Model = "pyannote-audio-3.1"
-	}
-	if c.OCR.Model == "" {
-		c.OCR.Model = "llava-v1.6-mistral-7b"
-	}
-	// Auto-derive result topic from the active model name.
-	if c.Service.ResultTopic == "" && c.Service.Type != "" {
-		c.Service.ResultTopic = "jobs." + c.activeModel() + ".results"
-	}
 	if c.Transcription.ResponseFormat == "" {
 		c.Transcription.ResponseFormat = "json"
 	}
@@ -162,19 +132,6 @@ func (c *Config) applyDefaults() {
 	if c.OCR.MaxTokens == 0 {
 		c.OCR.MaxTokens = 4096
 	}
-}
-
-// activeModel returns the model name for the configured service type.
-func (c *Config) activeModel() string {
-	switch c.Service.Type {
-	case "transcription":
-		return c.Transcription.Model
-	case "diarization":
-		return c.Diarization.Model
-	case "ocr":
-		return c.OCR.Model
-	}
-	return c.Service.Type
 }
 
 func (c *Config) validate() error {
@@ -193,19 +150,12 @@ func (c *Config) validate() error {
 	if c.S3.Bucket == "" {
 		return fmt.Errorf("s3.bucket is required")
 	}
+	if c.Inference.BaseURL == "" {
+		return fmt.Errorf("inference.base_url is required")
+	}
 	switch c.Service.Type {
-	case "transcription":
-		if c.Transcription.EndpointURL == "" {
-			return fmt.Errorf("transcription.endpoint_url is required")
-		}
-	case "diarization":
-		if c.Diarization.EndpointURL == "" {
-			return fmt.Errorf("diarization.endpoint_url is required")
-		}
-	case "ocr":
-		if c.OCR.EndpointURL == "" {
-			return fmt.Errorf("ocr.endpoint_url is required")
-		}
+	case "transcription", "diarization", "ocr":
+		// valid types; per-type validation is handled by the adapter
 	default:
 		return fmt.Errorf("unknown service type %q (must be transcription, diarization, or ocr)", c.Service.Type)
 	}

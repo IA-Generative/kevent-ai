@@ -30,11 +30,12 @@ type Job struct {
 // InputEvent is published to the model-specific input Kafka topic.
 // KServe (or an inference worker) consumes this to trigger processing.
 type InputEvent struct {
-	JobID       string    `json:"job_id"`
-	ServiceType string    `json:"service_type"`
-	Model       string    `json:"model"`
-	InputRef    string    `json:"input_ref"` // S3 object key: "{job_id}/input.ext"
-	CreatedAt   time.Time `json:"created_at"`
+	JobID         string    `json:"job_id"`
+	ServiceType   string    `json:"service_type"`
+	Model         string    `json:"model"`
+	InputRef      string    `json:"input_ref"`      // S3 object key: "{job_id}/input.ext"
+	InferenceURL  string    `json:"inference_url"`  // full URL the dispatcher must call
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 // ResultEvent is consumed from the service-specific result Kafka topic.

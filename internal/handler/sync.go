@@ -196,11 +196,12 @@ func (h *SyncHandler) handleMultipartViaKafka(w http.ResponseWriter, r *http.Req
 	defer sub.Close()
 
 	event := &model.InputEvent{
-		JobID:       jobID,
-		ServiceType: def.Type,
-		Model:       def.Model,
-		InputRef:    inputRef,
-		CreatedAt:   now,
+		JobID:        jobID,
+		ServiceType:  def.Type,
+		Model:        def.Model,
+		InputRef:     inputRef,
+		InferenceURL: r.URL.Path, // exact path the client called (e.g. /v1/audio/transcriptions)
+		CreatedAt:    now,
 	}
 	if err := h.producer.PublishInputEvent(r.Context(), def.SyncTopic, event); err != nil {
 		slog.ErrorContext(r.Context(), "kafka publish failed", "job_id", jobID, "error", err)

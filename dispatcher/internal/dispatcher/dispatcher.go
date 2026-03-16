@@ -113,11 +113,13 @@ func (d *Dispatcher) process(ctx context.Context, event *model.InputEvent) error
 	defer body.Close()
 
 	result, err := d.adapter.Call(ctx, adapter.CallInput{
-		JobID:       event.JobID,
-		Filename:    filepath.Base(event.InputRef),
-		ContentType: contentType,
-		Size:        size,
-		Body:        body,
+		JobID:        event.JobID,
+		Filename:     filepath.Base(event.InputRef),
+		ContentType:  contentType,
+		Size:         size,
+		Body:         body,
+		Model:        event.Model,
+		InferenceURL: event.InferenceURL,
 	})
 	if err != nil {
 		// Échec métier (modèle, fichier invalide…) : on publie le failure et on
