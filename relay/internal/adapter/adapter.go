@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"kevent/dispatcher/internal/config"
+	"kevent/relay/internal/config"
 )
 
 // CallInput contains the data passed to the adapter for inference.

@@ -24,7 +24,7 @@ s3:
 encryption:
   # AES-256-GCM at-rest encryption for S3 objects.
   # Generate with: openssl rand -hex 32
-  # Must be identical on all gateway and dispatcher instances.
+  # Must be identical on all gateway and relay instances.
   # Empty = encryption disabled (default).
   key: "${ENCRYPTION_KEY:-}"
 

@@ -19,19 +19,19 @@ jobs:
       - run: go vet ./...
       - run: go test -race -count=1 ./...
 
-  test-dispatcher:
-    name: Dispatcher — test & vet
+  test-relay:
+    name: Relay — test & vet
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: dispatcher/go.mod
+          go-version-file: relay/go.mod
           cache: true
-          cache-dependency-path: dispatcher/go.sum
-      - working-directory: dispatcher
+          cache-dependency-path: relay/go.sum
+      - working-directory: relay
         run: go vet ./...
-      - working-directory: dispatcher
+      - working-directory: relay
         run: go test ./...
 
   lint-helm:

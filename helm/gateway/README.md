@@ -40,7 +40,7 @@ Gateway (:8080)
   ├── S3 — upload/download (Scaleway Object Storage or any S3-compatible)
   ├── Redis — job state (TTL 72 h)
   └── Kafka — InputEvent → jobs.<model>.input
-                    └── Dispatcher sidecar (inside InferenceService pod)
+                    └── Relay sidecar (inside InferenceService pod)
                               └── ResultEvent → jobs.<model>.results → Gateway → Redis/Webhook
 ```
 
@@ -82,7 +82,7 @@ Two options — choose one:
 
 ### At-rest encryption (S3)
 
-Files are encrypted with AES-256-GCM before upload and decrypted on download. The same key must be configured in all dispatcher sidecars (`ENCRYPTION_KEY` env var).
+Files are encrypted with AES-256-GCM before upload and decrypted on download. The same key must be configured in all relay sidecars (`ENCRYPTION_KEY` env var).
 
 Generate a key: `openssl rand -hex 32`
 

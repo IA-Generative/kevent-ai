@@ -6,11 +6,11 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o /dispatcher ./cmd/dispatcher
+RUN CGO_ENABLED=0 GOOS=linux go build -o /relay ./cmd/relay
 
 FROM gcr.io/distroless/static:nonroot
 
-COPY --from=builder /dispatcher /dispatcher
+COPY --from=builder /relay /relay
 COPY config.yaml /config.yaml
 
-ENTRYPOINT ["/dispatcher"]
+ENTRYPOINT ["/relay"]

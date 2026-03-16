@@ -12,7 +12,7 @@ import (
 	"github.com/segmentio/kafka-go/sasl/plain"
 	"github.com/segmentio/kafka-go/sasl/scram"
 
-	"kevent/dispatcher/internal/config"
+	"kevent/relay/internal/config"
 )
 
 // buildTransport returns a Transport configured with SASL and/or TLS for Writers.

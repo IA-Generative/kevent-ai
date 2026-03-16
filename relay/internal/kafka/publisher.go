@@ -8,8 +8,8 @@ import (
 
 	kafkago "github.com/segmentio/kafka-go"
 
-	"kevent/dispatcher/internal/config"
-	"kevent/dispatcher/internal/model"
+	"kevent/relay/internal/config"
+	"kevent/relay/internal/model"
 )
 
 // Publisher manages one kafka-go Writer per topic, created lazily on first use.

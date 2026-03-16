@@ -1,4 +1,4 @@
-package dispatcher
+package relay
 
 import (
 	"bytes"
@@ -13,10 +13,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"kevent/dispatcher/internal/adapter"
-	"kevent/dispatcher/internal/kafka"
-	"kevent/dispatcher/internal/model"
-	"kevent/dispatcher/internal/storage"
+	"kevent/relay/internal/adapter"
+	"kevent/relay/internal/kafka"
+	"kevent/relay/internal/model"
+	"kevent/relay/internal/storage"
 )
 
 // Dispatcher handles incoming CloudEvent HTTP requests from KafkaSource.

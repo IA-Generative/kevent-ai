@@ -9,7 +9,7 @@ Versioning: each component is versioned independently — see tag conventions be
 | Component | Tag format | Example |
 |---|---|---|
 | Gateway (binary + Docker) | `gateway/vX.Y.Z` | `gateway/v0.2.5` |
-| Dispatcher (binary + Docker) | `dispatcher/vX.Y.Z` | `dispatcher/v0.2.5` |
+| Relay (binary + Docker) | `relay/vX.Y.Z` | `relay/v0.2.5` |
 | Helm chart | auto-tagged by chart-releaser | `kevent-gateway-0.2.0` |
 
 ---
@@ -73,13 +73,13 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ---
 
-## Dispatcher
+## Relay
 
 ### [v0.3.0] — 2026-03-13
 
 #### Added
 - `ServeHTTPSync` endpoint (`POST /sync`): priority CloudEvent handler that sets an in-pod `syncPriority` flag for the duration of the job
-- `syncPriority atomic.Int32` field on `Dispatcher`
+- `syncPriority atomic.Int32` field on `Relay`
 
 #### Changed
 - `ServeHTTP` (async handler): returns `503 Service Unavailable` when a sync job is in progress, causing KafkaSource to retry with backoff — giving sync jobs first access to the GPU
@@ -113,7 +113,7 @@ Versioning: each component is versioned independently — see tag conventions be
 - `result_topic` auto-derived from active model: `jobs.<model>.results` when left empty
 
 #### Changed
-- Docker image moved to `ghcr.io/ronan-wescale/ai-kevent/dispatcher`
+- Docker image moved to `ghcr.io/ronan-wescale/ai-kevent/relay`
 
 ### [v0.2.4] — 2026-01-XX
 

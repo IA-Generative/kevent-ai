@@ -1,4 +1,4 @@
-module kevent/dispatcher
+module kevent/relay
 
 go 1.24
 

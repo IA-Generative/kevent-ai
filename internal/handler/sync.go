@@ -191,7 +191,7 @@ func (h *SyncHandler) handleMultipartViaKafka(w http.ResponseWriter, r *http.Req
 	}
 
 	// Subscribe BEFORE publishing to Kafka — ensures we never miss the notification
-	// even if the dispatcher processes the job before we start waiting.
+	// even if the relay processes the job before we start waiting.
 	sub := h.redis.SubscribeJobDone(r.Context(), jobID)
 	defer sub.Close()
 
@@ -212,7 +212,7 @@ func (h *SyncHandler) handleMultipartViaKafka(w http.ResponseWriter, r *http.Req
 	slog.InfoContext(r.Context(), "sync job enqueued",
 		"job_id", jobID, "model", def.Model, "topic", def.SyncTopic)
 
-	// Block until the dispatcher publishes the result (or the client disconnects).
+	// Block until the relay publishes the result (or the client disconnects).
 	if err := sub.Wait(r.Context()); err != nil {
 		writeError(w, http.StatusGatewayTimeout, "timed out waiting for result")
 		return

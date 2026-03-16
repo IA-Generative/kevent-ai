@@ -22,7 +22,7 @@ POST /jobs/{service_type} (multipart: file)
   └─ 3. InputEvent → Kafka (topic propre au service)
                           │
                           ▼
-                    KafkaSource → Knative → Dispatcher sidecar → modèle GPU
+                    KafkaSource → Knative → Relay sidecar → modèle GPU
                                               │
                                               └─ ResultEvent → Kafka (result topic)
                                                                     │
@@ -50,7 +50,7 @@ POST /v1/chat/completions        ← field "model" = "llava-v1.6-mistral-7b"
 Gateway SyncHandler
   │
   ▼
-Dispatcher Knative  /v1/*  →  modèle GPU (127.0.0.1:9000)
+Relay Knative  /v1/*  →  modèle GPU (127.0.0.1:9000)
   │
   ▼ (réponse streamée directement)
 Client
@@ -192,8 +192,8 @@ services:
 | `KAFKA_SASL_PASSWORD` | _(vide)_ | Mot de passe SASL Kafka (expandé dans config.yaml) |
 | `REDIS_ADDR` | `redis:6379` | Adresse Redis |
 | `REDIS_PASSWORD` | _(vide)_ | Mot de passe Redis |
-| `TRANSCRIPTION_WHISPER_LARGE_V3_URL` | _(URL cluster locale)_ | URL de base du dispatcher Whisper (mode sync) |
-| `OCR_LLAVA_URL` | _(URL cluster locale)_ | URL de base du dispatcher OCR (mode sync) |
+| `TRANSCRIPTION_WHISPER_LARGE_V3_URL` | _(URL cluster locale)_ | URL de base du relay Whisper (mode sync) |
+| `OCR_LLAVA_URL` | _(URL cluster locale)_ | URL de base du relay OCR (mode sync) |
 
 > Les variables d'environnement surchargent les valeurs du fichier YAML via la syntaxe `${VAR:-défaut}`.
 
@@ -201,7 +201,7 @@ services:
 
 ## Kafka — authentification SASL/TLS
 
-Le gateway et le dispatcher sidecar supportent tous deux SASL (PLAIN, SCRAM-SHA-256, SCRAM-SHA-512) et TLS avec CA personnalisée, configurés via `config.yaml`.
+Le gateway et le relay sidecar supportent tous deux SASL (PLAIN, SCRAM-SHA-256, SCRAM-SHA-512) et TLS avec CA personnalisée, configurés via `config.yaml`.
 
 En production (Strimzi) le cluster tourne sur le port **9093** (`SASL_SSL`). Les credentials sont injectés depuis des Secrets Kubernetes.
 
@@ -214,7 +214,7 @@ En production (Strimzi) le cluster tourne sur le port **9093** (`SASL_SSL`). Les
 | `jobs.*` | topic | prefix | `Read`, `Write`, `Create`, `Describe` |
 | `kevent-gateway` | group | prefix | `Read`, `Describe`, `Delete` |
 
-**KafkaUser `kevent-dispatcher`** (namespace `infra-kafka`) — ACLs minimales :
+**KafkaUser `kevent-relay`** (namespace `infra-kafka`) — ACLs minimales :
 
 | Ressource | Type | Pattern | Opérations |
 |---|---|---|---|
@@ -286,7 +286,7 @@ services:
   # ... services existants ...
 
   - type: translation
-    # Sync (si le dispatcher est déployé)
+    # Sync (si le relay est déployé)
     model: "nllb-200"
     openai_paths:
       - "/v1/chat/completions"
@@ -313,7 +313,7 @@ Le gateway démarrera automatiquement un consumer Kafka sur `result_topic` et ac
 
 Ces endpoints sont exposés si `model`, `openai_paths` et `inference_url` sont configurés pour au moins un service.
 
-Le gateway sélectionne le backend en lisant le champ `model` du payload, puis proxie la requête vers le dispatcher Knative correspondant. La réponse est streamée directement au client — aucun état Redis, aucun S3.
+Le gateway sélectionne le backend en lisant le champ `model` du payload, puis proxie la requête vers le relay Knative correspondant. La réponse est streamée directement au client — aucun état Redis, aucun S3.
 
 #### `POST /v1/audio/transcriptions` — Transcription audio
 
@@ -484,11 +484,11 @@ done
 }
 ```
 
-Le champ `input_ref` est la clé objet S3 du fichier d'entrée. Le dispatcher doit le lire depuis le bucket configuré.
+Le champ `input_ref` est la clé objet S3 du fichier d'entrée. Le relay doit le lire depuis le bucket configuré.
 
 ### ResultEvent — attendu par le gateway sur `result_topic`
 
-Le dispatcher publie ce message quand le traitement est terminé (succès ou échec) :
+Le relay publie ce message quand le traitement est terminé (succès ou échec) :
 
 ```json
 {
@@ -549,14 +549,14 @@ Si `callback_url` est fourni à la soumission, le gateway effectue un `POST` sur
 │       ├── sync.go              # POST /v1/*  (proxy OpenAI-compatible, sync)
 │       ├── health.go            # GET /health
 │       └── middleware.go        # Logger structuré (slog/JSON)
-├── dispatcher/                  # Dispatcher sidecar (module Go séparé)
-│   ├── cmd/dispatcher/main.go
+├── relay/                  # Relay sidecar (module Go séparé)
+│   ├── cmd/relay/main.go
 │   ├── internal/
 │   │   ├── config/config.go     # KafkaConfig avec SASLConfig et TLSConfig
 │   │   ├── kafka/
 │   │   │   ├── auth.go          # Helpers SASL + TLS (même logique que le gateway)
 │   │   │   └── publisher.go     # Producteur Kafka — résultats vers result_topic
-│   │   ├── dispatcher/          # Handler CloudEvent, proxy sync, orchestration
+│   │   ├── relay/          # Handler CloudEvent, proxy sync, orchestration
 │   │   ├── adapter/             # Adaptateurs par type de service (transcription, ocr…)
 │   │   └── storage/             # Client S3
 │   └── config.yaml              # Config template (env vars expansées au démarrage)

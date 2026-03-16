@@ -11,11 +11,11 @@ import (
 	"syscall"
 	"time"
 
-	"kevent/dispatcher/internal/adapter"
-	"kevent/dispatcher/internal/config"
-	"kevent/dispatcher/internal/dispatcher"
-	"kevent/dispatcher/internal/kafka"
-	"kevent/dispatcher/internal/storage"
+	"kevent/relay/internal/adapter"
+	"kevent/relay/internal/config"
+	"kevent/relay/internal/relay"
+	"kevent/relay/internal/kafka"
+	"kevent/relay/internal/storage"
 )
 
 func main() {
@@ -60,7 +60,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	disp := dispatcher.New(adp, s3Client, publisher, cfg.Service.ResultTopic)
+	disp := relay.New(adp, s3Client, publisher, cfg.Service.ResultTopic)
 
 	inferenceAddr := inferenceHostPort(cfg)
 

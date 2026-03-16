@@ -53,7 +53,7 @@ kafka:
     existingCACertSecret: "kafka-cluster-ca-cert"
 
 # ── Chiffrement at-rest (S3) ──────────────────────────────────────────────────
-# Clé AES-256-GCM partagée entre le gateway et tous les dispatcher sidecars.
+# Clé AES-256-GCM partagée entre le gateway et tous les relay sidecars.
 # Générer : openssl rand -hex 32
 # Vide = chiffrement désactivé.
 encryption:
@@ -70,7 +70,7 @@ encryption:
 #                  router les requêtes POST /v1/* vers le bon backend
 #   openaiPaths  — liste des chemins exposés par le gateway pour ce modèle
 #                  (ex: ["/v1/audio/transcriptions", "/v1/audio/translations"])
-#   inferenceURL — URL de base du dispatcher Knative ; le chemin de la requête
+#   inferenceURL — URL de base du relay Knative ; le chemin de la requête
 #                  d'origine y est appendé automatiquement
 #
 # Champs async (Kafka) — topics nommés d'après le modèle :

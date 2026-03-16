@@ -1,4 +1,4 @@
-package dispatcher
+package relay
 
 import "net/http"
 

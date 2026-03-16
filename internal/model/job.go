@@ -34,7 +34,7 @@ type InputEvent struct {
 	ServiceType   string    `json:"service_type"`
 	Model         string    `json:"model"`
 	InputRef      string    `json:"input_ref"`      // S3 object key: "{job_id}/input.ext"
-	InferenceURL  string    `json:"inference_url"`  // full URL the dispatcher must call
+	InferenceURL  string    `json:"inference_url"`  // OpenAI path the relay must append to its local base URL
 	CreatedAt     time.Time `json:"created_at"`
 }
 
