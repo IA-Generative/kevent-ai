@@ -9,9 +9,12 @@ import (
 
 func baseServiceConfig() config.ServiceConfig {
 	return config.ServiceConfig{
-		Type:          "transcription",
-		Model:         "whisper-large-v3",
-		OpenAIPaths:   []string{"/v1/audio/transcriptions", "/v1/audio/translations"},
+		Type:  "transcription",
+		Model: "whisper-large-v3",
+		Operations: map[string][]string{
+			"transcription": {"/v1/audio/transcriptions"},
+			"translation":   {"/v1/audio/translations"},
+		},
 		InferenceURL:  "http://inference.svc.cluster.local",
 		InputTopic:    "jobs.whisper-large-v3.input",
 		ResultTopic:   "jobs.whisper-large-v3.results",
@@ -57,7 +60,7 @@ func TestRegistry_IndexedWithoutInferenceURL(t *testing.T) {
 func TestRegistry_NotIndexedWithoutModel(t *testing.T) {
 	cfg := baseServiceConfig()
 	cfg.Model = ""
-	cfg.OpenAIPaths = []string{"/v1/audio/transcriptions"}
+	cfg.Operations = map[string][]string{"transcription": {"/v1/audio/transcriptions"}}
 
 	reg := service.NewRegistry([]config.ServiceConfig{cfg})
 
@@ -91,9 +94,11 @@ func TestRegistry_MultipleServices(t *testing.T) {
 	cfgs := []config.ServiceConfig{
 		baseServiceConfig(),
 		{
-			Type:         "ocr",
-			Model:        "llava-v1.6-mistral-7b",
-			OpenAIPaths:  []string{"/v1/chat/completions"},
+			Type:  "ocr",
+			Model: "llava-v1.6-mistral-7b",
+			Operations: map[string][]string{
+				"chat": {"/v1/chat/completions"},
+			},
 			InferenceURL: "http://ocr.svc.cluster.local",
 			InputTopic:   "jobs.llava.input",
 			ResultTopic:  "jobs.llava.results",
@@ -123,7 +128,7 @@ func TestRegistry_MultipleServices(t *testing.T) {
 // "/v2/models/{model}/infer" routes correctly by extracting the model from the URL.
 func TestRouteSync_PatternPath_ModelInURL(t *testing.T) {
 	cfg := baseServiceConfig()
-	cfg.OpenAIPaths = []string{"/v2/models/{model}/infer"}
+	cfg.Operations = map[string][]string{"infer": {"/v2/models/{model}/infer"}}
 	cfg.SyncTopic = ""
 
 	reg := service.NewRegistry([]config.ServiceConfig{cfg})
@@ -141,7 +146,7 @@ func TestRouteSync_PatternPath_ModelInURL(t *testing.T) {
 // "/v1/models/{model}:predict" where the model is embedded with a suffix.
 func TestRouteSync_PatternPath_SuffixSeparator(t *testing.T) {
 	cfg := baseServiceConfig()
-	cfg.OpenAIPaths = []string{"/v1/models/{model}:predict"}
+	cfg.Operations = map[string][]string{"predict": {"/v1/models/{model}:predict"}}
 	cfg.SyncTopic = ""
 
 	reg := service.NewRegistry([]config.ServiceConfig{cfg})
@@ -159,7 +164,7 @@ func TestRouteSync_PatternPath_SuffixSeparator(t *testing.T) {
 // path with an unregistered model name returns an error.
 func TestRouteSync_PatternPath_UnknownModelReturnsError(t *testing.T) {
 	cfg := baseServiceConfig()
-	cfg.OpenAIPaths = []string{"/v2/models/{model}/infer"}
+	cfg.Operations = map[string][]string{"infer": {"/v2/models/{model}/infer"}}
 	cfg.SyncTopic = ""
 
 	reg := service.NewRegistry([]config.ServiceConfig{cfg})
@@ -175,9 +180,12 @@ func TestRouteSync_PatternPath_UnknownModelReturnsError(t *testing.T) {
 func TestSyncPathPrefixes(t *testing.T) {
 	cfgs := []config.ServiceConfig{
 		{
-			Type:         "transcription",
-			Model:        "whisper-large-v3",
-			OpenAIPaths:  []string{"/v1/audio/transcriptions", "/v2/models/{model}/infer"},
+			Type:  "transcription",
+			Model: "whisper-large-v3",
+			Operations: map[string][]string{
+				"transcription": {"/v1/audio/transcriptions"},
+				"infer":         {"/v2/models/{model}/infer"},
+			},
 			InferenceURL: "http://inference.example.com",
 			InputTopic:   "jobs.whisper-large-v3.input",
 			ResultTopic:  "jobs.whisper-large-v3.results",

@@ -68,20 +68,26 @@ encryption:
 # Champs sync (optionnels) :
 #   model        — valeur du champ "model" dans le payload OpenAI, utilisée pour
 #                  router les requêtes POST /v1/* vers le bon backend
-#   openaiPaths  — liste des chemins exposés par le gateway pour ce modèle
-#                  (ex: ["/v1/audio/transcriptions", "/v1/audio/translations"])
+#   operations   — map opération → liste de chemins URL
+#                  ex: transcription: ["/v1/audio/transcriptions"]
+#                  Tous les chemins sont indexés pour le routage sync ;
+#                  le premier est utilisé comme InferenceURL en mode async.
 #   inferenceURL — URL de base du relay Knative ; le chemin de la requête
 #                  d'origine y est appendé automatiquement
 #
 # Champs async (Kafka) — topics nommés d'après le modèle :
 #   inputTopic / resultTopic / acceptedExts / maxFileSizeMB
+#   En async, spécifier l'opération via le champ de formulaire "operation"
+#   si le modèle en propose plusieurs.
 services:
-  - type: transcription
+  - type: audio
     # Sync / OpenAI-compatible
     model: "whisper-large-v3"
-    openaiPaths:
-      - "/v1/audio/transcriptions"
-      - "/v1/audio/translations"
+    operations:
+      transcription:
+        - "/v1/audio/transcriptions"
+      translation:
+        - "/v1/audio/translations"
     inferenceURL: "http://kevent-transcription-predictor.default.svc.cluster.local"
     # Async / Kafka
     inputTopic: "jobs.whisper-large-v3.input"
@@ -95,8 +101,10 @@ services:
   - type: ocr
     # Sync / OpenAI-compatible
     model: "llava-v1.6-mistral-7b"
-    openaiPaths:
-      - "/v1/chat/completions"
+    operations:
+      ocr:
+        - "/v1/ocr"
+        - "/v1/vision/ocr"
     inferenceURL: "http://kevent-ocr-predictor.default.svc.cluster.local"
     # Async / Kafka
     inputTopic: "jobs.llava-v1.6-mistral-7b.input"

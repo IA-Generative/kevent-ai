@@ -21,9 +21,43 @@ type Def struct {
 	MaxFileSizeMB int64
 
 	// Sync / OpenAI-compatible mode (optional).
-	InferenceURL string   // full URL of the backend endpoint (direct proxy fallback)
-	OpenAIPaths  []string // e.g. ["/v1/audio/transcriptions", "/v2/models/{model}/infer"]
-	SyncTopic    string   // Kafka topic for priority sync-over-Kafka jobs (overrides direct proxy)
+	InferenceURL string              // full URL of the backend endpoint (direct proxy fallback)
+	Operations   map[string][]string // operation name → URL paths (all indexed; first used for async)
+	SyncTopic    string              // Kafka topic for priority sync-over-Kafka jobs (overrides direct proxy)
+}
+
+// OperationPath returns the first path for the given operation name.
+// If op is empty and exactly one operation is configured, that operation is used.
+func (d *Def) OperationPath(op string) (string, error) {
+	if len(d.Operations) == 0 {
+		return "", nil
+	}
+	if op == "" {
+		if len(d.Operations) == 1 {
+			for _, paths := range d.Operations {
+				if len(paths) > 0 {
+					return paths[0], nil
+				}
+			}
+		}
+		available := make([]string, 0, len(d.Operations))
+		for name := range d.Operations {
+			available = append(available, name)
+		}
+		return "", fmt.Errorf("model %q has multiple operations, specify one via -F operation=... (available: %v)", d.Model, available)
+	}
+	paths, ok := d.Operations[op]
+	if !ok {
+		available := make([]string, 0, len(d.Operations))
+		for name := range d.Operations {
+			available = append(available, name)
+		}
+		return "", fmt.Errorf("operation %q not found for model %q (available: %v)", op, d.Model, available)
+	}
+	if len(paths) == 0 {
+		return "", fmt.Errorf("operation %q has no paths configured for model %q", op, d.Model)
+	}
+	return paths[0], nil
 }
 
 // pathPattern supports openai_paths entries that contain a {model} placeholder,
@@ -100,7 +134,7 @@ func NewRegistry(cfgs []config.ServiceConfig) *Registry {
 			AcceptedExts:  exts,
 			MaxFileSizeMB: cfg.MaxFileSizeMB,
 			InferenceURL:  cfg.InferenceURL,
-			OpenAIPaths:   cfg.OpenAIPaths,
+			Operations:    cfg.Operations,
 			SyncTopic:     cfg.SyncTopic,
 		}
 
@@ -109,22 +143,24 @@ func NewRegistry(cfgs []config.ServiceConfig) *Registry {
 		}
 		r.byTypeModel[cfg.Type][cfg.Model] = def
 
-		// Build the sync routing index — one entry per configured path.
+		// Build the sync routing index — one entry per configured path across all operations.
 		// Index when either a direct proxy URL or a sync Kafka topic is configured.
 		if cfg.Model != "" && (cfg.InferenceURL != "" || cfg.SyncTopic != "") {
-			for _, path := range cfg.OpenAIPaths {
-				if path == "" {
-					continue
-				}
-				if strings.Contains(path, "{model}") {
-					// Pattern path — model is embedded in the URL.
-					r.indexPattern(path, cfg.Model, def)
-				} else {
-					// Exact path — model is expected in the request body.
-					if r.bySync[path] == nil {
-						r.bySync[path] = make(map[string]*Def)
+			for _, paths := range cfg.Operations {
+				for _, path := range paths {
+					if path == "" {
+						continue
 					}
-					r.bySync[path][cfg.Model] = def
+					if strings.Contains(path, "{model}") {
+						// Pattern path — model is embedded in the URL.
+						r.indexPattern(path, cfg.Model, def)
+					} else {
+						// Exact path — model is expected in the request body.
+						if r.bySync[path] == nil {
+							r.bySync[path] = make(map[string]*Def)
+						}
+						r.bySync[path][cfg.Model] = def
+					}
 				}
 			}
 		}

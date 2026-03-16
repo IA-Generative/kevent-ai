@@ -67,16 +67,19 @@ type RedisConfig struct {
 // ServiceConfig declares a single inference service type.
 // New services are added here (config.yaml) — no Go code required.
 type ServiceConfig struct {
-	Type          string   `yaml:"type"`
+	Type string `yaml:"type"`
 	// Sync / OpenAI-compatible mode (optional).
 	// Model is the value of the "model" field in the OpenAI payload used to
 	// route the request to the correct InferenceService backend.
-	Model        string   `yaml:"model"`
-	OpenAIPaths  []string `yaml:"openai_paths"`  // e.g. ["/v1/audio/transcriptions", "/v1/audio/translations"]
-	InferenceURL string   `yaml:"inference_url"` // InferenceService cluster URL
+	Model string `yaml:"model"`
+	// Operations maps operation names to their URL paths.
+	// e.g. {"transcription": ["/v1/audio/transcriptions"], "translation": ["/v1/audio/translations"]}
+	// Multiple paths per operation are all indexed for sync routing; the first is used for async.
+	Operations   map[string][]string `yaml:"operations"`
+	InferenceURL string              `yaml:"inference_url"` // InferenceService cluster URL
 	// Async / Kafka mode.
-	InputTopic    string   `yaml:"input_topic"`
-	ResultTopic   string   `yaml:"result_topic"`
+	InputTopic string `yaml:"input_topic"`
+	ResultTopic string `yaml:"result_topic"`
 	// SyncTopic is the dedicated Kafka topic for priority (sync-over-Kafka) jobs.
 	// When set, POST /v1/* multipart requests are routed through Kafka instead of
 	// proxied directly, giving them priority over async jobs via a second KafkaSource.

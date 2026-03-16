@@ -50,8 +50,11 @@ data:
         {{- if .model }}
         model:             {{ .model | quote }}
         {{- end }}
-        {{- if .openaiPaths }}
-        openai_paths:      {{ .openaiPaths | toJson }}
+        {{- if .operations }}
+        operations:
+          {{- range $op, $paths := .operations }}
+          {{ $op }}: {{ $paths | toJson }}
+          {{- end }}
         {{- end }}
         {{- if .inferenceURL }}
         inference_url:     {{ .inferenceURL | quote }}

@@ -136,12 +136,19 @@ func (h *JobHandler) Submit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Step 3 — publish the input event to the model's Kafka topic.
+	operation := r.FormValue("operation")
+	inferenceURL, err := def.OperationPath(operation)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	event := &model.InputEvent{
 		JobID:        jobID,
 		ServiceType:  serviceType,
 		Model:        def.Model,
 		InputRef:     inputRef,
-		InferenceURL: firstOpenAIPath(def.OpenAIPaths),
+		InferenceURL: inferenceURL,
 		CreatedAt:    now,
 	}
 	if err := h.producer.PublishInputEvent(r.Context(), def.InputTopic, event); err != nil {
@@ -228,15 +235,6 @@ func (h *JobHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 			}
 		}(job.ResultRef, job.ID)
 	}
-}
-
-// firstOpenAIPath returns the first configured OpenAI path (e.g. "/v1/audio/transcriptions"),
-// used as InferenceURL in async InputEvents so the relay knows which local endpoint to call.
-func firstOpenAIPath(paths []string) string {
-	if len(paths) > 0 {
-		return paths[0]
-	}
-	return ""
 }
 
 func writeError(w http.ResponseWriter, code int, msg string) {

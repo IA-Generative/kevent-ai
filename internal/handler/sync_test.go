@@ -90,9 +90,11 @@ func (m *mockProducer) PublishInputEvent(_ context.Context, _ string, _ *model.I
 func buildRegistry(syncTopic string) *service.Registry {
 	cfgs := []config.ServiceConfig{
 		{
-			Type:          "transcription",
-			Model:         "whisper-large-v3",
-			OpenAIPaths:   []string{"/v1/audio/transcriptions"},
+			Type:  "transcription",
+			Model: "whisper-large-v3",
+			Operations: map[string][]string{
+				"transcription": {"/v1/audio/transcriptions"},
+			},
 			InferenceURL:  "http://inference.example.com",
 			InputTopic:    "jobs.whisper-large-v3.input",
 			ResultTopic:   "jobs.whisper-large-v3.results",
@@ -132,9 +134,11 @@ func TestSyncHandler_JSONAlwaysUsesDirectProxy(t *testing.T) {
 	defer upstream.Close()
 
 	cfgs := []config.ServiceConfig{{
-		Type:         "ocr",
-		Model:        "llava",
-		OpenAIPaths:  []string{"/v1/chat/completions"},
+		Type:  "ocr",
+		Model: "llava",
+		Operations: map[string][]string{
+			"chat": {"/v1/chat/completions"},
+		},
 		InferenceURL: upstream.URL,
 		SyncTopic:    "jobs.llava.sync", // set, but JSON → direct proxy
 		InputTopic:   "jobs.llava.input",
@@ -166,9 +170,11 @@ func TestSyncHandler_MultipartNoSyncTopic_UsesDirectProxy(t *testing.T) {
 	defer upstream.Close()
 
 	cfgs := []config.ServiceConfig{{
-		Type:         "transcription",
-		Model:        "whisper-large-v3",
-		OpenAIPaths:  []string{"/v1/audio/transcriptions"},
+		Type:  "transcription",
+		Model: "whisper-large-v3",
+		Operations: map[string][]string{
+			"transcription": {"/v1/audio/transcriptions"},
+		},
 		InferenceURL: upstream.URL,
 		SyncTopic:    "", // empty → direct proxy
 		InputTopic:   "jobs.whisper-large-v3.input",
@@ -370,18 +376,22 @@ func TestSyncHandler_MissingModelField_SingleModel(t *testing.T) {
 func TestSyncHandler_MissingModelField_MultipleModels(t *testing.T) {
 	cfgs := []config.ServiceConfig{
 		{
-			Type:         "transcription",
-			Model:        "whisper-large-v3",
-			OpenAIPaths:  []string{"/v1/audio/transcriptions"},
+			Type:  "transcription",
+			Model: "whisper-large-v3",
+			Operations: map[string][]string{
+				"transcription": {"/v1/audio/transcriptions"},
+			},
 			InferenceURL: "http://inference.example.com",
 			InputTopic:   "jobs.whisper-large-v3.input",
 			ResultTopic:  "jobs.whisper-large-v3.results",
 			SyncTopic:    "jobs.whisper-large-v3.sync",
 		},
 		{
-			Type:         "transcription",
-			Model:        "whisper-turbo",
-			OpenAIPaths:  []string{"/v1/audio/transcriptions"},
+			Type:  "transcription",
+			Model: "whisper-turbo",
+			Operations: map[string][]string{
+				"transcription": {"/v1/audio/transcriptions"},
+			},
 			InferenceURL: "http://inference-turbo.example.com",
 			InputTopic:   "jobs.whisper-turbo.input",
 			ResultTopic:  "jobs.whisper-turbo.results",

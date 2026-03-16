@@ -40,19 +40,24 @@ redis:
 #
 # Sync mode (OpenAI-compatible endpoints):
 #   model:         value of the "model" field in the OpenAI payload
-#   openai_paths:  list of URL paths exposed by the gateway (a model can handle several)
+#   operations:    map of operation name → list of URL paths
+#                  all paths are indexed for sync routing; the first is used for async
 #   inference_url: base URL of the backend — original request path is appended at runtime
 #
 # Async mode (Kafka):
 #   input_topic / result_topic / accepted_exts / max_file_size_mb
+#   operation:     (form field) optional operation name for async submission
+#                  required when the model has multiple operations
 # ─────────────────────────────────────────────────────────────────────────────
 services:
-  - type: transcription
+  - type: audio
     # Sync / OpenAI-compatible
     model: "whisper-large-v3"
-    openai_paths:
-      - "/v1/audio/transcriptions"
-      - "/v1/audio/translations"
+    operations:
+      transcription:
+        - "/v1/audio/transcriptions"
+      translation:
+        - "/v1/audio/translations"
     inference_url: "${TRANSCRIPTION_WHISPER_LARGE_V3_URL:-http://kevent-transcription-predictor.default.svc.cluster.local}"
     # Async / Kafka — topics named after the model
     input_topic: jobs.whisper-large-v3.input
@@ -66,23 +71,26 @@ services:
   - type: ocr
     # Sync / OpenAI-compatible
     model: "llava-v1.6-mistral-7b"
-    openai_paths:
-      - "/v1/chat/completions"
+    operations:
+      ocr:
+        - "/v1/ocr"
+        - "/v1/vision/ocr"
     inference_url: "${OCR_LLAVA_URL:-http://kevent-ocr-predictor.default.svc.cluster.local}"
     # Async / Kafka — topics named after the model
     input_topic: jobs.llava-v1.6-mistral-7b.input
     result_topic: jobs.llava-v1.6-mistral-7b.results
-    # OCR uses JSON payloads — sync-over-Kafka not supported for JSON; direct proxy used.
     accepted_exts: [".pdf", ".jpg", ".jpeg", ".png", ".tiff", ".bmp"]
     max_file_size_mb: 50
 
   # ── Example: add a new model variant for the same service type ─────────────
-  # - type: transcription
+  # - type: audio
   #   model: "whisper-large-v3-turbo"
-  #   openai_paths:
-  #     - "/v1/audio/transcriptions"
-  #     - "/v1/audio/translations"
-  #   inference_url: "http://kevent-transcription-turbo-predictor.default.svc.cluster.local/v1/audio/transcriptions"
+  #   operations:
+  #     transcription:
+  #       - "/v1/audio/transcriptions"
+  #     translation:
+  #       - "/v1/audio/translations"
+  #   inference_url: "http://kevent-transcription-turbo-predictor.default.svc.cluster.local"
   #   input_topic: jobs.whisper-large-v3-turbo.input
   #   result_topic: jobs.whisper-large-v3-turbo.results
   #   accepted_exts: [".mp3", ".wav", ".m4a", ".ogg", ".flac"]
