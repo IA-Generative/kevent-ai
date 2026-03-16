@@ -219,3 +219,70 @@ func TestRouteAsync_SyncTopicPreserved(t *testing.T) {
 		t.Errorf("expected SyncTopic in RouteAsync result, got %q", def.SyncTopic)
 	}
 }
+
+// TestRouteAsync_DefaultModel verifies that the default model is used when no
+// model is specified and multiple models are configured for the type.
+func TestRouteAsync_DefaultModel(t *testing.T) {
+	cfgs := []config.ServiceConfig{
+		{
+			Type:        "transcription",
+			Model:       "whisper-large-v3",
+			Default:     true,
+			Operations:  map[string][]string{"transcription": {"/v1/audio/transcriptions"}},
+			InferenceURL: "http://whisper-large.svc",
+			InputTopic:  "jobs.whisper-large-v3.input",
+			ResultTopic: "jobs.whisper-large-v3.results",
+		},
+		{
+			Type:        "transcription",
+			Model:       "whisper-turbo",
+			Default:     false,
+			Operations:  map[string][]string{"transcription": {"/v1/audio/transcriptions"}},
+			InferenceURL: "http://whisper-turbo.svc",
+			InputTopic:  "jobs.whisper-turbo.input",
+			ResultTopic: "jobs.whisper-turbo.results",
+		},
+	}
+	reg := service.NewRegistry(cfgs)
+
+	// Async: no model specified → default selected.
+	def, err := reg.RouteAsync("transcription", "")
+	if err != nil {
+		t.Fatalf("RouteAsync with default model failed: %v", err)
+	}
+	if def.Model != "whisper-large-v3" {
+		t.Errorf("expected default model whisper-large-v3, got %q", def.Model)
+	}
+
+	// Sync: no model in body → default selected.
+	def, err = reg.RouteSync("/v1/audio/transcriptions", "")
+	if err != nil {
+		t.Fatalf("RouteSync with default model failed: %v", err)
+	}
+	if def.Model != "whisper-large-v3" {
+		t.Errorf("expected default model whisper-large-v3 for sync, got %q", def.Model)
+	}
+}
+
+// TestRouteAsync_NoDefaultMultipleModels verifies that omitting model without a
+// default configured returns an error.
+func TestRouteAsync_NoDefaultMultipleModels(t *testing.T) {
+	cfgs := []config.ServiceConfig{
+		{
+			Type: "transcription", Model: "whisper-large-v3",
+			Operations: map[string][]string{"transcription": {"/v1/audio/transcriptions"}},
+			InputTopic: "j.input", ResultTopic: "j.results",
+		},
+		{
+			Type: "transcription", Model: "whisper-turbo",
+			Operations: map[string][]string{"transcription": {"/v1/audio/transcriptions"}},
+			InputTopic: "j2.input", ResultTopic: "j2.results",
+		},
+	}
+	reg := service.NewRegistry(cfgs)
+
+	_, err := reg.RouteAsync("transcription", "")
+	if err == nil {
+		t.Error("expected error when multiple models and no default")
+	}
+}

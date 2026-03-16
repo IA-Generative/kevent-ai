@@ -111,15 +111,19 @@ func matchModelSegment(pattern, actual string) (model string, ok bool) {
 
 // Registry maps (service_type, model) pairs to their runtime definitions.
 type Registry struct {
-	byTypeModel map[string]map[string]*Def // type → model → Def
-	bySync      map[string]map[string]*Def // exact openai_path → model → Def
-	byPattern   []*pathPattern             // pattern paths containing {model}
+	byTypeModel   map[string]map[string]*Def // type → model → Def
+	defaultByType map[string]*Def            // type → default Def (when default: true in config)
+	bySync        map[string]map[string]*Def // exact openai_path → model → Def
+	defaultByPath map[string]*Def            // exact openai_path → default Def
+	byPattern     []*pathPattern             // pattern paths containing {model}
 }
 
 func NewRegistry(cfgs []config.ServiceConfig) *Registry {
 	r := &Registry{
-		byTypeModel: make(map[string]map[string]*Def, len(cfgs)),
-		bySync:      make(map[string]map[string]*Def),
+		byTypeModel:   make(map[string]map[string]*Def, len(cfgs)),
+		defaultByType: make(map[string]*Def),
+		bySync:        make(map[string]map[string]*Def),
+		defaultByPath: make(map[string]*Def),
 	}
 	for _, cfg := range cfgs {
 		exts := make(map[string]struct{}, len(cfg.AcceptedExts))
@@ -143,6 +147,10 @@ func NewRegistry(cfgs []config.ServiceConfig) *Registry {
 		}
 		r.byTypeModel[cfg.Type][cfg.Model] = def
 
+		if cfg.Default {
+			r.defaultByType[cfg.Type] = def
+		}
+
 		// Build the sync routing index — one entry per configured path across all operations.
 		// Index when either a direct proxy URL or a sync Kafka topic is configured.
 		if cfg.Model != "" && (cfg.InferenceURL != "" || cfg.SyncTopic != "") {
@@ -160,6 +168,9 @@ func NewRegistry(cfgs []config.ServiceConfig) *Registry {
 							r.bySync[path] = make(map[string]*Def)
 						}
 						r.bySync[path][cfg.Model] = def
+						if cfg.Default {
+							r.defaultByPath[path] = def
+						}
 					}
 				}
 			}
@@ -185,7 +196,10 @@ func (r *Registry) indexPattern(pattern, model string, def *Def) {
 }
 
 // RouteAsync returns the Def for the given (service_type, model) pair.
-// If model is empty and only one model is configured for the type, it is used.
+// Resolution order when model is empty:
+//  1. Single model configured for the type → auto-selected.
+//  2. A model marked default: true for the type → used as fallback.
+//  3. Error listing available models.
 func (r *Registry) RouteAsync(serviceType, model string) (*Def, error) {
 	models, ok := r.byTypeModel[serviceType]
 	if !ok {
@@ -197,11 +211,14 @@ func (r *Registry) RouteAsync(serviceType, model string) (*Def, error) {
 				return d, nil
 			}
 		}
+		if d, ok := r.defaultByType[serviceType]; ok {
+			return d, nil
+		}
 		available := make([]string, 0, len(models))
 		for m := range models {
 			available = append(available, m)
 		}
-		return nil, fmt.Errorf("service type %q has multiple models, specify one via ?model= (available: %v)", serviceType, available)
+		return nil, fmt.Errorf("service type %q has multiple models, specify one via -F model=... (available: %v)", serviceType, available)
 	}
 	d, ok := models[model]
 	if !ok {
@@ -217,20 +234,22 @@ func (r *Registry) RouteAsync(serviceType, model string) (*Def, error) {
 // RouteSync returns the service Def for the incoming request.
 //
 // Lookup order:
-//  1. Exact path match (model from request body, required unless only one model
-//     is registered for that path).
-//  2. Pattern path match — the model name is extracted from the URL itself
-//     (e.g. "/v2/models/whisper-large-v3/infer" matches "/v2/models/{model}/infer").
-//     In this case model may be empty.
+//  1. Exact path match — model from request body.
+//     If model is empty: single registered model, then default model, then error.
+//  2. Pattern path match — model extracted from URL.
 func (r *Registry) RouteSync(openaiPath, model string) (*Def, error) {
 	// 1. Exact path.
 	if models, ok := r.bySync[openaiPath]; ok {
 		if d, ok := models[model]; ok {
 			return d, nil
 		}
-		// model not in body — succeed only if there is exactly one model.
-		if model == "" && len(models) == 1 {
-			for _, d := range models {
+		if model == "" {
+			if len(models) == 1 {
+				for _, d := range models {
+					return d, nil
+				}
+			}
+			if d, ok := r.defaultByPath[openaiPath]; ok {
 				return d, nil
 			}
 		}

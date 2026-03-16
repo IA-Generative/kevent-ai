@@ -2,7 +2,7 @@ replicaCount: 1
 
 image:
   repository: ghcr.io/ronan-wescale/ai-kevent/gateway
-  tag: "v0.4.1"
+  tag: "v0.4.2"
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
@@ -83,6 +83,7 @@ services:
   - type: audio
     # Sync / OpenAI-compatible
     model: "whisper-large-v3"
+    default: true
     operations:
       transcription:
         - "/v1/audio/transcriptions"

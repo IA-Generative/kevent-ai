@@ -72,6 +72,10 @@ type ServiceConfig struct {
 	// Model is the value of the "model" field in the OpenAI payload used to
 	// route the request to the correct InferenceService backend.
 	Model string `yaml:"model"`
+	// Default marks this model as the default for its service type.
+	// Used when a request omits the model field and multiple models are configured.
+	// At most one entry per type should be marked as default.
+	Default bool `yaml:"default"`
 	// Operations maps operation names to their URL paths.
 	// e.g. {"transcription": ["/v1/audio/transcriptions"], "translation": ["/v1/audio/translations"]}
 	// Multiple paths per operation are all indexed for sync routing; the first is used for async.

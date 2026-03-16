@@ -53,6 +53,7 @@ services:
   - type: audio
     # Sync / OpenAI-compatible
     model: "whisper-large-v3"
+    default: true  # used when no model is specified and multiple models are configured
     operations:
       transcription:
         - "/v1/audio/transcriptions"
