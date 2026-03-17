@@ -24,13 +24,13 @@ import (
 // En tant que sidecar, le handler est synchrone : il bloque jusqu'à la fin du
 // job et retourne 200 ou 500. Knative Pod Autoscaler mesure la durée de la
 // requête HTTP en vol pour calibrer le nombre de replicas (= pods GPU actifs).
-// containerConcurrency dans le Knative Service spec remplace le sémaphore.
+// containerConcurrency dans le Knative Service spec contrôle la concurrence max.
 type Dispatcher struct {
 	adapter      adapter.Adapter
 	s3           *storage.S3Client
 	publisher    *kafka.Publisher
 	resultTopic  string
-	syncPriority atomic.Int32 // 1 = sync job in progress, 0 = idle
+	syncPriority atomic.Int32 // number of sync jobs currently in progress
 }
 
 func New(
@@ -58,7 +58,7 @@ func New(
 //   - 503 : sync job en cours — KafkaSource doit retenter après backoffDelay
 //   - 500 : erreur infra transitoire — KafkaSource doit retenter
 func (d *Dispatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if d.syncPriority.Load() == 1 {
+	if d.syncPriority.Load() > 0 {
 		slog.Info("async job deferred: sync job in progress")
 		http.Error(w, "sync job in progress, retry later", http.StatusServiceUnavailable)
 		return
