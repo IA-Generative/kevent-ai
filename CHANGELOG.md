@@ -16,6 +16,13 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Gateway
 
+### [v0.4.8] — 2026-03-24
+
+#### Fixed
+- **Root cause of HTTP/2 INTERNAL_ERROR**: `applyDefaults()` checked `WriteTimeout == 0` and applied a 60 s default, silently overriding the `write_timeout: 0s` set in `config.yaml`. Go's HTTP server was killing every connection after 60 s — APISix received an abrupt close and sent `RST_STREAM INTERNAL_ERROR` to the client. Removed the default entirely: 0 = no server-level write timeout, which is correct for an inference gateway.
+
+---
+
 ### [v0.4.7] — 2026-03-24
 
 #### Fixed
