@@ -226,20 +226,27 @@ func (h *SyncHandler) handleMultipartViaKafka(w http.ResponseWriter, r *http.Req
 	slog.InfoContext(r.Context(), "sync job enqueued",
 		"job_id", jobID, "model", def.Model, "topic", def.SyncTopic)
 
-	// Open the HTTP response stream immediately so upstream proxies (nginx/APISix)
-	// see headers right away and don't drop the connection as "idle".
-	// X-Accel-Buffering:no disables nginx proxy buffering for this response.
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("X-Accel-Buffering", "no")
+	// committed tracks whether we have already sent the 200 + headers to the
+	// client. Once committed, WriteHeader calls are no-ops in HTTP/1.1, so errors
+	// can only be reported in the body. For fast inferences (< 20 s) we stay
+	// uncommitted and return proper status codes. For longer ones, the first
+	// keepalive tick commits the stream so proxies (APISix/nginx) don't drop the
+	// idle connection ("upstream prematurely closed connection while reading
+	// response header from upstream").
 	flusher, canFlush := w.(http.Flusher)
-	if canFlush {
-		flusher.Flush() // sends 200 + headers, opens chunked stream
+	committed := false
+	commit := func() {
+		if !committed {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Accel-Buffering", "no")
+			w.WriteHeader(http.StatusOK)
+			committed = true
+		}
 	}
 
 	// Wait for the relay to publish the result.
-	// Send a newline keepalive every 20s — proxies with idle-connection detection
-	// would otherwise drop the connection during long inferences (OCR, large audio).
-	// Newlines are valid RFC 8259 JSON whitespace and ignored by all JSON parsers.
+	// Send a JSON-whitespace newline keepalive every 20 s to prevent proxy
+	// idle-connection timeouts during long inferences (OCR, large audio).
 	keepalive := time.NewTicker(20 * time.Second)
 	defer keepalive.Stop()
 	waitDone := make(chan error, 1)
@@ -255,6 +262,7 @@ waitLoop:
 			}
 			break waitLoop
 		case <-keepalive.C:
+			commit()
 			_, _ = w.Write([]byte("\n"))
 			if canFlush {
 				flusher.Flush()
@@ -296,6 +304,7 @@ waitLoop:
 		return
 	}
 
+	commit()
 	_, _ = w.Write(result)
 }
 
