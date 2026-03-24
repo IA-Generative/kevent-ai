@@ -16,6 +16,14 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Gateway
 
+### [v0.4.6] — 2026-03-24
+
+#### Fixed
+- Sync-over-Kafka: delay HTTP stream commitment to first keepalive tick (20 s) instead of flushing immediately. Fast inferences (< 20 s) now return proper HTTP status codes (422, 504, 500). Long inferences commit the 200 on the first tick to prevent APISix/nginx idle-connection drops; errors after that go in the JSON body.
+- All unit tests pass again (`TestSyncHandler_ClientDisconnect`, `TestSyncHandler_InferenceFailure`)
+
+---
+
 ### [v0.4.5] — 2026-03-24
 
 #### Fixed
