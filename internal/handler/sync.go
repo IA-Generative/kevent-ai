@@ -226,10 +226,40 @@ func (h *SyncHandler) handleMultipartViaKafka(w http.ResponseWriter, r *http.Req
 	slog.InfoContext(r.Context(), "sync job enqueued",
 		"job_id", jobID, "model", def.Model, "topic", def.SyncTopic)
 
-	// Block until the relay publishes the result (or the client disconnects).
-	if err := sub.Wait(r.Context()); err != nil {
-		writeError(w, http.StatusGatewayTimeout, "timed out waiting for result")
-		return
+	// Open the HTTP response stream immediately so upstream proxies (nginx/APISix)
+	// see headers right away and don't drop the connection as "idle".
+	// X-Accel-Buffering:no disables nginx proxy buffering for this response.
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Accel-Buffering", "no")
+	flusher, canFlush := w.(http.Flusher)
+	if canFlush {
+		flusher.Flush() // sends 200 + headers, opens chunked stream
+	}
+
+	// Wait for the relay to publish the result.
+	// Send a newline keepalive every 20s — proxies with idle-connection detection
+	// would otherwise drop the connection during long inferences (OCR, large audio).
+	// Newlines are valid RFC 8259 JSON whitespace and ignored by all JSON parsers.
+	keepalive := time.NewTicker(20 * time.Second)
+	defer keepalive.Stop()
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- sub.Wait(r.Context()) }()
+
+waitLoop:
+	for {
+		select {
+		case err := <-waitDone:
+			if err != nil {
+				writeError(w, http.StatusGatewayTimeout, "timed out waiting for result")
+				return
+			}
+			break waitLoop
+		case <-keepalive.C:
+			_, _ = w.Write([]byte("\n"))
+			if canFlush {
+				flusher.Flush()
+			}
+		}
 	}
 
 	job, err := h.redis.GetJob(r.Context(), jobID)
@@ -266,7 +296,6 @@ func (h *SyncHandler) handleMultipartViaKafka(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(result)
 }
 

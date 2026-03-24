@@ -134,9 +134,13 @@ func (d *Dispatcher) process(ctx context.Context, event *model.InputEvent) error
 	if err != nil {
 		// Échec métier (modèle, fichier invalide…) : on publie le failure et on
 		// retourne nil pour que KafkaSource ne retente pas.
+		// Use context.Background() — ctx may already be cancelled (e.g. Knative
+		// timeoutSeconds exceeded) and we must still publish the failure result
+		// so the gateway does not wait indefinitely.
 		log.Error("inference failed", "error", err)
-		d.publishFailure(ctx, event, fmt.Sprintf("inference: %v", err))
-		if derr := d.s3.DeleteObject(ctx, event.InputRef); derr != nil {
+		bgCtx := context.Background()
+		d.publishFailure(bgCtx, event, fmt.Sprintf("inference: %v", err))
+		if derr := d.s3.DeleteObject(bgCtx, event.InputRef); derr != nil {
 			log.Error("failed to delete input file after failure", "input_ref", event.InputRef, "error", derr)
 		}
 		return nil
