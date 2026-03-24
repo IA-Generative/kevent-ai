@@ -238,7 +238,6 @@ func (h *SyncHandler) handleMultipartViaKafka(w http.ResponseWriter, r *http.Req
 	commit := func() {
 		if !committed {
 			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("X-Accel-Buffering", "no")
 			w.WriteHeader(http.StatusOK)
 			committed = true
 		}
