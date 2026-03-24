@@ -16,6 +16,13 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Gateway
 
+### [v0.4.7] — 2026-03-24
+
+#### Fixed
+- Remove `X-Accel-Buffering: no` response header. It triggered APISix streaming proxy mode which breaks APISix plugins (key-auth, response transforms) that need to read the full body — resulting in `curl (92) HTTP/2 stream INTERNAL_ERROR`. Keepalive `\n` writes every 20 s are sufficient to keep the upstream connection alive within `proxy_read_timeout`.
+
+---
+
 ### [v0.4.6] — 2026-03-24
 
 #### Fixed
