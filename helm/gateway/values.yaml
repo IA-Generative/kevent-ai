@@ -126,6 +126,23 @@ redis-ha:
     masterGroupName: "mymaster"
   replicas: 3
 
+# ── Monitoring (Prometheus Operator) ─────────────────────────────────────
+metrics:
+  serviceMonitor:
+    enabled: false
+    # Namespace où créer le ServiceMonitor (défaut : même namespace que la release).
+    # À renseigner si le namespace du Prometheus Operator diffère.
+    namespace: ""
+    interval: 30s
+    scrapeTimeout: 10s
+    # Labels supplémentaires à apposer sur le ServiceMonitor — utile pour que
+    # le Prometheus Operator sélectionne ce monitor via son champ
+    # spec.serviceMonitorSelector.matchLabels.
+    # Exemple : release: kube-prometheus-stack
+    additionalLabels: {}
+    relabelings: []
+    metricRelabelings: []
+
 # ── Ressources / scheduling ───────────────────────────────────────────────────
 resources: {}
   # limits:

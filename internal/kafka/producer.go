@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	kafkago "github.com/segmentio/kafka-go"
 
 	"kevent/gateway/internal/config"
+	"kevent/gateway/internal/metrics"
 	"kevent/gateway/internal/model"
 )
 
@@ -66,10 +68,14 @@ func (p *Producer) PublishInputEvent(ctx context.Context, topic string, event *m
 		return fmt.Errorf("marshaling input event: %w", err)
 	}
 
-	if err := p.writerFor(topic).WriteMessages(ctx, kafkago.Message{
+	start := time.Now()
+	err = p.writerFor(topic).WriteMessages(ctx, kafkago.Message{
 		Key:   []byte(event.JobID),
 		Value: payload,
-	}); err != nil {
+	})
+	metrics.KafkaPublishDuration.WithLabelValues(topic).Observe(time.Since(start).Seconds())
+	if err != nil {
+		metrics.KafkaPublishErrorsTotal.WithLabelValues(topic).Inc()
 		return fmt.Errorf("writing to topic %q: %w", topic, err)
 	}
 	return nil

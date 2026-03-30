@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"kevent/gateway/internal/metrics"
 	"kevent/gateway/internal/model"
 	"kevent/gateway/internal/service"
 	"kevent/gateway/internal/storage"
@@ -153,6 +154,13 @@ func (h *SyncHandler) handleJSON(w http.ResponseWriter, r *http.Request) {
 // topic, waits for the result, and returns it in the HTTP response — keeping the
 // connection open throughout.
 func (h *SyncHandler) handleMultipartViaKafka(w http.ResponseWriter, r *http.Request, def *service.Def) {
+	start := time.Now()
+	metrics.SyncJobsInFlight.Inc()
+	defer func() {
+		metrics.SyncJobsInFlight.Dec()
+		metrics.RequestDuration.WithLabelValues("sync", def.Type, def.Model).Observe(time.Since(start).Seconds())
+	}()
+
 	file, header, err := r.FormFile("file")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "field 'file' is required")
@@ -249,13 +257,16 @@ func (h *SyncHandler) handleMultipartViaKafka(w http.ResponseWriter, r *http.Req
 	keepalive := time.NewTicker(20 * time.Second)
 	defer keepalive.Stop()
 	waitDone := make(chan error, 1)
+	waitStart := time.Now()
 	go func() { waitDone <- sub.Wait(r.Context()) }()
 
 waitLoop:
 	for {
 		select {
 		case err := <-waitDone:
+			metrics.SyncWaitDuration.WithLabelValues(def.Type, def.Model).Observe(time.Since(waitStart).Seconds())
 			if err != nil {
+				metrics.RequestsTotal.WithLabelValues("sync", def.Type, def.Model, "504").Inc()
 				writeError(w, http.StatusGatewayTimeout, "timed out waiting for result")
 				return
 			}
@@ -293,16 +304,19 @@ waitLoop:
 	}()
 
 	if job.Status == model.JobStatusFailed {
+		metrics.RequestsTotal.WithLabelValues("sync", def.Type, def.Model, "422").Inc()
 		writeError(w, http.StatusUnprocessableEntity, job.Error)
 		return
 	}
 
 	result, err := h.s3.GetObject(r.Context(), job.ResultRef)
 	if err != nil {
+		metrics.RequestsTotal.WithLabelValues("sync", def.Type, def.Model, "500").Inc()
 		writeError(w, http.StatusInternalServerError, "failed to retrieve result")
 		return
 	}
 
+	metrics.RequestsTotal.WithLabelValues("sync", def.Type, def.Model, "200").Inc()
 	commit()
 	_, _ = w.Write(result)
 }

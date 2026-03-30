@@ -11,10 +11,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"kevent/gateway/internal/config"
 	"kevent/gateway/internal/handler"
 	"kevent/gateway/internal/kafka"
+	_ "kevent/gateway/internal/metrics" // register Prometheus metrics
 	"kevent/gateway/internal/service"
 	"kevent/gateway/internal/storage"
 )
@@ -78,6 +80,7 @@ func main() {
 
 	spec := handler.GenerateSpec(registry, version)
 	r.Get("/health", handler.Health)
+	r.Get("/metrics", promhttp.Handler().ServeHTTP)
 	r.Get("/docs", handler.DocsUI)
 	r.Get("/openapi.yaml", handler.NewDocsSpec(spec))
 	r.Post("/jobs/{service_type}", jobHandler.Submit)

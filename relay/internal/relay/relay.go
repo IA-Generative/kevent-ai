@@ -15,6 +15,7 @@ import (
 
 	"kevent/relay/internal/adapter"
 	"kevent/relay/internal/kafka"
+	"kevent/relay/internal/metrics"
 	"kevent/relay/internal/model"
 	"kevent/relay/internal/storage"
 )
@@ -60,6 +61,7 @@ func New(
 func (d *Dispatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if d.syncPriority.Load() > 0 {
 		slog.Info("async job deferred: sync job in progress")
+		metrics.DeferredTotal.Inc()
 		http.Error(w, "sync job in progress, retry later", http.StatusServiceUnavailable)
 		return
 	}
@@ -121,6 +123,11 @@ func (d *Dispatcher) process(ctx context.Context, event *model.InputEvent) error
 	}
 	defer body.Close()
 
+	if size > 0 {
+		metrics.InputSizeBytes.WithLabelValues(event.ServiceType).Observe(float64(size))
+	}
+
+	inferStart := time.Now()
 	result, err := d.adapter.Call(ctx, adapter.CallInput{
 		JobID:        event.JobID,
 		Filename:     filepath.Base(event.InputRef),
@@ -131,6 +138,8 @@ func (d *Dispatcher) process(ctx context.Context, event *model.InputEvent) error
 		InferenceURL: event.InferenceURL,
 		Params:       event.Params,
 	})
+	metrics.InferenceDuration.WithLabelValues(event.ServiceType).Observe(time.Since(inferStart).Seconds())
+
 	if err != nil {
 		// Échec métier (modèle, fichier invalide…) : on publie le failure et on
 		// retourne nil pour que KafkaSource ne retente pas.
@@ -138,6 +147,7 @@ func (d *Dispatcher) process(ctx context.Context, event *model.InputEvent) error
 		// timeoutSeconds exceeded) and we must still publish the failure result
 		// so the gateway does not wait indefinitely.
 		log.Error("inference failed", "error", err)
+		metrics.JobsTotal.WithLabelValues(event.ServiceType, "failed").Inc()
 		bgCtx := context.Background()
 		d.publishFailure(bgCtx, event, fmt.Sprintf("inference: %v", err))
 		if derr := d.s3.DeleteObject(bgCtx, event.InputRef); derr != nil {
@@ -166,6 +176,7 @@ func (d *Dispatcher) process(ctx context.Context, event *model.InputEvent) error
 		log.Error("failed to publish result event", "error", err)
 	}
 
+	metrics.JobsTotal.WithLabelValues(event.ServiceType, "completed").Inc()
 	log.Info("job completed", "result_ref", resultKey)
 	return nil
 }

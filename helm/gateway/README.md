@@ -153,6 +153,44 @@ POST /v1/audio/translations
   Body: same as OpenAI API, field "model" selects the backend
 ```
 
+### Monitoring (Prometheus Operator)
+
+A `ServiceMonitor` can be created automatically if the [Prometheus Operator](https://github.com/prometheus-operator/prometheus-operator) is installed in the cluster.
+
+| Parameter | Description | Default |
+|---|---|---|
+| `metrics.serviceMonitor.enabled` | Create a `ServiceMonitor` | `false` |
+| `metrics.serviceMonitor.namespace` | Namespace for the `ServiceMonitor` (defaults to release namespace) | `""` |
+| `metrics.serviceMonitor.interval` | Scrape interval | `30s` |
+| `metrics.serviceMonitor.scrapeTimeout` | Scrape timeout | `10s` |
+| `metrics.serviceMonitor.additionalLabels` | Extra labels on the `ServiceMonitor` — use to match the Prometheus Operator `serviceMonitorSelector` | `{}` |
+| `metrics.serviceMonitor.relabelings` | Prometheus `relabelings` rules | `[]` |
+| `metrics.serviceMonitor.metricRelabelings` | Prometheus `metricRelabelings` rules | `[]` |
+
+Example with `kube-prometheus-stack`:
+
+```yaml
+metrics:
+  serviceMonitor:
+    enabled: true
+    additionalLabels:
+      release: kube-prometheus-stack   # matches Prometheus Operator selector
+    interval: 30s
+```
+
+The `/metrics` endpoint on the gateway exposes the following metrics (Prometheus text format):
+
+| Metric | Type | Labels |
+|---|---|---|
+| `kevent_requests_total` | counter | `mode`, `service_type`, `model`, `status` |
+| `kevent_request_duration_seconds` | histogram | `mode`, `service_type`, `model` |
+| `kevent_sync_wait_duration_seconds` | histogram | `service_type`, `model` |
+| `kevent_sync_jobs_in_flight` | gauge | — |
+| `kevent_s3_operation_duration_seconds` | histogram | `operation` |
+| `kevent_s3_errors_total` | counter | `operation` |
+| `kevent_kafka_publish_duration_seconds` | histogram | `topic` |
+| `kevent_kafka_publish_errors_total` | counter | `topic` |
+
 ## Strimzi KafkaUser
 
 The gateway requires a `KafkaUser` in the `infra-kafka` namespace:

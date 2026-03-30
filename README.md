@@ -549,6 +549,12 @@ done
 
 ---
 
+### `GET /metrics`
+
+Métriques Prometheus au format text (scraping compatible avec Prometheus / VictoriaMetrics).
+
+---
+
 ## Contrat Kafka (mode async)
 
 ### InputEvent — publié par le gateway sur `input_topic`
@@ -605,6 +611,52 @@ Si `callback_url` est fourni à la soumission, le gateway effectue un `POST` sur
 
 ---
 
+## Monitoring
+
+Les deux composants exposent des métriques Prometheus sur `GET /metrics`.
+
+### Gateway
+
+| Métrique | Type | Labels | Description |
+|---|---|---|---|
+| `kevent_requests_total` | counter | `mode`, `service_type`, `model`, `status` | Requêtes traitées (mode `async` ou `sync`, code HTTP en `status`) |
+| `kevent_request_duration_seconds` | histogram | `mode`, `service_type`, `model` | Latence bout-en-bout du handler |
+| `kevent_sync_wait_duration_seconds` | histogram | `service_type`, `model` | Temps bloqué en attente du résultat Redis pub/sub (sync-over-Kafka) |
+| `kevent_sync_jobs_in_flight` | gauge | — | Connexions sync-over-Kafka ouvertes en attente du relay |
+| `kevent_s3_operation_duration_seconds` | histogram | `operation` (upload/get/delete) | Latence des opérations S3 |
+| `kevent_s3_errors_total` | counter | `operation` | Erreurs S3 |
+| `kevent_kafka_publish_duration_seconds` | histogram | `topic` | Latence des écritures Kafka |
+| `kevent_kafka_publish_errors_total` | counter | `topic` | Erreurs de publication Kafka |
+
+### Relay sidecar
+
+| Métrique | Type | Labels | Description |
+|---|---|---|---|
+| `kevent_relay_jobs_total` | counter | `service_type`, `status` (completed/failed) | Jobs traités |
+| `kevent_relay_inference_duration_seconds` | histogram | `service_type` | Durée de l'appel à l'API d'inférence locale |
+| `kevent_relay_input_size_bytes` | histogram | `service_type` | Taille des fichiers d'entrée téléchargés depuis S3 |
+| `kevent_relay_sync_priority` | gauge | — | Nombre de jobs sync en cours sur ce pod (>0 reporte les jobs async) |
+| `kevent_relay_deferred_total` | counter | — | Jobs async retournés 503 à cause de la priorité sync |
+| `kevent_relay_s3_operation_duration_seconds` | histogram | `operation` (get/put/delete) | Latence des opérations S3 |
+| `kevent_relay_s3_errors_total` | counter | `operation` | Erreurs S3 |
+| `kevent_relay_kafka_publish_errors_total` | counter | — | Erreurs de publication des result events |
+
+### Exemple de configuration Prometheus
+
+```yaml
+scrape_configs:
+  - job_name: kevent-gateway
+    static_configs:
+      - targets: ["kevent-gateway.default.svc.cluster.local:8080"]
+
+  - job_name: kevent-relay
+    # Le relay tourne en sidecar — scraper via le service Knative du predictor
+    static_configs:
+      - targets: ["kevent-transcription-predictor.default.svc.cluster.local:8080"]
+```
+
+---
+
 ## Structure du projet
 
 ```
@@ -621,6 +673,8 @@ Si `callback_url` est fourni à la soumission, le gateway effectue un `POST` sur
 │   │   ├── auth.go              # Helpers SASL (PLAIN/SCRAM) + TLS
 │   │   ├── producer.go          # Producteur Kafka — un writer par topic
 │   │   └── consumer.go          # Consumer résultats — une goroutine par result_topic
+│   ├── metrics/
+│   │   └── metrics.go           # Définitions Prometheus (promauto) — GET /metrics
 │   └── handler/
 │       ├── jobs.go              # POST /jobs/{service_type}  •  GET /jobs/{service_type}/{id}
 │       ├── sync.go              # POST /v1/*  (sync-over-Kafka ou direct proxy)
@@ -633,6 +687,7 @@ Si `callback_url` est fourni à la soumission, le gateway effectue un `POST` sur
 │   │   ├── config/config.go     # Config relay : inference.base_url + extra_fields
 │   │   ├── kafka/               # SASL + TLS, publisher résultats
 │   │   ├── relay/               # Handler CloudEvent (async POST /, sync POST /sync)
+│   │   ├── metrics/             # Définitions Prometheus relay — GET /metrics
 │   │   ├── adapter/             # Adapter multipart générique (model + extra_fields + file)
 │   │   └── storage/             # Client S3
 │   └── config.yaml              # Config template (env vars expansées au démarrage)

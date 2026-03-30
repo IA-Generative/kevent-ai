@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"kevent/gateway/internal/kafka"
+	"kevent/gateway/internal/metrics"
 	"kevent/gateway/internal/model"
 	"kevent/gateway/internal/service"
 	"kevent/gateway/internal/storage"
@@ -66,6 +67,7 @@ type statusResponse struct {
 //	file         (required) – the binary file to process
 //	callback_url (optional) – webhook URL notified when the job completes
 func (h *JobHandler) Submit(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	serviceType := chi.URLParam(r, "service_type")
 
 	// Set the body size limit using the maximum across all models for this service
@@ -180,6 +182,9 @@ func (h *JobHandler) Submit(w http.ResponseWriter, r *http.Request) {
 		"model", def.Model,
 		"file", header.Filename,
 	)
+
+	metrics.RequestsTotal.WithLabelValues("async", serviceType, def.Model, "202").Inc()
+	metrics.RequestDuration.WithLabelValues("async", serviceType, def.Model).Observe(time.Since(start).Seconds())
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)

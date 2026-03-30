@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -12,6 +13,7 @@ import (
 
 	"kevent/relay/internal/config"
 	"kevent/relay/internal/crypto"
+	"kevent/relay/internal/metrics"
 )
 
 // S3Client wraps the AWS SDK v2 S3 client for any S3-compatible object storage.
@@ -49,11 +51,14 @@ func NewS3Client(cfg config.S3Config, encCfg config.EncryptionConfig) (*S3Client
 // (-1 if unknown), content-type, and any error. The caller must close the body.
 // If encryption is enabled the stream is transparently decrypted.
 func (c *S3Client) GetObject(ctx context.Context, key string) (io.ReadCloser, int64, string, error) {
+	start := time.Now()
 	out, err := c.client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(c.bucket),
 		Key:    aws.String(key),
 	})
+	metrics.S3OperationDuration.WithLabelValues("get").Observe(time.Since(start).Seconds())
 	if err != nil {
+		metrics.S3ErrorsTotal.WithLabelValues("get").Inc()
 		return nil, 0, "", fmt.Errorf("getting S3 object %q: %w", key, err)
 	}
 
@@ -69,10 +74,14 @@ func (c *S3Client) GetObject(ctx context.Context, key string) (io.ReadCloser, in
 
 // DeleteObject removes an object from the configured bucket.
 func (c *S3Client) DeleteObject(ctx context.Context, key string) error {
-	if _, err := c.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+	start := time.Now()
+	_, err := c.client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(c.bucket),
 		Key:    aws.String(key),
-	}); err != nil {
+	})
+	metrics.S3OperationDuration.WithLabelValues("delete").Observe(time.Since(start).Seconds())
+	if err != nil {
+		metrics.S3ErrorsTotal.WithLabelValues("delete").Inc()
 		return fmt.Errorf("deleting S3 object %q: %w", key, err)
 	}
 	return nil
@@ -82,6 +91,7 @@ func (c *S3Client) DeleteObject(ctx context.Context, key string) error {
 // If encryption is enabled the data is encrypted before upload.
 // Uses multipart upload to support non-seekable streams (io.Pipe).
 func (c *S3Client) PutObject(ctx context.Context, key string, body io.Reader, size int64, contentType string) error {
+	start := time.Now()
 	enc := crypto.Encrypt(c.encKey, body)
 	defer enc.Close()
 
@@ -91,7 +101,9 @@ func (c *S3Client) PutObject(ctx context.Context, key string, body io.Reader, si
 		Body:        enc,
 		ContentType: aws.String(contentType),
 	})
+	metrics.S3OperationDuration.WithLabelValues("put").Observe(time.Since(start).Seconds())
 	if err != nil {
+		metrics.S3ErrorsTotal.WithLabelValues("put").Inc()
 		return fmt.Errorf("putting S3 object %q: %w", key, err)
 	}
 	return nil

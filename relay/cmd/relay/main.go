@@ -12,8 +12,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
 	"kevent/relay/internal/adapter"
 	"kevent/relay/internal/config"
+	_ "kevent/relay/internal/metrics" // register Prometheus metrics
 	"kevent/relay/internal/relay"
 	"kevent/relay/internal/kafka"
 	"kevent/relay/internal/storage"
@@ -66,6 +69,7 @@ func main() {
 	inferenceAddr := inferenceHostPort(cfg)
 
 	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		if inferenceAddr != "" {
 			conn, err := net.DialTimeout("tcp", inferenceAddr, time.Second)

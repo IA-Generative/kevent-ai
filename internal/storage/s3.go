@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -12,6 +13,7 @@ import (
 
 	"kevent/gateway/internal/config"
 	"kevent/gateway/internal/crypto"
+	"kevent/gateway/internal/metrics"
 )
 
 // S3Client wraps the AWS SDK v2 S3 client for any S3-compatible object storage.
@@ -55,6 +57,7 @@ func NewS3Client(cfg config.S3Config, encCfg config.EncryptionConfig) (*S3Client
 // If encryption is enabled the stream is encrypted before upload.
 // Uses multipart upload to support non-seekable streams (io.Pipe).
 func (c *S3Client) Upload(ctx context.Context, objectKey string, reader io.Reader, size int64, contentType string) error {
+	start := time.Now()
 	body := crypto.Encrypt(c.encKey, reader)
 	defer body.Close()
 
@@ -64,7 +67,9 @@ func (c *S3Client) Upload(ctx context.Context, objectKey string, reader io.Reade
 		Body:        body,
 		ContentType: aws.String(contentType),
 	})
+	metrics.S3OperationDuration.WithLabelValues("upload").Observe(time.Since(start).Seconds())
 	if err != nil {
+		metrics.S3ErrorsTotal.WithLabelValues("upload").Inc()
 		return fmt.Errorf("uploading %q to S3 bucket %q: %w", objectKey, c.bucket, err)
 	}
 	return nil
@@ -73,11 +78,14 @@ func (c *S3Client) Upload(ctx context.Context, objectKey string, reader io.Reade
 // GetObject downloads an object and returns its content as bytes.
 // If encryption is enabled the data is decrypted before being returned.
 func (c *S3Client) GetObject(ctx context.Context, objectKey string) ([]byte, error) {
+	start := time.Now()
 	out, err := c.s3.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(c.bucket),
 		Key:    aws.String(objectKey),
 	})
+	metrics.S3OperationDuration.WithLabelValues("get").Observe(time.Since(start).Seconds())
 	if err != nil {
+		metrics.S3ErrorsTotal.WithLabelValues("get").Inc()
 		return nil, fmt.Errorf("getting S3 object %q: %w", objectKey, err)
 	}
 
@@ -93,10 +101,14 @@ func (c *S3Client) GetObject(ctx context.Context, objectKey string) ([]byte, err
 
 // DeleteObject removes an object from the configured bucket.
 func (c *S3Client) DeleteObject(ctx context.Context, objectKey string) error {
-	if _, err := c.s3.DeleteObject(ctx, &s3.DeleteObjectInput{
+	start := time.Now()
+	_, err := c.s3.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(c.bucket),
 		Key:    aws.String(objectKey),
-	}); err != nil {
+	})
+	metrics.S3OperationDuration.WithLabelValues("delete").Observe(time.Since(start).Seconds())
+	if err != nil {
+		metrics.S3ErrorsTotal.WithLabelValues("delete").Inc()
 		return fmt.Errorf("deleting S3 object %q: %w", objectKey, err)
 	}
 	return nil

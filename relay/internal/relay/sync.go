@@ -1,6 +1,10 @@
 package relay
 
-import "net/http"
+import (
+	"net/http"
+
+	"kevent/relay/internal/metrics"
+)
 
 // ServeHTTPSync is the priority CloudEvent handler for sync-over-Kafka jobs
 // (KafkaSource → POST /sync).
@@ -12,6 +16,10 @@ import "net/http"
 // jobs can run concurrently without one accidentally clearing another's flag.
 func (d *Dispatcher) ServeHTTPSync(w http.ResponseWriter, r *http.Request) {
 	d.syncPriority.Add(1)
-	defer d.syncPriority.Add(-1)
+	metrics.SyncPriority.Inc()
+	defer func() {
+		d.syncPriority.Add(-1)
+		metrics.SyncPriority.Dec()
+	}()
 	d.serveHTTP(w, r)
 }

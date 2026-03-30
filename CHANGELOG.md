@@ -16,6 +16,21 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Gateway
 
+### [v0.4.9] — 2026-03-30
+
+#### Added
+- Prometheus metrics exposed at `GET /metrics`:
+  - `kevent_requests_total` (counter, labels: `mode`, `service_type`, `model`, `status`) — all completed requests
+  - `kevent_request_duration_seconds` (histogram, labels: `mode`, `service_type`, `model`) — end-to-end handler latency
+  - `kevent_sync_wait_duration_seconds` (histogram, labels: `service_type`, `model`) — time blocked on Redis pub/sub in sync-over-Kafka mode
+  - `kevent_sync_jobs_in_flight` (gauge) — open sync-over-Kafka connections waiting for relay results
+  - `kevent_s3_operation_duration_seconds` (histogram, label: `operation`: upload/get/delete) — S3 latency
+  - `kevent_s3_errors_total` (counter, label: `operation`) — S3 failures
+  - `kevent_kafka_publish_duration_seconds` (histogram, label: `topic`) — Kafka write latency
+  - `kevent_kafka_publish_errors_total` (counter, label: `topic`) — Kafka publish failures
+
+---
+
 ### [v0.4.8] — 2026-03-24
 
 #### Fixed
@@ -113,6 +128,21 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Relay
 
+### [v0.4.6] — 2026-03-30
+
+#### Added
+- Prometheus metrics exposed at `GET /metrics`:
+  - `kevent_relay_jobs_total` (counter, labels: `service_type`, `status`: completed/failed) — job outcomes
+  - `kevent_relay_inference_duration_seconds` (histogram, label: `service_type`) — inference API call latency
+  - `kevent_relay_input_size_bytes` (histogram, label: `service_type`) — input file size distribution
+  - `kevent_relay_sync_priority` (gauge) — number of sync jobs in progress on this pod (non-zero defers async)
+  - `kevent_relay_deferred_total` (counter) — async jobs returned 503 due to sync priority
+  - `kevent_relay_s3_operation_duration_seconds` (histogram, label: `operation`: get/put/delete) — S3 latency
+  - `kevent_relay_s3_errors_total` (counter, label: `operation`) — S3 failures
+  - `kevent_relay_kafka_publish_errors_total` (counter) — result-event publish failures
+
+---
+
 ### [v0.4.5] — 2026-03-30
 
 #### Fixed
@@ -184,6 +214,14 @@ Versioning: each component is versioned independently — see tag conventions be
 ---
 
 ## Helm chart (kevent-gateway)
+
+### [0.5.0] — 2026-03-30
+
+#### Added
+- `metrics.serviceMonitor.enabled` — crée un `ServiceMonitor` (Prometheus Operator) pointant sur `GET /metrics` du gateway
+- Valeurs disponibles : `namespace`, `interval` (défaut: 30s), `scrapeTimeout` (défaut: 10s), `additionalLabels`, `relabelings`, `metricRelabelings`
+
+---
 
 ### [0.3.0] — 2026-03-13
 

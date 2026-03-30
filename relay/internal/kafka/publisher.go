@@ -9,6 +9,7 @@ import (
 	kafkago "github.com/segmentio/kafka-go"
 
 	"kevent/relay/internal/config"
+	"kevent/relay/internal/metrics"
 	"kevent/relay/internal/model"
 )
 
@@ -69,6 +70,7 @@ func (p *Publisher) PublishResultEvent(ctx context.Context, topic string, event 
 		Key:   []byte(event.JobID),
 		Value: payload,
 	}); err != nil {
+		metrics.KafkaPublishErrorsTotal.Inc()
 		return fmt.Errorf("writing to topic %q: %w", topic, err)
 	}
 	return nil
