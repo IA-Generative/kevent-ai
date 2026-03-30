@@ -113,6 +113,13 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Relay
 
+### [v0.4.5] — 2026-03-30
+
+#### Fixed
+- Sync-direct requests (gateway in direct-proxy mode, no `syncTopic`) arriving on paths like `/v1/audio/transcriptions` were caught by the relay's `"/"` catch-all and rejected with 400 "missing job_id". KafkaSource always POSTs to exactly `"/"`, so any other path is now reverse-proxied transparently to the local inference model (`inference.base_url`).
+
+---
+
 ### [v0.4.4] — 2026-03-24
 
 #### Fixed
