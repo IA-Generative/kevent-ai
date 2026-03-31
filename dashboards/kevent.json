@@ -25,7 +25,7 @@
   "timezone": "browser",
   "title": "kevent — Gateway & Relay",
   "uid": "kevent-gw-relay-v1",
-  "version": 1,
+  "version": 2,
   "templating": {
     "list": [
       {
@@ -40,6 +40,26 @@
         "refresh": 1,
         "regex": "",
         "type": "datasource"
+      },
+      {
+        "current": {},
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "definition": "label_values(kevent_relay_jobs_total, inference_service)",
+        "hide": 0,
+        "includeAll": true,
+        "allValue": ".*",
+        "label": "InferenceService",
+        "multi": true,
+        "name": "inference_service",
+        "options": [],
+        "query": {
+          "query": "label_values(kevent_relay_jobs_total, inference_service)",
+          "refId": "A"
+        },
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
       }
     ]
   },
@@ -438,8 +458,8 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "sum by (service_type, status) (rate(kevent_relay_jobs_total[5m]))",
-          "legendFormat": "{{service_type}} — {{status}}",
+          "expr": "sum by (inference_service, status) (rate(kevent_relay_jobs_total{inference_service=~\"$inference_service\"}[5m]))",
+          "legendFormat": "{{inference_service}} — {{status}}",
           "refId": "A"
         }
       ]
@@ -476,20 +496,20 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "histogram_quantile(0.50, sum by (le, service_type) (rate(kevent_relay_inference_duration_seconds_bucket[5m])))",
-          "legendFormat": "p50 {{service_type}}",
+          "expr": "histogram_quantile(0.50, sum by (le, inference_service) (rate(kevent_relay_inference_duration_seconds_bucket{inference_service=~\"$inference_service\"}[5m])))",
+          "legendFormat": "p50 {{inference_service}}",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "histogram_quantile(0.95, sum by (le, service_type) (rate(kevent_relay_inference_duration_seconds_bucket[5m])))",
-          "legendFormat": "p95 {{service_type}}",
+          "expr": "histogram_quantile(0.95, sum by (le, inference_service) (rate(kevent_relay_inference_duration_seconds_bucket{inference_service=~\"$inference_service\"}[5m])))",
+          "legendFormat": "p95 {{inference_service}}",
           "refId": "B"
         },
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "histogram_quantile(0.99, sum by (le, service_type) (rate(kevent_relay_inference_duration_seconds_bucket[5m])))",
-          "legendFormat": "p99 {{service_type}}",
+          "expr": "histogram_quantile(0.99, sum by (le, inference_service) (rate(kevent_relay_inference_duration_seconds_bucket{inference_service=~\"$inference_service\"}[5m])))",
+          "legendFormat": "p99 {{inference_service}}",
           "refId": "C"
         }
       ]
@@ -526,14 +546,14 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "histogram_quantile(0.50, sum by (le, service_type) (rate(kevent_relay_input_size_bytes_bucket[5m])))",
-          "legendFormat": "p50 {{service_type}}",
+          "expr": "histogram_quantile(0.50, sum by (le, inference_service) (rate(kevent_relay_input_size_bytes_bucket{inference_service=~\"$inference_service\"}[5m])))",
+          "legendFormat": "p50 {{inference_service}}",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "histogram_quantile(0.95, sum by (le, service_type) (rate(kevent_relay_input_size_bytes_bucket[5m])))",
-          "legendFormat": "p95 {{service_type}}",
+          "expr": "histogram_quantile(0.95, sum by (le, inference_service) (rate(kevent_relay_input_size_bytes_bucket{inference_service=~\"$inference_service\"}[5m])))",
+          "legendFormat": "p95 {{inference_service}}",
           "refId": "B"
         }
       ]
@@ -574,8 +594,8 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "sum(kevent_relay_sync_priority)",
-          "legendFormat": "sync priority",
+          "expr": "sum by (inference_service) (kevent_relay_sync_priority{inference_service=~\"$inference_service\"})",
+          "legendFormat": "{{inference_service}}",
           "refId": "A"
         }
       ]
@@ -612,54 +632,8 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "rate(kevent_relay_deferred_total[5m])",
-          "legendFormat": "différés/s",
-          "refId": "A"
-        }
-      ]
-    },
-
-    {
-      "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 52 },
-      "id": 18,
-      "title": "Relay — S3 & Kafka",
-      "type": "row"
-    },
-
-    {
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "pointSize": 5,
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": { "group": "A", "mode": "none" },
-            "thresholdsStyle": { "mode": "off" }
-          },
-          "unit": "s"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 53 },
-      "id": 19,
-      "options": {
-        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
-      },
-      "title": "Relay — S3 latence p95 par opération",
-      "type": "timeseries",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(kevent_relay_s3_operation_duration_seconds_bucket[5m])))",
-          "legendFormat": "p95 {{operation}}",
+          "expr": "sum by (inference_service) (rate(kevent_relay_deferred_total{inference_service=~\"$inference_service\"}[5m]))",
+          "legendFormat": "{{inference_service}}",
           "refId": "A"
         }
       ]
@@ -685,7 +659,141 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 53 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 52 },
+      "id": 21,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "title": "Relay — Proxy direct : taux de requêtes",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum by (inference_service, status) (rate(kevent_relay_proxy_requests_total{inference_service=~\"$inference_service\"}[5m]))",
+          "legendFormat": "{{inference_service}} — {{status}}",
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 52 },
+      "id": 22,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "title": "Relay — Proxy direct : latence p50 / p95 / p99",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "histogram_quantile(0.50, sum by (le, inference_service) (rate(kevent_relay_proxy_duration_seconds_bucket{inference_service=~\"$inference_service\"}[5m])))",
+          "legendFormat": "p50 {{inference_service}}",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "histogram_quantile(0.95, sum by (le, inference_service) (rate(kevent_relay_proxy_duration_seconds_bucket{inference_service=~\"$inference_service\"}[5m])))",
+          "legendFormat": "p95 {{inference_service}}",
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "histogram_quantile(0.99, sum by (le, inference_service) (rate(kevent_relay_proxy_duration_seconds_bucket{inference_service=~\"$inference_service\"}[5m])))",
+          "legendFormat": "p99 {{inference_service}}",
+          "refId": "C"
+        }
+      ]
+    },
+
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 60 },
+      "id": 18,
+      "title": "Relay — S3 & Kafka",
+      "type": "row"
+    },
+
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 61 },
+      "id": 19,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "title": "Relay — S3 latence p95 par opération",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "histogram_quantile(0.95, sum by (le, operation, inference_service) (rate(kevent_relay_s3_operation_duration_seconds_bucket{inference_service=~\"$inference_service\"}[5m])))",
+          "legendFormat": "p95 {{operation}} — {{inference_service}}",
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 61 },
       "id": 20,
       "options": {
         "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
@@ -696,15 +804,199 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "sum by (operation) (rate(kevent_relay_s3_errors_total[5m]))",
-          "legendFormat": "S3 {{operation}}",
+          "expr": "sum by (operation, inference_service) (rate(kevent_relay_s3_errors_total{inference_service=~\"$inference_service\"}[5m]))",
+          "legendFormat": "S3 {{operation}} — {{inference_service}}",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "rate(kevent_relay_kafka_publish_errors_total[5m])",
-          "legendFormat": "Kafka publish",
+          "expr": "sum by (inference_service) (rate(kevent_relay_kafka_publish_errors_total{inference_service=~\"$inference_service\"}[5m]))",
+          "legendFormat": "Kafka publish — {{inference_service}}",
           "refId": "B"
+        }
+      ]
+    },
+
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 69 },
+      "id": 23,
+      "title": "Queue Proxy — Knative (port http-usermetric)",
+      "type": "row"
+    },
+
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 70 },
+      "id": 24,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "title": "Queue Proxy — Taux de requêtes par code réponse",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum by (inference_service, response_code_class) (rate(revision_request_count_total{inference_service=~\"$inference_service\"}[5m]))",
+          "legendFormat": "{{inference_service}} — {{response_code_class}}",
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 70 },
+      "id": 25,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "title": "Queue Proxy — Latence requêtes p50 / p95 / p99",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "histogram_quantile(0.50, sum by (le, inference_service) (rate(revision_request_latencies_bucket{inference_service=~\"$inference_service\"}[5m])))",
+          "legendFormat": "p50 {{inference_service}}",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "histogram_quantile(0.95, sum by (le, inference_service) (rate(revision_request_latencies_bucket{inference_service=~\"$inference_service\"}[5m])))",
+          "legendFormat": "p95 {{inference_service}}",
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "histogram_quantile(0.99, sum by (le, inference_service) (rate(revision_request_latencies_bucket{inference_service=~\"$inference_service\"}[5m])))",
+          "legendFormat": "p99 {{inference_service}}",
+          "refId": "C"
+        }
+      ]
+    },
+
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 78 },
+      "id": 26,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "title": "Queue Proxy — Profondeur file d'attente (concurrence)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum by (inference_service) (revision_queue_depth{inference_service=~\"$inference_service\"})",
+          "legendFormat": "{{inference_service}}",
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 78 },
+      "id": 27,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "title": "Queue Proxy — Latence app container p50 / p95 / p99",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "histogram_quantile(0.50, sum by (le, inference_service) (rate(revision_app_request_latencies_bucket{inference_service=~\"$inference_service\"}[5m])))",
+          "legendFormat": "p50 {{inference_service}}",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "histogram_quantile(0.95, sum by (le, inference_service) (rate(revision_app_request_latencies_bucket{inference_service=~\"$inference_service\"}[5m])))",
+          "legendFormat": "p95 {{inference_service}}",
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "histogram_quantile(0.99, sum by (le, inference_service) (rate(revision_app_request_latencies_bucket{inference_service=~\"$inference_service\"}[5m])))",
+          "legendFormat": "p99 {{inference_service}}",
+          "refId": "C"
         }
       ]
     }
