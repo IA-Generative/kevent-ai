@@ -323,10 +323,15 @@ waitLoop:
 
 // proxyToInference forwards the request body directly to the inference backend.
 func (h *SyncHandler) proxyToInference(w http.ResponseWriter, r *http.Request, def *service.Def, body io.ReadCloser, contentType string) {
+	start := time.Now()
+	defer func() {
+		metrics.RequestDuration.WithLabelValues("sync-direct", def.Type, def.Model).Observe(time.Since(start).Seconds())
+	}()
 	defer body.Close()
 
 	target, err := url.Parse(def.InferenceURL)
 	if err != nil {
+		metrics.RequestsTotal.WithLabelValues("sync-direct", def.Type, def.Model, "500").Inc()
 		writeError(w, http.StatusInternalServerError, "invalid inference_url configuration")
 		return
 	}
@@ -335,6 +340,7 @@ func (h *SyncHandler) proxyToInference(w http.ResponseWriter, r *http.Request, d
 
 	upstreamReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, target.String(), body)
 	if err != nil {
+		metrics.RequestsTotal.WithLabelValues("sync-direct", def.Type, def.Model, "500").Inc()
 		writeError(w, http.StatusInternalServerError, "failed to build upstream request")
 		return
 	}
@@ -345,11 +351,13 @@ func (h *SyncHandler) proxyToInference(w http.ResponseWriter, r *http.Request, d
 
 	resp, err := h.httpClient.Do(upstreamReq)
 	if err != nil {
+		metrics.RequestsTotal.WithLabelValues("sync-direct", def.Type, def.Model, "502").Inc()
 		writeError(w, http.StatusBadGateway, "upstream error: "+err.Error())
 		return
 	}
 	defer resp.Body.Close()
 
+	metrics.RequestsTotal.WithLabelValues("sync-direct", def.Type, def.Model, fmt.Sprintf("%d", resp.StatusCode)).Inc()
 	for key, values := range resp.Header {
 		for _, v := range values {
 			w.Header().Add(key, v)
