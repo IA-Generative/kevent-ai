@@ -59,9 +59,10 @@ func NewConsumerManager(
 }
 
 // Start launches one goroutine per registered service's result topic.
+// Services without a result topic (sync-direct only) are skipped.
 // All goroutines stop when ctx is cancelled.
 func (cm *ConsumerManager) Start(ctx context.Context) {
-	for _, def := range cm.registry.All() {
+	for _, def := range cm.registry.KafkaServices() {
 		go cm.consume(ctx, def.ResultTopic, def.Type)
 	}
 }

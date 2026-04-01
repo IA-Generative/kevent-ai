@@ -63,8 +63,10 @@ data:
         {{- if .inferenceURL }}
         inference_url:     {{ .inferenceURL | quote }}
         {{- end }}
+        {{- if .inputTopic }}
         input_topic:       {{ .inputTopic }}
         result_topic:      {{ .resultTopic }}
+        {{- end }}
         {{- if .syncTopic }}
         sync_topic:        {{ .syncTopic }}
         {{- end }}

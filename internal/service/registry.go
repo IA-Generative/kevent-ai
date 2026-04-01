@@ -377,12 +377,40 @@ func (r *Registry) Models() []*Def {
 	return defs
 }
 
-// All returns all service definitions (used to start result consumers).
+// All returns all service definitions.
 func (r *Registry) All() []*Def {
 	var defs []*Def
 	for _, models := range r.byTypeModel {
 		for _, d := range models {
 			defs = append(defs, d)
+		}
+	}
+	return defs
+}
+
+// HasKafkaServices reports whether any service has Kafka topics configured
+// (input_topic, result_topic, or sync_topic). Used to conditionally initialise
+// the Kafka producer and consumer manager at startup.
+func (r *Registry) HasKafkaServices() bool {
+	for _, models := range r.byTypeModel {
+		for _, d := range models {
+			if d.InputTopic != "" || d.ResultTopic != "" || d.SyncTopic != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// KafkaServices returns service definitions that have a result topic configured.
+// Used by ConsumerManager to start one result consumer per service.
+func (r *Registry) KafkaServices() []*Def {
+	var defs []*Def
+	for _, models := range r.byTypeModel {
+		for _, d := range models {
+			if d.ResultTopic != "" {
+				defs = append(defs, d)
+			}
 		}
 	}
 	return defs

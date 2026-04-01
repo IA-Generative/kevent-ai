@@ -62,12 +62,16 @@ func main() {
 	}
 	defer redisClient.Close()
 
-	producer, err := kafka.NewProducer(cfg.Kafka)
-	if err != nil {
-		slog.Error("failed to initialise Kafka producer", "error", err)
-		os.Exit(1)
+	var producer *kafka.Producer
+	if registry.HasKafkaServices() {
+		producer, err = kafka.NewProducer(cfg.Kafka)
+		if err != nil {
+			slog.Error("failed to initialise Kafka producer", "error", err)
+			os.Exit(1)
+		}
+		defer producer.Close()
+		slog.Info("Kafka producer initialised")
 	}
-	defer producer.Close()
 
 	// ── HTTP router ───────────────────────────────────────────────────────────
 	jobHandler := handler.NewJobHandler(registry, s3Client, redisClient, producer)
@@ -105,12 +109,14 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	consumerManager, err := kafka.NewConsumerManager(cfg.Kafka, registry, redisClient, s3Client, logger)
-	if err != nil {
-		slog.Error("failed to initialise Kafka consumer manager", "error", err)
-		os.Exit(1)
+	if registry.HasKafkaServices() {
+		consumerManager, err := kafka.NewConsumerManager(cfg.Kafka, registry, redisClient, s3Client, logger)
+		if err != nil {
+			slog.Error("failed to initialise Kafka consumer manager", "error", err)
+			os.Exit(1)
+		}
+		consumerManager.Start(ctx)
 	}
-	consumerManager.Start(ctx)
 
 	// ── HTTP server ───────────────────────────────────────────────────────────
 	srv := &http.Server{

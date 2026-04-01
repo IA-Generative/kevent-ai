@@ -121,6 +121,17 @@ services:
     acceptedExts: [".pdf", ".jpg", ".jpeg", ".png", ".tiff", ".bmp"]
     maxFileSizeMB: 50
 
+  # Exemple de service sync-direct uniquement (sans Kafka).
+  # Les requêtes POST /v1/* sont proxifiées directement vers inferenceURL.
+  # POST /jobs/{service_type} retourne 405.
+  # - type: reranker
+  #   model: "bge-reranker-v2-m3"
+  #   operations:
+  #     rerank:
+  #       - "/v1/rerank"
+  #   inferenceURL: "http://kevent-reranker-predictor.default.svc.cluster.local"
+  #   # Pas de inputTopic / resultTopic → sync-direct uniquement
+
 # ── Redis ─────────────────────────────────────────────────────────────────────
 # Valeurs passées au subchart dandydeveloper/redis-ha.
 # HAProxy est activé pour exposer un endpoint stable (master actif) au gateway.

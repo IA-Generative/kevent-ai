@@ -156,9 +156,6 @@ func (c *Config) applyDefaults() {
 }
 
 func (c *Config) validate() error {
-	if len(c.Kafka.Brokers) == 0 {
-		return fmt.Errorf("kafka.brokers is required")
-	}
 	if c.S3.Endpoint == "" {
 		return fmt.Errorf("s3.endpoint is required")
 	}
@@ -174,16 +171,21 @@ func (c *Config) validate() error {
 	if len(c.Services) == 0 {
 		return fmt.Errorf("at least one service must be configured")
 	}
+	needsKafka := false
 	for _, svc := range c.Services {
 		if svc.Type == "" {
 			return fmt.Errorf("a service has an empty type")
 		}
-		if svc.InputTopic == "" {
-			return fmt.Errorf("service %q: input_topic is required", svc.Type)
+		// input_topic and result_topic must both be set or both be empty.
+		if (svc.InputTopic == "") != (svc.ResultTopic == "") {
+			return fmt.Errorf("service %q: input_topic and result_topic must both be set or both be empty", svc.Type)
 		}
-		if svc.ResultTopic == "" {
-			return fmt.Errorf("service %q: result_topic is required", svc.Type)
+		if svc.InputTopic != "" || svc.ResultTopic != "" || svc.SyncTopic != "" {
+			needsKafka = true
 		}
+	}
+	if needsKafka && len(c.Kafka.Brokers) == 0 {
+		return fmt.Errorf("kafka.brokers is required when services use Kafka topics")
 	}
 	return nil
 }

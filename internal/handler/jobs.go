@@ -93,6 +93,12 @@ func (h *JobHandler) Submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Sync-direct services have no Kafka topics and cannot be used asynchronously.
+	if def.InputTopic == "" {
+		writeError(w, http.StatusMethodNotAllowed, fmt.Sprintf("service %q only supports sync requests (POST /v1/*)", def.Model))
+		return
+	}
+
 	file, header, err := r.FormFile("file")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "field 'file' is required")
