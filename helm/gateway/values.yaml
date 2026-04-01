@@ -22,6 +22,13 @@ ingress:
   #    hosts:
   #      - api.kevent.example.com
 
+# ── Configuration ────────────────────────────────────────────────────────────
+config:
+  # Option B : référencer une ConfigMap existante contenant config.yaml.
+  # Si renseigné, le chart ne crée pas de ConfigMap et utilise celle-ci.
+  # La ConfigMap doit contenir la clé "config.yaml".
+  existingConfigMap: ""
+
 # ── S3 / Scaleway Object Storage ─────────────────────────────────────────────
 s3:
   endpoint: "https://s3.fr-par.scw.cloud"

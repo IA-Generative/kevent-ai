@@ -56,6 +56,18 @@ Service créé par redis-ha : {{ .Release.Name }}-redis-ha-haproxy:6379
 {{- end }}
 
 {{/*
+Nom de la ConfigMap contenant la configuration du gateway.
+Utilise la ConfigMap existante si spécifiée, sinon celle créée par ce chart.
+*/}}
+{{- define "kevent-gateway.configMapName" -}}
+{{- if .Values.config.existingConfigMap -}}
+{{- .Values.config.existingConfigMap -}}
+{{- else -}}
+{{- include "kevent-gateway.fullname" . -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Nom du Secret contenant les credentials S3.
 Utilise le Secret existant si spécifié, sinon celui créé par ce chart.
 */}}

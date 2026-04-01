@@ -15,7 +15,9 @@ spec:
         {{- include "kevent-gateway.selectorLabels" . | nindent 8 }}
       annotations:
         # Force un redéploiement si la config ou le secret change.
+        {{- if not .Values.config.existingConfigMap }}
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- end }}
         checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
     spec:
       {{- with .Values.imagePullSecrets }}
@@ -88,7 +90,7 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: {{ include "kevent-gateway.fullname" . }}
+            name: {{ include "kevent-gateway.configMapName" . }}
         {{- if .Values.kafka.tls.enabled }}
         - name: kafka-tls
           secret:
