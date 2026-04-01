@@ -16,6 +16,18 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Gateway
 
+### [v0.4.11] — 2026-04-01
+
+#### Added
+- **Mode sync-direct uniquement** : un service sans `input_topic`/`result_topic` est traité en proxy direct, sans Kafka
+  - `POST /v1/*` : proxy direct vers `inference_url` (comportement inchangé)
+  - `POST /jobs/{service_type}` : retourne 405 pour ces services
+  - Le producer et le consumer Kafka ne sont initialisés que si au moins un service utilise des topics Kafka
+- `kafka.brokers` n'est plus obligatoire si aucun service ne configure de topic Kafka
+- `config.existingConfigMap` dans le chart Helm : permet de référencer une ConfigMap existante
+
+---
+
 ### [v0.4.10] — 2026-03-31
 
 #### Fixed
@@ -229,6 +241,24 @@ Versioning: each component is versioned independently — see tag conventions be
 ---
 
 ## Helm chart (kevent-gateway)
+
+### [0.5.3] — 2026-04-01
+
+#### Added
+- `config.existingConfigMap` : référencer une ConfigMap existante au lieu de laisser le chart en créer une
+- `input_topic` / `result_topic` conditionnels dans le template ConfigMap (services sync-direct)
+
+#### Changed
+- `appVersion` / `image.tag` → `v0.4.11`
+
+---
+
+### [0.5.2] — 2026-04-01
+
+#### Added
+- `config.existingConfigMap` option (intégré dans 0.5.3)
+
+---
 
 ### [0.5.1] — 2026-03-31
 
