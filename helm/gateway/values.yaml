@@ -2,7 +2,7 @@ replicaCount: 1
 
 image:
   repository: ghcr.io/ia-generative/kevent-ai/gateway
-  tag: "v0.4.16"
+  tag: "v0.4.17"
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []

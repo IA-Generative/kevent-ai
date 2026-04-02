@@ -16,6 +16,15 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Gateway
 
+### [v0.4.17] — 2026-04-02
+
+#### Added
+- Swagger UI now shows an **Authorize** button for API key authentication
+- `securitySchemes: ApiKeyAuth` (header `apikey`) added to the generated OpenAPI spec
+- Global security applies to all endpoints; `/health` is explicitly public
+
+---
+
 ### [v0.4.16] — 2026-04-02
 
 #### Fixed
@@ -280,6 +289,13 @@ Versioning: each component is versioned independently — see tag conventions be
 ---
 
 ## Helm chart (kevent-gateway)
+
+### [0.5.10] — 2026-04-02
+
+#### Changed
+- `appVersion` / `image.tag` → `v0.4.17`
+
+---
 
 ### [0.5.9] — 2026-04-02
 
