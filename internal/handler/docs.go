@@ -47,6 +47,10 @@ func GenerateSpec(reg *service.Registry, appVersion string) []byte {
 			map[string]any{"name": "Jobs", "description": "Async job submission and status"},
 			map[string]any{"name": "Inference", "description": "Synchronous OpenAI-compatible inference endpoints"},
 		},
+		// Global security: all endpoints require the API key unless overridden.
+		"security": []any{
+			map[string]any{"ApiKeyAuth": []any{}},
+		},
 		"paths":      paths,
 		"components": specComponents(),
 	}
@@ -120,6 +124,7 @@ func healthPathItem() map[string]any {
 		"get": map[string]any{
 			"summary":     "Health check",
 			"operationId": "healthCheck",
+			"security":    []any{}, // public — no API key required
 			"responses": map[string]any{
 				"200": map[string]any{
 					"description": "Service is healthy",
@@ -424,6 +429,13 @@ func syncPathItems(reg *service.Registry) map[string]any {
 
 func specComponents() map[string]any {
 	return map[string]any{
+		"securitySchemes": map[string]any{
+			"ApiKeyAuth": map[string]any{
+				"type": "apiKey",
+				"in":   "header",
+				"name": "apikey",
+			},
+		},
 		"schemas": map[string]any{
 			"JobSubmitResponse": map[string]any{
 				"type": "object",
