@@ -89,6 +89,7 @@ func DocsUI(specs []SwaggerSpec) http.HandlerFunc {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Kevent API</title>
   <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist/swagger-ui.css" />
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist/swagger-ui-standalone-preset.css" />
 </head>
 <body>
   <div id="swagger-ui"></div>
@@ -99,7 +100,7 @@ func DocsUI(specs []SwaggerSpec) http.HandlerFunc {
       "urls.primaryName": "Gateway (jobs async + sync)",
       dom_id: "#swagger-ui",
       presets: [SwaggerUIBundle.presets.apis, SwaggerUIBundle.SwaggerUIStandalonePreset],
-      layout: "BaseLayout",
+      layout: "StandaloneLayout",
       deepLinking: true,
     });
   </script>
