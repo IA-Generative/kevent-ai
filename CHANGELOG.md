@@ -16,6 +16,13 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Gateway
 
+### [v0.4.14] — 2026-04-02
+
+#### Fixed
+- Swagger UI `/docs` "No layout defined for StandaloneLayout": load `swagger-ui-standalone-preset.js` as a separate script tag and reference it as the global `SwaggerUIStandalonePreset` (not `SwaggerUIBundle.SwaggerUIStandalonePreset`)
+
+---
+
 ### [v0.4.13] — 2026-04-02
 
 #### Fixed
@@ -258,6 +265,13 @@ Versioning: each component is versioned independently — see tag conventions be
 ---
 
 ## Helm chart (kevent-gateway)
+
+### [0.5.7] — 2026-04-02
+
+#### Changed
+- `appVersion` / `image.tag` → `v0.4.14`
+
+---
 
 ### [0.5.6] — 2026-04-02
 
