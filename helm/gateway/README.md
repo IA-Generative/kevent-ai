@@ -156,6 +156,7 @@ services:
 | `syncTopic` | Priority Kafka topic for sync-over-Kafka (`POST /v1/*` multipart). Optional. |
 | `acceptedExts` | Allowed file extensions (e.g. `[".mp3", ".wav"]`). Empty or absent = all extensions accepted. |
 | `maxFileSizeMB` | Maximum upload size in MB. `0` or absent = 100 MB default. |
+| `swaggerURL` | Optional URL to an OpenAPI JSON spec for this service (e.g. raw GitHub URL). Fetched once at startup; served at `GET /swagger/{type}/{model}` and shown in the `/docs` dropdown. Failures are logged and skipped — startup is never blocked. |
 
 ### Redis HA
 

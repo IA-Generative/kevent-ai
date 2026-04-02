@@ -16,6 +16,16 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Gateway
 
+### [v0.4.12] — 2026-04-02
+
+#### Added
+- `swagger_url` optional field per service — OpenAPI JSON spec fetched from URL (e.g. raw GitHub) at startup and cached in memory
+- `GET /swagger/{type}/{model}` — serves the cached spec for a service
+- `GET /docs` — Swagger UI now shows a multi-spec dropdown: gateway spec + one entry per service with `swagger_url`
+- Fetch failures (URL unreachable, HTTP error, invalid JSON) are logged as warnings and never block startup
+
+---
+
 ### [v0.4.11] — 2026-04-01
 
 #### Added
@@ -241,6 +251,20 @@ Versioning: each component is versioned independently — see tag conventions be
 ---
 
 ## Helm chart (kevent-gateway)
+
+### [0.5.5] — 2026-04-02
+
+#### Changed
+- `appVersion` / `image.tag` → `v0.4.12`
+
+---
+
+### [0.5.4] — 2026-04-02
+
+#### Changed
+- `appVersion` / `image.tag` → `v0.4.11` (already released)
+
+---
 
 ### [0.5.3] — 2026-04-01
 

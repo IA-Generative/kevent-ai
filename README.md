@@ -221,6 +221,7 @@ services:
 | `sync_topic` | Topic Kafka prioritaire pour le sync-over-Kafka (optionnel). |
 | `accepted_exts` | Extensions acceptées. Vide ou absent = toutes les extensions acceptées. |
 | `max_file_size_mb` | Taille max du fichier. Absent ou 0 = 100 MB par défaut. |
+| `swagger_url` | URL vers le spec OpenAPI JSON du service (ex: URL raw GitHub). Optionnel — si absent, le service n'apparaît pas dans le dropdown `/docs`. |
 
 ### Relay sidecar (`relay/config.yaml`)
 
@@ -436,8 +437,9 @@ services:
 
 Le gateway génère le spec OpenAPI 3.0 à chaque démarrage depuis le registre de services :
 
-- **Swagger UI** : `GET /docs`
-- **Spec brut** : `GET /openapi.yaml`
+- **Swagger UI** : `GET /docs` — dropdown multi-specs : gateway (jobs async/sync) + un onglet par service ayant un `swagger_url`
+- **Spec gateway** : `GET /openapi.yaml` — spec générée dynamiquement (routes async + sync)
+- **Spec service** : `GET /swagger/{type}/{model}` — spec OpenAPI du service d'inférence, mise en cache au démarrage
 
 ### Mode sync — Endpoints OpenAI-compatibles
 
