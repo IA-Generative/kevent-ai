@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
@@ -63,9 +64,25 @@ func NewDocsSpec(spec []byte) http.HandlerFunc {
 }
 
 // DocsUI serves the Swagger UI at GET /docs.
-func DocsUI(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(`<!DOCTYPE html>
+// specs is the list of pre-fetched service OpenAPI specs; they appear as additional
+// entries in the Swagger UI dropdown alongside the gateway's own spec.
+func DocsUI(specs []SwaggerSpec) http.HandlerFunc {
+	// Build the Swagger UI urls array. Gateway spec is always first (primary).
+	type urlEntry struct {
+		Name string `json:"name"`
+		URL  string `json:"url"`
+	}
+	entries := []urlEntry{
+		{Name: "Gateway (jobs async + sync)", URL: "/openapi.yaml"},
+	}
+	// Group by type for readable names: "audio / whisper-large-v3"
+	for _, s := range specs {
+		name := s.Type + " / " + s.Model
+		entries = append(entries, urlEntry{Name: name, URL: "/swagger/" + s.Type + "/" + s.Model})
+	}
+	urlsJSON, _ := json.Marshal(entries)
+
+	html := `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
@@ -78,7 +95,8 @@ func DocsUI(w http.ResponseWriter, r *http.Request) {
   <script src="https://unpkg.com/swagger-ui-dist/swagger-ui-bundle.js"></script>
   <script>
     SwaggerUIBundle({
-      url: "/openapi.yaml",
+      urls: ` + string(urlsJSON) + `,
+      "urls.primaryName": "Gateway (jobs async + sync)",
       dom_id: "#swagger-ui",
       presets: [SwaggerUIBundle.presets.apis, SwaggerUIBundle.SwaggerUIStandalonePreset],
       layout: "BaseLayout",
@@ -86,7 +104,12 @@ func DocsUI(w http.ResponseWriter, r *http.Request) {
     });
   </script>
 </body>
-</html>`))
+</html>`
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(html))
+	}
 }
 
 // ── Path item builders ─────────────────────────────────────────────────────────

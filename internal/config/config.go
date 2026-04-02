@@ -90,6 +90,10 @@ type ServiceConfig struct {
 	SyncTopic     string   `yaml:"sync_topic"`
 	AcceptedExts  []string `yaml:"accepted_exts"`
 	MaxFileSizeMB int64    `yaml:"max_file_size_mb"`
+	// SwaggerURL is an optional URL to an OpenAPI JSON spec for this service.
+	// Fetched once at startup; served at GET /swagger/{type}/{model}.
+	// Failures are logged as warnings and do not block startup.
+	SwaggerURL string `yaml:"swagger_url"`
 }
 
 // Load reads and validates the YAML config file at path.

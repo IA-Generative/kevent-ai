@@ -1,0 +1,793 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Whisper KServe Server",
+    "version": "2.1.0"
+  },
+  "paths": {
+    "/v1/audio/transcriptions": {
+      "post": {
+        "tags": [
+          "OpenAI Audio API"
+        ],
+        "summary": "Transcribe audio",
+        "description": "Transcribes audio into the input language.\n\nCompatible with the OpenAI `audio.transcriptions.create` SDK method.\n\n**Word timestamps:** use `timestamp_granularities=word` (OpenAI SDK style) or\n`word_timestamps=true` (direct call). Requires `response_format=verbose_json`.",
+        "operationId": "transcriptions_v1_audio_transcriptions_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_transcriptions_v1_audio_transcriptions_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/audio/translations": {
+      "post": {
+        "tags": [
+          "OpenAI Audio API"
+        ],
+        "summary": "Translate audio to English",
+        "description": "Translates audio into English.\n\nCompatible with the OpenAI `audio.translations.create` SDK method.\nLanguage is always auto-detected; word timestamps are not supported for translation.",
+        "operationId": "translations_v1_audio_translations_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_translations_v1_audio_translations_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/models": {
+      "get": {
+        "tags": [
+          "OpenAI Audio API"
+        ],
+        "summary": "List Models",
+        "description": "List available models (OpenAI-compatible).",
+        "operationId": "list_models_v1_models_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Body_transcriptions_v1_audio_transcriptions_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "description": "Audio file to transcribe (mp3, mp4, mpeg, mpga, m4a, wav, webm)."
+          },
+          "response_format": {
+            "type": "string",
+            "title": "Response Format",
+            "description": "Output format. `json` returns `{text}`. `verbose_json` returns segments and word timestamps. `text`, `srt`, `vtt` return plain text.",
+            "default": "json"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language",
+            "description": "ISO-639-1 language code (e.g. `fr`, `en`). If omitted, the language is auto-detected."
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt",
+            "description": "Text to guide the model's style or provide context (e.g. unusual proper nouns, acronyms). Does not constrain the output."
+          },
+          "temperature": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "title": "Temperature",
+            "description": "Sampling temperature. Send a single value (`0.2`) for fixed temperature, or repeat the field multiple times for a fallback schedule (tries each value if the previous attempt fails quality checks).",
+            "default": [
+              0.0,
+              0.2,
+              0.4,
+              0.6,
+              0.8,
+              1.0
+            ]
+          },
+          "timestamp_granularities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Timestamp Granularities",
+            "description": "Granularity of timestamps in the response. Accepted values: `segment` (default), `word`. Requires `response_format=verbose_json`. OpenAI SDK compatible \u2014 also maps to `word_timestamps` internally. Note: the OpenAI SDK sends this field as `timestamp_granularities[]=word`; if using the SDK, prefer setting `word_timestamps=true` directly.",
+            "default": [
+              "segment"
+            ]
+          },
+          "debug": {
+            "type": "boolean",
+            "title": "Debug",
+            "description": "If true, includes the effective faster-whisper parameters in the response under the `parameters` key (only for `json` and `verbose_json` formats).",
+            "default": false
+          },
+          "prefix": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prefix",
+            "description": "Text prefix inserted before the first transcribed segment. Influences the style of the output without appearing in the context window for subsequent segments."
+          },
+          "beam_size": {
+            "type": "integer",
+            "title": "Beam Size",
+            "description": "Number of beams in beam search. Higher values improve quality at the cost of speed. Set to `1` for greedy decoding.",
+            "default": 5
+          },
+          "best_of": {
+            "type": "integer",
+            "title": "Best Of",
+            "description": "Number of candidates to sample when `temperature > 0`. The candidate with the highest log-probability is returned.",
+            "default": 5
+          },
+          "patience": {
+            "type": "number",
+            "title": "Patience",
+            "description": "Beam search patience factor. Values > 1.0 allow the search to continue even after finding `beam_size` complete hypotheses, potentially improving quality.",
+            "default": 1.0
+          },
+          "length_penalty": {
+            "type": "number",
+            "title": "Length Penalty",
+            "description": "Exponential length penalty applied to beam scores. Values > 1.0 favor longer outputs; < 1.0 favor shorter ones.",
+            "default": 1.0
+          },
+          "repetition_penalty": {
+            "type": "number",
+            "title": "Repetition Penalty",
+            "description": "Penalty multiplier applied to already-generated tokens. Values > 1.0 reduce repetition.",
+            "default": 1.0
+          },
+          "no_repeat_ngram_size": {
+            "type": "integer",
+            "title": "No Repeat Ngram Size",
+            "description": "Prevents repeating any n-gram of this size. `0` disables the constraint.",
+            "default": 0
+          },
+          "condition_on_previous_text": {
+            "type": "boolean",
+            "title": "Condition On Previous Text",
+            "description": "If true, feeds the previous segment's output as context for the next. Improves coherence but can propagate errors. Disable for independent segment decoding.",
+            "default": true
+          },
+          "prompt_reset_on_temperature": {
+            "type": "number",
+            "title": "Prompt Reset On Temperature",
+            "description": "When the fallback temperature reaches this value, the initial prompt context is reset. Helps break repetition loops introduced by a bad prompt.",
+            "default": 0.5
+          },
+          "compression_ratio_threshold": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compression Ratio Threshold",
+            "description": "If the gzip compression ratio of a segment exceeds this value, the segment is considered a hallucination and retried with a higher temperature.",
+            "default": 2.4
+          },
+          "log_prob_threshold": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Log Prob Threshold",
+            "description": "If the average log-probability of a segment is below this threshold, the segment is retried. Lower (more negative) values are more permissive.",
+            "default": -1.0
+          },
+          "no_speech_threshold": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "No Speech Threshold",
+            "description": "If the no-speech probability of a segment exceeds this value and the log-prob threshold is also triggered, the segment is treated as silence.",
+            "default": 0.6
+          },
+          "suppress_blank": {
+            "type": "boolean",
+            "title": "Suppress Blank",
+            "description": "Suppress blank outputs at the beginning of sampling.",
+            "default": true
+          },
+          "suppress_tokens": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Suppress Tokens",
+            "description": "Token IDs to suppress during decoding. `-1` suppresses all special tokens except for special language/task tokens. Repeat the field for multiple IDs.",
+            "default": [
+              -1
+            ]
+          },
+          "without_timestamps": {
+            "type": "boolean",
+            "title": "Without Timestamps",
+            "description": "If true, the model is forced to predict text only (no timestamp tokens). Faster but segments won't have start/end times.",
+            "default": false
+          },
+          "max_initial_timestamp": {
+            "type": "number",
+            "title": "Max Initial Timestamp",
+            "description": "Maximum timestamp for the first segment. Prevents the model from starting arbitrarily late in the audio.",
+            "default": 1.0
+          },
+          "word_timestamps": {
+            "type": "boolean",
+            "title": "Word Timestamps",
+            "description": "Enable word-level timestamps. Returned under `words` in each segment (requires `response_format=verbose_json`). Also activated by `timestamp_granularities=word`.",
+            "default": false
+          },
+          "prepend_punctuations": {
+            "type": "string",
+            "title": "Prepend Punctuations",
+            "description": "Punctuation characters that are merged with the following word (no space inserted before them).",
+            "default": "\"'\u2018\u00bf([{-"
+          },
+          "append_punctuations": {
+            "type": "string",
+            "title": "Append Punctuations",
+            "description": "Punctuation characters that are merged with the preceding word (no space inserted after them).",
+            "default": "\"'.\u3002,\uff0c!\uff01?\uff1f:\uff1a\u201d)]}\u3001"
+          },
+          "multilingual": {
+            "type": "boolean",
+            "title": "Multilingual",
+            "description": "Allow the model to switch languages mid-transcription (multilingual models only).",
+            "default": false
+          },
+          "vad_filter": {
+            "type": "boolean",
+            "title": "Vad Filter",
+            "description": "Apply Voice Activity Detection to filter out silent parts before transcription. Reduces hallucinations on silent audio.",
+            "default": false
+          },
+          "vad_parameters": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vad Parameters",
+            "description": "VAD tuning as a JSON object. Defaults to `{\"min_silence_duration_ms\": 500}`. Example: `{\"min_silence_duration_ms\": 300, \"threshold\": 0.6}`.",
+            "examples": [
+              "{\"min_silence_duration_ms\": 300}"
+            ]
+          },
+          "max_new_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max New Tokens",
+            "description": "Maximum number of tokens to generate per audio chunk. Limits output length; `None` means no limit."
+          },
+          "chunk_length": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chunk Length",
+            "description": "Audio chunk duration in seconds for batched processing. `None` uses the model's default (30s for Whisper)."
+          },
+          "clip_timestamps": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "title": "Clip Timestamps",
+            "description": "Timestamps (seconds) delimiting the audio region(s) to transcribe. A single value sets the start offset. Pairs of values define [start, end] windows. Repeat the field for multiple values.",
+            "default": [
+              0.0
+            ]
+          },
+          "hallucination_silence_threshold": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hallucination Silence Threshold",
+            "description": "When word timestamps are enabled, segments where the ratio of silent words exceeds this threshold are considered hallucinations and discarded."
+          },
+          "hotwords": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hotwords",
+            "description": "Comma-separated list of words to boost during decoding (increases their probability). Useful for domain-specific vocabulary."
+          },
+          "language_detection_threshold": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language Detection Threshold",
+            "description": "Minimum confidence score for automatic language detection. If the detected language scores below this value, the detection may fall back.",
+            "default": 0.5
+          },
+          "language_detection_segments": {
+            "type": "integer",
+            "title": "Language Detection Segments",
+            "description": "Number of initial audio segments used for language detection. More segments improve accuracy at the cost of latency.",
+            "default": 1
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_transcriptions_v1_audio_transcriptions_post"
+      },
+      "Body_translations_v1_audio_translations_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "description": "Audio file to translate (mp3, mp4, mpeg, mpga, m4a, wav, webm)."
+          },
+          "response_format": {
+            "type": "string",
+            "title": "Response Format",
+            "description": "Output format: `json`, `verbose_json`, `text`, `srt`, `vtt`.",
+            "default": "json"
+          },
+          "debug": {
+            "type": "boolean",
+            "title": "Debug",
+            "description": "If true, includes effective faster-whisper parameters in the response under `parameters`.",
+            "default": false
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt",
+            "description": "Text to guide the model's style or provide context for the English output."
+          },
+          "prefix": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prefix",
+            "description": "Text prefix inserted before the first translated segment. Influences the English output style."
+          },
+          "temperature": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "title": "Temperature",
+            "description": "Sampling temperature(s). Send a single value (`0.2`) for fixed temperature, or repeat the field for a fallback schedule.",
+            "default": [
+              0.0,
+              0.2,
+              0.4,
+              0.6,
+              0.8,
+              1.0
+            ]
+          },
+          "beam_size": {
+            "type": "integer",
+            "title": "Beam Size",
+            "description": "Beam search width. Higher values improve quality at the cost of speed. `1` = greedy decoding.",
+            "default": 5
+          },
+          "best_of": {
+            "type": "integer",
+            "title": "Best Of",
+            "description": "Number of candidates sampled when `temperature > 0`. The best by log-probability is returned.",
+            "default": 5
+          },
+          "patience": {
+            "type": "number",
+            "title": "Patience",
+            "description": "Beam search patience factor. Values > 1.0 allow more exploration, potentially improving quality.",
+            "default": 1.0
+          },
+          "length_penalty": {
+            "type": "number",
+            "title": "Length Penalty",
+            "description": "Exponential length penalty on beam scores. Values > 1.0 favor longer outputs.",
+            "default": 1.0
+          },
+          "repetition_penalty": {
+            "type": "number",
+            "title": "Repetition Penalty",
+            "description": "Penalty applied to already-generated tokens. Values > 1.0 reduce repetition.",
+            "default": 1.0
+          },
+          "no_repeat_ngram_size": {
+            "type": "integer",
+            "title": "No Repeat Ngram Size",
+            "description": "Prevents repeating any n-gram of this size. `0` = disabled.",
+            "default": 0
+          },
+          "condition_on_previous_text": {
+            "type": "boolean",
+            "title": "Condition On Previous Text",
+            "description": "Feed the previous segment's output as context for the next. Improves coherence but can propagate errors.",
+            "default": true
+          },
+          "prompt_reset_on_temperature": {
+            "type": "number",
+            "title": "Prompt Reset On Temperature",
+            "description": "When the fallback temperature reaches this value, the prompt context is reset to break repetition loops.",
+            "default": 0.5
+          },
+          "compression_ratio_threshold": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compression Ratio Threshold",
+            "description": "If a segment's gzip compression ratio exceeds this value, it is considered a hallucination and retried.",
+            "default": 2.4
+          },
+          "log_prob_threshold": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Log Prob Threshold",
+            "description": "If the average log-probability of a segment is below this threshold, the segment is retried. Lower = more permissive.",
+            "default": -1.0
+          },
+          "no_speech_threshold": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "No Speech Threshold",
+            "description": "If the no-speech probability exceeds this value and the log-prob threshold triggers, the segment is treated as silence.",
+            "default": 0.6
+          },
+          "suppress_blank": {
+            "type": "boolean",
+            "title": "Suppress Blank",
+            "description": "Suppress blank outputs at the beginning of sampling.",
+            "default": true
+          },
+          "suppress_tokens": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Suppress Tokens",
+            "description": "Token IDs to suppress during decoding. Repeat the field for multiple IDs.",
+            "default": []
+          },
+          "without_timestamps": {
+            "type": "boolean",
+            "title": "Without Timestamps",
+            "description": "Force text-only prediction (no timestamp tokens). Default `true` for translation.",
+            "default": true
+          },
+          "max_initial_timestamp": {
+            "type": "number",
+            "title": "Max Initial Timestamp",
+            "description": "Maximum timestamp for the first segment. Prevents starting arbitrarily late in the audio.",
+            "default": 1.0
+          },
+          "prepend_punctuations": {
+            "type": "string",
+            "title": "Prepend Punctuations",
+            "description": "Punctuation characters merged with the following word (no space inserted before them).",
+            "default": "\"'\u2018\u00bf([{-"
+          },
+          "append_punctuations": {
+            "type": "string",
+            "title": "Append Punctuations",
+            "description": "Punctuation characters merged with the preceding word (no space inserted after them).",
+            "default": "\"'.\u3002,\uff0c!\uff01?\uff1f:\uff1a\u201d)]}\u3001"
+          },
+          "multilingual": {
+            "type": "boolean",
+            "title": "Multilingual",
+            "description": "Allow language switching mid-audio (multilingual models only).",
+            "default": false
+          },
+          "vad_filter": {
+            "type": "boolean",
+            "title": "Vad Filter",
+            "description": "Apply Voice Activity Detection to filter silence before translation. Enabled by default to reduce hallucinations on quiet segments.",
+            "default": false
+          },
+          "vad_parameters": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vad Parameters",
+            "description": "VAD tuning as a JSON object. Defaults to `{\"min_silence_duration_ms\": 500}`. Example: `{\"min_silence_duration_ms\": 300, \"threshold\": 0.6}`.",
+            "examples": [
+              "{\"min_silence_duration_ms\": 300}"
+            ]
+          },
+          "max_new_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max New Tokens",
+            "description": "Maximum number of tokens to generate per audio chunk. `None` = no limit."
+          },
+          "chunk_length": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chunk Length",
+            "description": "Audio chunk duration in seconds for batched processing. `None` uses the model default (30s)."
+          },
+          "clip_timestamps": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "title": "Clip Timestamps",
+            "description": "Timestamps (seconds) delimiting the audio region(s) to translate. Single value = start offset. Pairs = [start, end]. Repeat for multiple values.",
+            "default": [
+              0.0
+            ]
+          },
+          "hallucination_silence_threshold": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hallucination Silence Threshold",
+            "description": "Discard segments where the ratio of silent words exceeds this threshold (requires word timestamps internally)."
+          },
+          "hotwords": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hotwords",
+            "description": "Comma-separated words to boost during decoding. Useful for domain-specific vocabulary."
+          },
+          "language_detection_threshold": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language Detection Threshold",
+            "description": "Minimum confidence for automatic language detection before translation.",
+            "default": 0.5
+          },
+          "language_detection_segments": {
+            "type": "integer",
+            "title": "Language Detection Segments",
+            "description": "Number of initial audio segments used for language detection. More segments = better accuracy, higher latency.",
+            "default": 1
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_translations_v1_audio_translations_post"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  }
+}
