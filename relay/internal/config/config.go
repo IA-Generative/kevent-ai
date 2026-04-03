@@ -47,6 +47,17 @@ type ServiceConfig struct {
 	ResultTopic string `yaml:"result_topic"`
 }
 
+// Type derives the service type from the result topic.
+// The expected format is "jobs.<type>.results" (e.g. "jobs.whisper.results" → "whisper").
+// Falls back to the full topic name if the format doesn't match.
+func (s ServiceConfig) Type() string {
+	parts := strings.SplitN(s.ResultTopic, ".", 3)
+	if len(parts) == 3 && parts[0] == "jobs" {
+		return parts[1]
+	}
+	return s.ResultTopic
+}
+
 type KafkaConfig struct {
 	Brokers []string   `yaml:"brokers"`
 	SASL    SASLConfig `yaml:"sasl"`

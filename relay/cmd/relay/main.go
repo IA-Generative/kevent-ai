@@ -91,7 +91,9 @@ func main() {
 	// Any other path (e.g. /v1/audio/transcriptions) is a direct inference request
 	// from the gateway sync-direct path; proxy it straight to the local model.
 	inferenceProxy := newInferenceProxy(cfg.Inference.BaseURL)
-	serviceType := os.Getenv("SERVICE_TYPE")
+	// Derive service type from result_topic ("jobs.<type>.results") so no
+	// additional SERVICE_TYPE env var is required in the ServingRuntime.
+	serviceType := cfg.Service.Type()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			start := time.Now()

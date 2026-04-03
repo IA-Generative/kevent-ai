@@ -219,6 +219,13 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Relay
 
+### [v0.5.1] — 2026-04-03
+
+#### Fixed
+- Proxy metrics (`kevent_relay_proxy_requests_total`, `kevent_relay_proxy_duration_seconds`) now carry the correct `service_type` label, derived automatically from `result_topic` (`jobs.<type>.results` → `<type>`). The `SERVICE_TYPE` env var is no longer required in any ServingRuntime.
+
+---
+
 ### [v0.5.0] — 2026-04-03
 
 #### Fixed
