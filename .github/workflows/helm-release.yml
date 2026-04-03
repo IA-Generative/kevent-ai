@@ -36,11 +36,14 @@ jobs:
 
       - name: Publish docs to GitHub Pages
         run: |
+          # Save docs/ before switching branches
+          cp -r docs /tmp/kevent-docs
+
           git fetch origin gh-pages
           git checkout gh-pages
 
           # Copy docs/ content to the root of gh-pages (preserves existing chart files)
-          cp -r docs/. .
+          cp -r /tmp/kevent-docs/. .
 
           git add .
           git diff --cached --quiet || git commit -m "docs: update runbooks from main"
