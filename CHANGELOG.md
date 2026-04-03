@@ -219,6 +219,15 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Relay
 
+### [v0.5.0] — 2026-04-03
+
+#### Fixed
+- `publishFailure` returns an error — when Kafka is unavailable after an inference failure, the error propagates so KafkaSource retries the job (previously the job was stuck in `pending` indefinitely)
+- `newInferenceProxy` exits with `os.Exit(1)` on invalid `inference.base_url` instead of silently falling back to a hardcoded address
+- `io.ReadAll` replaces `bytes.Buffer` in `decodeInputEvent`
+
+---
+
 ### [v0.4.7] — 2026-03-31
 
 #### Added
