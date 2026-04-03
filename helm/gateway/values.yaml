@@ -161,6 +161,41 @@ metrics:
     relabelings: []
     metricRelabelings: []
 
+# ── Alerting (Prometheus Operator) ───────────────────────────────────────────
+alerting:
+  prometheusRule:
+    enabled: false
+    # Namespace où créer la PrometheusRule (défaut : même namespace que la release).
+    namespace: ""
+    # Labels supplémentaires — doit correspondre au ruleSelector du Prometheus Operator.
+    # Exemple : release: kube-prometheus-stack
+    additionalLabels: {}
+    # URL de base des runbooks. Les URLs finales seront <runbookBaseURL>/<AlertName>.
+    runbookBaseURL: "https://ia-generative.github.io/kevent-ai/runbooks"
+    # Seuils modifiables par alerte.
+    thresholds:
+      # Taux d'erreur gateway (0.05 = 5%)
+      gatewayErrorRateWarning: 0.05
+      gatewayErrorRateCritical: 0.20
+      # Nombre de jobs sync en vol simultanés avant alerte
+      syncJobsInFlight: 20
+      # Taux d'échec relay (0.10 = 10%)
+      relayJobFailureRateWarning: 0.10
+      relayJobFailureRateCritical: 0.30
+      # Durée d'inférence p95 en secondes avant alerte slow
+      relayInferenceP95Seconds: 120
+    # Règles supplémentaires ajoutées au groupe kevent-relay.
+    extraRules: []
+    # Exemple :
+    # extraRules:
+    #   - alert: MyCustomAlert
+    #     expr: kevent_relay_deferred_total > 100
+    #     for: 5m
+    #     labels:
+    #       severity: warning
+    #     annotations:
+    #       summary: "Too many deferred async jobs"
+
 # ── Ressources / scheduling ───────────────────────────────────────────────────
 resources: {}
   # limits:

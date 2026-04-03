@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - "helm/**"
+      - "docs/**"
 
 jobs:
   release:
@@ -32,3 +33,15 @@ jobs:
           skip_existing: true   # évite le 403 si la release existe déjà (ex: rerun)
         env:
           CR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish docs to GitHub Pages
+        run: |
+          git fetch origin gh-pages
+          git checkout gh-pages
+
+          # Copy docs/ content to the root of gh-pages (preserves existing chart files)
+          cp -r docs/. .
+
+          git add .
+          git diff --cached --quiet || git commit -m "docs: update runbooks from main"
+          git push origin gh-pages
