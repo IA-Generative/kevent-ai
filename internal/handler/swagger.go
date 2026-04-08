@@ -33,7 +33,7 @@ func FetchSwaggerSpecs(cfgs []config.ServiceConfig) []SwaggerSpec {
 		if svc.SwaggerURL == "" {
 			continue
 		}
-		data, err := fetchSwaggerJSON(client, svc.SwaggerURL)
+		data, err := fetchSwaggerJSON(client, svc.SwaggerURL, svc.SwaggerHeaders)
 		if err != nil {
 			slog.Warn("failed to fetch swagger spec",
 				"type", svc.Type, "model", svc.Model,
@@ -46,13 +46,16 @@ func FetchSwaggerSpecs(cfgs []config.ServiceConfig) []SwaggerSpec {
 	return specs
 }
 
-func fetchSwaggerJSON(client *http.Client, url string) (json.RawMessage, error) {
+func fetchSwaggerJSON(client *http.Client, url string, headers map[string]string) (json.RawMessage, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
 	resp, err := client.Do(req)
 	if err != nil {

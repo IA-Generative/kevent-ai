@@ -94,6 +94,13 @@ type ServiceConfig struct {
 	// Fetched once at startup; served at GET /swagger/{type}/{model}.
 	// Failures are logged as warnings and do not block startup.
 	SwaggerURL string `yaml:"swagger_url"`
+	// SwaggerHeaders are optional HTTP headers sent when fetching SwaggerURL.
+	// Values support ${VAR} env expansion (same as the rest of config.yaml).
+	// Example for a private GitHub release asset:
+	//   swagger_headers:
+	//     Accept: application/octet-stream
+	//     Authorization: "Bearer ${GITHUB_TOKEN}"
+	SwaggerHeaders map[string]string `yaml:"swagger_headers"`
 }
 
 // Load reads and validates the YAML config file at path.

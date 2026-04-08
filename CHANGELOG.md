@@ -16,6 +16,13 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Gateway
 
+### [v0.5.1] — 2026-04-08
+
+#### Added
+- `swagger_headers` field on service config: optional HTTP headers sent when fetching `swagger_url`. Values support `${VAR}` env expansion. Useful for private GitHub release assets (`Accept: application/octet-stream`, `Authorization: Bearer ${GITHUB_TOKEN}`).
+
+---
+
 ### [v0.5.0] — 2026-04-03
 
 #### Changed
