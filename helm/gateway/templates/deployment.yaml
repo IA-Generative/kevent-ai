@@ -99,6 +99,18 @@ spec:
           secret:
             secretName: {{ .Values.kafka.tls.existingCACertSecret }}
         {{- end }}
+        {{- if .Values.configReloader.enabled }}
+        - name: config-reloader
+          image: "{{ .Values.configReloader.image }}"
+          args:
+            - --volume-dir=/etc/kevent
+            - --webhook-url=http://localhost:8080/-/reload
+            - --web.listen-address=:{{ .Values.configReloader.listenPort }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/kevent
+              readOnly: true
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

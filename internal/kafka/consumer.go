@@ -25,21 +25,24 @@ const (
 
 // ConsumerManager starts one consumer goroutine per registered service result topic.
 // It updates job state in Redis and optionally sends webhook notifications.
+// Use Reconcile to dynamically add/remove consumers at runtime without restart.
 // Call Wait() after cancelling the context to drain all in-flight goroutines.
 type ConsumerManager struct {
 	cfg        config.KafkaConfig
 	dialer     *kafkago.Dialer
-	registry   *service.Registry
 	redis      *storage.RedisClient
 	s3         *storage.S3Client
 	logger     *slog.Logger
 	httpClient *http.Client
-	wg         sync.WaitGroup // tracks consumer goroutines + in-flight webhook goroutines
+
+	mu        sync.Mutex
+	parentCtx context.Context
+	cancels   map[string]context.CancelFunc // keyed by resultTopic
+	wg        sync.WaitGroup               // tracks consumer goroutines + in-flight webhook goroutines
 }
 
 func NewConsumerManager(
 	cfg config.KafkaConfig,
-	registry *service.Registry,
 	redis *storage.RedisClient,
 	s3 *storage.S3Client,
 	logger *slog.Logger,
@@ -49,30 +52,69 @@ func NewConsumerManager(
 		return nil, fmt.Errorf("building kafka dialer: %w", err)
 	}
 	return &ConsumerManager{
-		cfg:      cfg,
-		dialer:   dialer,
-		registry: registry,
-		redis:    redis,
-		s3:       s3,
-		logger:   logger,
+		cfg:    cfg,
+		dialer: dialer,
+		redis:  redis,
+		s3:     s3,
+		logger: logger,
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
+		cancels: make(map[string]context.CancelFunc),
 	}, nil
 }
 
-// Start launches one goroutine per registered service's result topic.
+// Start launches one goroutine per service result topic in the initial registry.
 // Services without a result topic (sync-direct only) are skipped.
 // All goroutines stop when ctx is cancelled; call Wait to drain them.
-func (cm *ConsumerManager) Start(ctx context.Context) {
-	for _, def := range cm.registry.KafkaServices() {
-		topic, serviceType := def.ResultTopic, def.Type
-		cm.wg.Add(1)
-		go func() {
-			defer cm.wg.Done()
-			cm.consume(ctx, topic, serviceType)
-		}()
+func (cm *ConsumerManager) Start(ctx context.Context, reg *service.Registry) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	cm.parentCtx = ctx
+	for _, def := range reg.KafkaServices() {
+		cm.startLocked(def.ResultTopic, def.Type)
 	}
+}
+
+// Reconcile updates the set of active consumers to match newRegistry.
+// Consumers for removed topics are stopped gracefully; consumers for added
+// topics are started immediately. Unchanged topics continue uninterrupted.
+func (cm *ConsumerManager) Reconcile(newReg *service.Registry) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	newServices := make(map[string]string) // resultTopic → serviceType
+	for _, def := range newReg.KafkaServices() {
+		newServices[def.ResultTopic] = def.Type
+	}
+
+	// Stop consumers for removed topics.
+	for topic, cancel := range cm.cancels {
+		if _, ok := newServices[topic]; !ok {
+			cm.logger.Info("stopping result consumer", "topic", topic)
+			cancel()
+			delete(cm.cancels, topic)
+		}
+	}
+
+	// Start consumers for added topics.
+	for topic, serviceType := range newServices {
+		if _, ok := cm.cancels[topic]; !ok {
+			cm.logger.Info("starting result consumer", "topic", topic, "service", serviceType)
+			cm.startLocked(topic, serviceType)
+		}
+	}
+}
+
+// startLocked starts a consumer goroutine for topic. Must be called with cm.mu held.
+func (cm *ConsumerManager) startLocked(topic, serviceType string) {
+	ctx, cancel := context.WithCancel(cm.parentCtx)
+	cm.cancels[topic] = cancel
+	cm.wg.Add(1)
+	go func() {
+		defer cm.wg.Done()
+		cm.consume(ctx, topic, serviceType)
+	}()
 }
 
 // Wait blocks until all consumer goroutines and in-flight webhook goroutines have exited.

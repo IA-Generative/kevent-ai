@@ -16,6 +16,19 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Gateway
 
+### [v0.5.2] — 2026-04-09
+
+#### Added
+- `POST /-/reload` endpoint: hot-reloads config (service registry, Swagger specs, OpenAPI spec, routing table) without pod restart. Infrastructure (S3, Redis, Kafka connection) is not re-initialised.
+- `ConsumerManager.Reconcile`: dynamically adds consumers for new Kafka result topics and stops consumers for removed topics on hot reload.
+- `configReloader` sidecar in Helm chart (`ghcr.io/jimmidyson/configmap-reload`): watches the ConfigMap volume and triggers `/-/reload` automatically on ConfigMap update. Disabled by default (`configReloader.enabled: false`).
+
+#### Changed
+- Kafka producer and consumer manager are now created whenever `kafka.brokers` is configured, regardless of initial service count — enables adding Kafka services via hot reload without restart.
+- `ConsumerManager.Start` now takes the initial `*service.Registry` as parameter (previously stored in the struct).
+
+---
+
 ### [v0.5.1] — 2026-04-08
 
 #### Added
