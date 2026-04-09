@@ -39,9 +39,9 @@ jobs:
           # Save docs/ before switching branches
           cp -r docs /tmp/kevent-docs
 
-          # chart-releaser leaves .cr-index/ as an untracked directory; remove it
-          # before switching branches to avoid "would be overwritten" errors.
-          rm -rf .cr-index
+          # chart-releaser leaves .cr-index/ and .cr-release-packages/ as untracked
+          # directories; remove them before switching branches to avoid checkout errors.
+          rm -rf .cr-index .cr-release-packages
 
           git fetch origin gh-pages
           git checkout gh-pages
