@@ -60,4 +60,17 @@ var (
 		Name: "kevent_kafka_publish_errors_total",
 		Help: "Total number of Kafka publish errors.",
 	}, []string{"topic"})
+
+	// RedisOperationDuration measures latency for each Redis operation.
+	RedisOperationDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "kevent_redis_operation_duration_seconds",
+		Help:    "Redis operation duration in seconds.",
+		Buckets: prometheus.DefBuckets,
+	}, []string{"operation"})
+
+	// RedisErrorsTotal counts Redis operation failures.
+	RedisErrorsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "kevent_redis_errors_total",
+		Help: "Total number of Redis operation errors.",
+	}, []string{"operation"})
 )

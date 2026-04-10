@@ -10,6 +10,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"kevent/gateway/internal/config"
+	"kevent/gateway/internal/metrics"
 	"kevent/gateway/internal/model"
 )
 
@@ -47,11 +48,15 @@ func jobKey(id string) string { return "job:" + id }
 
 // SaveJob persists the full job struct as a JSON blob with the configured TTL.
 func (r *RedisClient) SaveJob(ctx context.Context, job *model.Job) error {
+	start := time.Now()
 	data, err := json.Marshal(job)
 	if err != nil {
 		return fmt.Errorf("marshaling job %q: %w", job.ID, err)
 	}
-	if err := r.client.Set(ctx, jobKey(job.ID), data, r.jobTTL).Err(); err != nil {
+	err = r.client.Set(ctx, jobKey(job.ID), data, r.jobTTL).Err()
+	metrics.RedisOperationDuration.WithLabelValues("save_job").Observe(time.Since(start).Seconds())
+	if err != nil {
+		metrics.RedisErrorsTotal.WithLabelValues("save_job").Inc()
 		return fmt.Errorf("saving job %q: %w", job.ID, err)
 	}
 	return nil
@@ -59,11 +64,14 @@ func (r *RedisClient) SaveJob(ctx context.Context, job *model.Job) error {
 
 // GetJob retrieves a job from Redis. Returns a descriptive error when not found.
 func (r *RedisClient) GetJob(ctx context.Context, id string) (*model.Job, error) {
+	start := time.Now()
 	data, err := r.client.Get(ctx, jobKey(id)).Bytes()
+	metrics.RedisOperationDuration.WithLabelValues("get_job").Observe(time.Since(start).Seconds())
 	if err == redis.Nil {
 		return nil, fmt.Errorf("job %q not found", id)
 	}
 	if err != nil {
+		metrics.RedisErrorsTotal.WithLabelValues("get_job").Inc()
 		return nil, fmt.Errorf("getting job %q: %w", id, err)
 	}
 
@@ -76,7 +84,11 @@ func (r *RedisClient) GetJob(ctx context.Context, id string) (*model.Job, error)
 
 // DeleteJob removes a job record from Redis.
 func (r *RedisClient) DeleteJob(ctx context.Context, id string) error {
-	if err := r.client.Del(ctx, jobKey(id)).Err(); err != nil {
+	start := time.Now()
+	err := r.client.Del(ctx, jobKey(id)).Err()
+	metrics.RedisOperationDuration.WithLabelValues("delete_job").Observe(time.Since(start).Seconds())
+	if err != nil {
+		metrics.RedisErrorsTotal.WithLabelValues("delete_job").Inc()
 		return fmt.Errorf("deleting job %q: %w", id, err)
 	}
 	return nil
@@ -107,11 +119,14 @@ func (r *RedisClient) UpdateJobResult(ctx context.Context, jobID string, status 
 	if ttlSecs <= 0 {
 		ttlSecs = 3600
 	}
+	start := time.Now()
 	err := updateJobScript.Run(ctx, r.client,
 		[]string{jobKey(jobID)},
 		string(status), resultRef, errMsg, updatedAt, ttlSecs,
 	).Err()
+	metrics.RedisOperationDuration.WithLabelValues("update_job").Observe(time.Since(start).Seconds())
 	if err != nil {
+		metrics.RedisErrorsTotal.WithLabelValues("update_job").Inc()
 		return fmt.Errorf("updating job %q in redis: %w", jobID, err)
 	}
 	return nil
