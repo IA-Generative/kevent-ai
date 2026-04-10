@@ -4,7 +4,7 @@ API Gateway pour les services d'inférence KServe. Deux modes de fonctionnement 
 
 | Mode | Endpoints | Quand l'utiliser |
 |---|---|---|
-| **Async** (Kafka) | `POST /jobs/{service_type}`, `GET /jobs/{service_type}/{id}` | Fichiers lourds, traitements longs (>30s), besoin de webhook |
+| **Async** (Kafka) | `POST /jobs/{service_type}`, `GET /jobs/{service_type}/{id}`, `GET /jobs` | Fichiers lourds, traitements longs (>30s), besoin de webhook |
 | **Sync-over-Kafka** | `POST /v1/*` multipart + `sync_topic` configuré | Latence maîtrisée, priorité sur les jobs async, fichiers lourds |
 | **Sync direct proxy** | `POST /v1/*` (JSON ou multipart sans `sync_topic`) | Intégration SDK OpenAI, services sans Kafka (reranker, embeddings…) |
 
@@ -136,6 +136,13 @@ server:
   read_timeout: 120s    # élevé pour les gros uploads
   write_timeout: 0s     # 0 = désactivé — requis pour le mode sync (inférence longue)
   idle_timeout: 120s
+  # consumer_header: header HTTP injecté par APISIX après auth (ex: "X-Consumer-Username").
+  # Active le tracking consumer : GET /jobs, isolation des jobs, métrique par consumer.
+  # Laisser vide en l'absence d'auth en amont.
+  consumer_header: "${CONSUMER_HEADER:-}"
+  # priority_header: header HTTP pour le routage prioritaire (ex: "X-Priority").
+  # Si présent et que le service a un priority_topic, le job est routé vers ce topic.
+  priority_header: "${PRIORITY_HEADER:-}"
 
 kafka:
   # Optionnel si aucun service ne configure de topic Kafka (sync-direct uniquement).
@@ -219,6 +226,7 @@ services:
 | `input_topic` | Topic Kafka pour les jobs async en entrée. Optionnel — absent = service sync-direct uniquement. |
 | `result_topic` | Topic Kafka pour les résultats. Doit être absent si `input_topic` est absent (les deux vont de pair). |
 | `sync_topic` | Topic Kafka prioritaire pour le sync-over-Kafka (optionnel). |
+| `priority_topic` | Topic Kafka pour les jobs prioritaires (SA/comptes de service). Optionnel — si absent, le routing prioritaire est désactivé pour ce service. |
 | `accepted_exts` | Extensions acceptées. Vide ou absent = toutes les extensions acceptées. |
 | `max_file_size_mb` | Taille max du fichier. Absent ou 0 = 100 MB par défaut. |
 | `swagger_url` | URL vers le spec OpenAPI JSON du service (ex: URL raw GitHub). Optionnel — si absent, le service n'apparaît pas dans le dropdown `/docs`. |
@@ -277,6 +285,8 @@ inference:
 | `REDIS_ADDR` | `redis:6379` | Adresse Redis |
 | `REDIS_PASSWORD` | _(vide)_ | Mot de passe Redis |
 | `ENCRYPTION_KEY` | _(vide)_ | Clé AES-256-GCM hex-encodée (32 octets) |
+| `CONSUMER_HEADER` | _(vide)_ | Header HTTP pour identifier le consumer (ex: `X-Consumer-Username`) |
+| `PRIORITY_HEADER` | _(vide)_ | Header HTTP pour le routing prioritaire (ex: `X-Priority`) |
 
 ### Variables d'environnement (relay sidecar)
 
@@ -557,6 +567,45 @@ curl -X POST http://localhost:8080/jobs/audio \
 
 > **Attention** : le fichier résultat S3 est supprimé après cet appel — les appels suivants retournent 404.
 
+> **Isolation consumer** : si `consumer_header` est configuré et que le header est présent dans la requête, le job doit appartenir au consumer identifié — sinon `404` (aucune fuite d'information sur les jobs d'autres consumers). Les appels sans header (admin, usage interne) ne sont pas soumis à cette vérification.
+
+---
+
+#### `GET /jobs` — Liste des jobs d'un consumer
+
+Nécessite `consumer_header` configuré. Retourne la liste paginée des jobs du consumer identifié par le header, triée par date de création décroissante.
+
+**Query params** : `limit` (défaut 20, max 100), `offset` (défaut 0)
+
+**Réponse** `200 OK`
+
+```json
+{
+  "consumer": "alice",
+  "total": 42,
+  "limit": 20,
+  "offset": 0,
+  "jobs": [
+    {
+      "job_id": "550e8400-...",
+      "service_type": "audio",
+      "model": "whisper-large-v3",
+      "status": "completed",
+      "created_at": "2026-03-05T10:04:32Z",
+      "updated_at": "2026-03-05T10:04:32Z"
+    }
+  ]
+}
+```
+
+```bash
+curl http://localhost:8080/jobs \
+  -H "X-Consumer-Username: alice" \
+  "?limit=10&offset=0"
+```
+
+> Si `consumer_header` n'est pas configuré, retourne `501 Not Implemented`.
+
 **Polling simple**
 
 ```bash
@@ -658,6 +707,9 @@ Les deux composants exposent des métriques Prometheus sur `GET /metrics`.
 | `kevent_s3_errors_total` | counter | `operation` | Erreurs S3 |
 | `kevent_kafka_publish_duration_seconds` | histogram | `topic` | Latence des écritures Kafka |
 | `kevent_kafka_publish_errors_total` | counter | `topic` | Erreurs de publication Kafka |
+| `kevent_redis_operation_duration_seconds` | histogram | `operation` (save_job/get_job/delete_job/update_job_result) | Latence des opérations Redis |
+| `kevent_redis_errors_total` | counter | `operation` | Erreurs Redis |
+| `kevent_jobs_by_consumer_total` | counter | `mode`, `service_type`, `model`, `consumer` | Jobs soumis par consumer (uniquement si `consumer_header` configuré) |
 
 ### Relay sidecar
 

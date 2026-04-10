@@ -14,6 +14,23 @@ server:
   priority_header: ""      # header name for priority routing (e.g. X-Priority)
 ```
 
+### `consumer_header`
+
+When set to a non-empty header name (e.g. `X-Consumer-Username`, typically injected by APISIX after authentication):
+
+- The consumer name is stored in the job record (`consumer_name` field in Redis).
+- A Redis sorted set `consumer:{name}:jobs` is maintained per consumer (score = creation timestamp, same TTL as the job). Used by `GET /jobs`.
+- `GET /jobs/{service_type}/{id}` enforces **ownership**: if the header is present in the request, `job.consumer_name` must match — returns `404` on mismatch (no information leak about other consumers' jobs).
+- `kevent_jobs_by_consumer_total{mode, service_type, model, consumer}` is incremented per submission.
+
+Leave empty in deployments without upstream authentication — no behaviour change, zero overhead.
+
+### `priority_header`
+
+When set and a request carries this header, the job is published to `services[].priority_topic` instead of `input_topic`. The relay processes priority-topic jobs via `POST /sync`, which sets `syncPriority++` and defers normal async jobs for its duration.
+
+Leave empty to disable priority routing.
+
 ## Kafka
 
 ```yaml

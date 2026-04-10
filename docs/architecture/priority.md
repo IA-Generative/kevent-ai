@@ -61,15 +61,30 @@ spec:
     path: /sync
 ```
 
-## Consumer identification
+## Consumer identification and isolation
 
-Requests can carry a consumer name via a configurable header (`server.consumer_header`). The gateway:
+When `server.consumer_header` is set (e.g. `X-Consumer-Username`, injected by APISIX after auth), the gateway:
 
-1. Attaches the consumer name to the job record in Redis
-2. Maintains a sorted set `consumer:{name}:jobs` for `GET /jobs` listing
-3. Increments `kevent_jobs_by_consumer_total{service_type, model, consumer}`
+1. Stores `consumer_name` in the job record (Redis JSON)
+2. Maintains `consumer:{name}:jobs` sorted set (score = Unix timestamp, same TTL as job)
+3. Exposes `GET /jobs` to list a consumer's jobs (paginated, most-recent-first)
+4. Enforces ownership on `GET /jobs/{service_type}/{id}`: if the header is present, the job's `consumer_name` must match — returns `404` on mismatch
+5. Increments `kevent_jobs_by_consumer_total{mode, service_type, model, consumer}`
 
 ```yaml
 server:
   consumer_header: "X-Consumer-Username"   # set by APISIX after authentication
 ```
+
+### Ownership check behaviour
+
+| `consumer_header` configured | Header in request | Result |
+|---|---|---|
+| no | — | No check — auth-less deployments, all callers trusted |
+| yes | absent | No check — admin/internal calls bypass isolation |
+| yes | present + matches job | `200 OK` |
+| yes | present + mismatch | `404` — no information leak about other consumers' jobs |
+
+### Security note
+
+Brute-force by job ID is not feasible — IDs are UUID v4 (2¹²² combinations). The ownership check adds defence-in-depth for authenticated deployments: even if a consumer somehow obtained another consumer's UUID, the gateway returns `404`.
