@@ -16,6 +16,22 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Gateway
 
+### [v0.6.0] — 2026-04-10
+
+#### Added
+- Redis operation metrics: `kevent_redis_operation_duration_seconds` histogram and `kevent_redis_errors_total` counter, both labelled by operation (`save_job`, `get_job`, `delete_job`, `update_job_result`)
+- Priority routing: requests carrying the configurable `server.priority_header` are published to `services[].priority_topic` (Kafka), routed to `POST /sync` on the relay (sets `syncPriority++`, deferring async jobs)
+- Consumer tracking: gateway reads `server.consumer_header`, attaches consumer name to job records (Redis), exposes `kevent_jobs_by_consumer_total{service_type, model, consumer}` metric
+- `GET /jobs` endpoint: list jobs by consumer (reads `consumer_header`, returns paginated job list from Redis sorted set)
+- MkDocs Material documentation site: architecture, deployment, configuration reference, Kafka/SASL guide, gitflow, releasing guide — deployed automatically to GitHub Pages
+
+#### Changed
+- `NewJobHandler` and `NewSyncHandler` accept `consumerHeader` and `priorityHeader` parameters
+- `helm-release.yml`: docs publishing step removed (dedicated `docs.yml` workflow handles it)
+- `.github/workflows/docs.yml`: new workflow — builds MkDocs and deploys to `gh-pages` while preserving Helm `index.yaml` and `.tgz` packages
+
+---
+
 ### [v0.5.3] — 2026-04-09
 
 #### Fixed
