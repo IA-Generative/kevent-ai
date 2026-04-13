@@ -85,11 +85,23 @@ extraEnvVars:
 ## Apply Strimzi Kafka users
 
 ```bash
-kubectl apply -f k8s/kafka-users.yaml -n infra-kafka
+kubectl apply -f examples/kafka-users.yaml -n <kafka-namespace>
 ```
+
+See [`examples/kafka-users.yaml`](../../examples/kafka-users.yaml) for the full manifest. Adjust the `strimzi.io/cluster` label and namespace to match your Strimzi installation.
+
+## Apply KafkaSources
+
+```bash
+kubectl apply -f examples/kafka-sources.yaml
+```
+
+See [`examples/kafka-sources.yaml`](../../examples/kafka-sources.yaml). Replace the `<placeholder>` values (broker address, secret names, InferenceService name) before applying.
 
 ## Apply InferenceService
 
 ```bash
-kubectl apply -f k8s/inference-transcription.yaml
+kubectl apply -f examples/inference-service.yaml
 ```
+
+See [`examples/inference-service.yaml`](../../examples/inference-service.yaml). Replace all `<placeholder>` values (model PVC, image, broker address, secret names) before applying.

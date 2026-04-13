@@ -2,16 +2,16 @@
 
 ## Broker
 
-Production broker: `default-kafka-bootstrap.infra-kafka.svc.cluster.local:9093` (SASL_SSL, SCRAM-SHA-512).
+kevent supports any Kafka broker reachable from the cluster. Configure the address in `kafka.brokers`.
 
 ## SASL/TLS configuration
 
 ```yaml
 kafka:
   brokers:
-    - "default-kafka-bootstrap.infra-kafka.svc.cluster.local:9093"
+    - "kafka-bootstrap.<kafka-namespace>.svc.cluster.local:9093"
   sasl:
-    mechanism: "SCRAM-SHA-512"
+    mechanism: "SCRAM-SHA-512"  # or PLAIN, SCRAM-SHA-256
     username: "${KAFKA_USERNAME}"
     password: "${KAFKA_PASSWORD}"
   tls:
@@ -21,11 +21,13 @@ kafka:
 
 ## Strimzi KafkaUsers
 
-Apply in the `infra-kafka` namespace:
+Apply in the namespace where your Strimzi Kafka cluster is managed:
 
 ```bash
-kubectl apply -f k8s/kafka-users.yaml -n infra-kafka
+kubectl apply -f examples/kafka-users.yaml -n <kafka-namespace>
 ```
+
+See [`examples/kafka-users.yaml`](../../examples/kafka-users.yaml) for the full manifest.
 
 ### `kevent-gateway`
 
