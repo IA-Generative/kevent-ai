@@ -146,6 +146,14 @@ func (h *JobHandler) Submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate the operation before touching S3 or Redis.
+	operation := r.FormValue("operation")
+	inferenceURL, err := def.OperationPath(operation)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	callbackURL := r.FormValue("callback_url")
 	consumerName := ""
 	if h.consumerHeader != "" {
@@ -200,12 +208,6 @@ func (h *JobHandler) Submit(w http.ResponseWriter, r *http.Request) {
 	// When the priority header is present and the service has a priority_topic,
 	// route to that topic so the relay processes it with elevated priority
 	// (defers normal async jobs via the syncPriority flag, same as sync-over-Kafka).
-	operation := r.FormValue("operation")
-	inferenceURL, err := def.OperationPath(operation)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
 
 	topic := def.InputTopic
 	mode := "async"
