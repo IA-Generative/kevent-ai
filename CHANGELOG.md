@@ -16,6 +16,19 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Gateway
 
+### [v0.6.2] — 2026-04-13
+
+#### Fixed
+- `Submit` handler: operation validation now occurs before S3 upload and Redis save — an invalid `operation` field no longer creates orphaned resources
+- Helm: `checksum/config` annotation is no longer emitted when `configReloader` is enabled, preventing unnecessary rolling restarts on ConfigMap changes
+
+#### Added
+- Unit tests: `internal/handler/jobs_test.go`, `internal/crypto/aes_test.go`, `relay/internal/crypto/aes_test.go`, `internal/config/config_test.go`, `internal/handler/misc_test.go`
+- `examples/` directory with generic, deployable manifests (KafkaUsers, KafkaSources, InferenceService)
+- Documentation: replaced `k8s/` references with `examples/`, removed internal namespace naming
+
+---
+
 ### [v0.6.1] — 2026-04-10
 
 #### Added
