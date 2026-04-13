@@ -7,26 +7,7 @@ kevent-ai consists of two independent components deployed separately:
 
 ## Infrastructure dependencies
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                      Kubernetes cluster                  │
-│                                                         │
-│  ┌──────────────┐    ┌─────────┐    ┌───────────────┐  │
-│  │   Gateway    │    │  Kafka  │    │ InferenceService│  │
-│  │  (:8080)    │◄──►│ (Strimzi)│   │  (Knative)    │  │
-│  └──────┬───────┘    └────┬────┘    │ ┌───────────┐ │  │
-│         │                 │         │ │   Model   │ │  │
-│  ┌──────▼───────┐         └────────►│ │ (:9000)   │ │  │
-│  │    Redis     │                   │ ├───────────┤ │  │
-│  │   (Redis HA) │                   │ │   Relay   │ │  │
-│  └──────────────┘                   │ │  (:8080)  │ │  │
-│                                     │ └───────────┘ │  │
-│  ┌──────────────┐                   └───────────────┘  │
-│  │      S3      │                                       │
-│  │  (Scaleway)  │                                       │
-│  └──────────────┘                                       │
-└─────────────────────────────────────────────────────────┘
-```
+![Architecture overview](overview.drawio.png)
 
 ## Component responsibilities
 
