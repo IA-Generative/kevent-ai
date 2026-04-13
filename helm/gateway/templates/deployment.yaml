@@ -14,8 +14,11 @@ spec:
       labels:
         {{- include "kevent-gateway.selectorLabels" . | nindent 8 }}
       annotations:
-        # Force un redéploiement si la config ou le secret change.
-        {{- if not .Values.config.existingConfigMap }}
+        # checksum/config is only set when configReloader is disabled.
+        # When configReloader is enabled, it hot-reloads the config via POST /-/reload
+        # without restarting pods — adding the checksum would trigger a rolling restart
+        # on every ConfigMap change, defeating the purpose of the reloader.
+        {{- if and (not .Values.config.existingConfigMap) (not .Values.configReloader.enabled) }}
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
         {{- end }}
         checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
