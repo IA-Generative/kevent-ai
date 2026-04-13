@@ -64,9 +64,12 @@ func EncryptedSize(plainSize int64) int64 {
 	fullChunks := plainSize / chunkPlainSize
 	lastPlain := plainSize % chunkPlainSize
 	size := int64(noncePrefixLen) + fullChunks*int64(chunkCipherSize)
-	// The last chunk always exists: it holds the remainder bytes (or 0 for
-	// an exactly-aligned input), producing at minimum a 16-byte GCM tag.
-	size += lastPlain + int64(gcmTagSize)
+	// A final partial chunk exists only when the input is empty (one 0-byte
+	// chunk, sealed to a 16-byte GCM tag) or when the input is not chunk-aligned.
+	// Exactly-aligned non-zero inputs produce only full chunks — no extra chunk.
+	if plainSize == 0 || lastPlain > 0 {
+		size += lastPlain + int64(gcmTagSize)
+	}
 	return size
 }
 
