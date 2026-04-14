@@ -27,6 +27,10 @@ services:
     # File validation
     accepted_exts: [".mp3", ".wav", ".m4a", ".ogg", ".flac"]
     max_file_size_mb: 500
+
+    # Backend authentication — sync-direct only (optional)
+    inference_headers:
+      Authorization: "Bearer ${WHISPER_API_KEY}"
 ```
 
 ## Model resolution order
@@ -84,6 +88,26 @@ operations:
 ```
 
 The gateway extracts the model name from the URL segment and routes accordingly. No `model` field is required in the request body.
+
+## Backend authentication (`inference_headers`)
+
+For sync-direct services whose backend requires authentication, add `inference_headers`:
+
+```yaml
+- type: reranker
+  model: "bge-reranker-v2-m3"
+  operations:
+    rerank:
+      - "/v1/rerank"
+  inference_url: "http://kevent-reranker-predictor.svc.cluster.local"
+  inference_headers:
+    Authorization: "Bearer ${RERANKER_API_KEY}"
+```
+
+Headers are injected on every outgoing request to the backend. Values support `${VAR}` expansion. Config headers override client headers with the same name.
+
+!!! note
+    `inference_headers` only applies to **sync-direct** proxy. Async and sync-over-Kafka jobs run via the relay sidecar (local `127.0.0.1:9000`) and are unaffected.
 
 ## Hot reload
 
