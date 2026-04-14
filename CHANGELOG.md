@@ -16,6 +16,20 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Gateway
 
+### [v0.6.3] — 2026-04-14
+
+#### Added
+- Smoke tests (`tests/smoke/smoke.sh`): automated end-to-end validation against a live gateway — Whisper async, Whisper sync, and Rerank sync-direct
+- CI workflow `smoke-tests.yml`: triggered automatically after each dev deploy (`workflow_run`) and on demand via `/smoke-test` PR comment (members/collaborators only); posts pass/fail result as a PR comment
+- All CI workflows migrated to organisation runner (`actions-runner-controller`)
+
+#### Fixed
+- CI: removed `-race` flag from `go test` (CGO not available on ARC runner)
+- CI: `GATEWAY_URL` moved to secrets; separate `WHISPER_API_KEY` / `RERANK_API_KEY` for each service
+- Docs: replaced unresolvable MkDocs cross-directory links (`../../examples/`) with inline code references, fixing the `Deploy docs` CI failure in `--strict` mode
+
+---
+
 ### [v0.6.2] — 2026-04-13
 
 #### Fixed
