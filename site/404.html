@@ -10,28 +10,22 @@
       
       
       
-        <link rel="canonical" href="https://ia-generative.github.io/kevent-ai/deployment/kafka/">
       
       
-        <link rel="prev" href="../configuration/">
       
-      
-        <link rel="next" href="../../contributing/gitflow/">
-      
-      
-      <link rel="icon" href="../../assets/images/favicon.png">
+      <link rel="icon" href="/kevent-ai/assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.23">
     
     
       
-        <title>Kafka & SASL - kevent-ai</title>
+        <title>kevent-ai</title>
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.84d31ad4.min.css">
+      <link rel="stylesheet" href="/kevent-ai/assets/stylesheets/main.84d31ad4.min.css">
       
         
-        <link rel="stylesheet" href="../../assets/stylesheets/palette.06af60db.min.css">
+        <link rel="stylesheet" href="/kevent-ai/assets/stylesheets/palette.06af60db.min.css">
       
       
 
@@ -50,7 +44,7 @@
       
     
     
-    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("/kevent-ai/",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -75,11 +69,6 @@
     <label class="md-overlay" for="__drawer"></label>
     <div data-md-component="skip">
       
-        
-        <a href="#kafka-sasl-configuration" class="md-skip">
-          Skip to content
-        </a>
-      
     </div>
     <div data-md-component="announce">
       
@@ -92,7 +81,7 @@
 
 <header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../.." title="kevent-ai" class="md-header__button md-logo" aria-label="kevent-ai" data-md-component="logo">
+    <a href="/kevent-ai/." title="kevent-ai" class="md-header__button md-logo" aria-label="kevent-ai" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -112,7 +101,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Kafka & SASL
+              
             
           </span>
         </div>
@@ -219,7 +208,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../.." class="md-tabs__link">
+      <a href="/kevent-ai/." class="md-tabs__link">
         
   
   
@@ -240,7 +229,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../architecture/overview/" class="md-tabs__link">
+        <a href="/kevent-ai/architecture/overview/" class="md-tabs__link">
           
   
   
@@ -256,13 +245,11 @@
   
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="../helm/" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="/kevent-ai/deployment/helm/" class="md-tabs__link">
           
   
   
@@ -282,7 +269,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../contributing/gitflow/" class="md-tabs__link">
+        <a href="/kevent-ai/contributing/gitflow/" class="md-tabs__link">
           
   
   
@@ -302,7 +289,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../runbooks/KeventGatewayHighErrorRate/" class="md-tabs__link">
+        <a href="/kevent-ai/runbooks/KeventGatewayHighErrorRate/" class="md-tabs__link">
           
   
   
@@ -320,7 +307,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../changelog/" class="md-tabs__link">
+      <a href="/kevent-ai/changelog/" class="md-tabs__link">
         
   
   
@@ -361,7 +348,7 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../.." title="kevent-ai" class="md-nav__button md-logo" aria-label="kevent-ai" data-md-component="logo">
+    <a href="/kevent-ai/." title="kevent-ai" class="md-nav__button md-logo" aria-label="kevent-ai" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -391,7 +378,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../.." class="md-nav__link">
+      <a href="/kevent-ai/." class="md-nav__link">
         
   
   
@@ -458,7 +445,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../architecture/overview/" class="md-nav__link">
+      <a href="/kevent-ai/architecture/overview/" class="md-nav__link">
         
   
   
@@ -481,7 +468,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../architecture/request-flows/" class="md-nav__link">
+      <a href="/kevent-ai/architecture/request-flows/" class="md-nav__link">
         
   
   
@@ -504,7 +491,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../architecture/service-registry/" class="md-nav__link">
+      <a href="/kevent-ai/architecture/service-registry/" class="md-nav__link">
         
   
   
@@ -527,7 +514,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../architecture/priority/" class="md-nav__link">
+      <a href="/kevent-ai/architecture/priority/" class="md-nav__link">
         
   
   
@@ -554,31 +541,28 @@
       
   
   
-    
   
   
-  
     
     
     
     
-      
-        
-        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
         
           
-          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
             
   
   
@@ -591,7 +575,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             Deployment
@@ -605,7 +589,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../helm/" class="md-nav__link">
+      <a href="/kevent-ai/deployment/helm/" class="md-nav__link">
         
   
   
@@ -628,7 +612,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../configuration/" class="md-nav__link">
+      <a href="/kevent-ai/deployment/configuration/" class="md-nav__link">
         
   
   
@@ -648,32 +632,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    Kafka & SASL
-    
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="/kevent-ai/deployment/kafka/" class="md-nav__link">
         
   
   
@@ -684,104 +646,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#broker" class="md-nav__link">
-    <span class="md-ellipsis">
-      Broker
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#sasltls-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      SASL/TLS configuration
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#strimzi-kafkausers" class="md-nav__link">
-    <span class="md-ellipsis">
-      Strimzi KafkaUsers
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Strimzi KafkaUsers">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#kevent-gateway" class="md-nav__link">
-    <span class="md-ellipsis">
-      kevent-gateway
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#kevent-relay" class="md-nav__link">
-    <span class="md-ellipsis">
-      kevent-relay
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#secret-hygiene" class="md-nav__link">
-    <span class="md-ellipsis">
-      Secret hygiene
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#kafkasources" class="md-nav__link">
-    <span class="md-ellipsis">
-      KafkaSources
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#topic-naming" class="md-nav__link">
-    <span class="md-ellipsis">
-      Topic naming
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -846,7 +710,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../contributing/gitflow/" class="md-nav__link">
+      <a href="/kevent-ai/contributing/gitflow/" class="md-nav__link">
         
   
   
@@ -869,7 +733,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../contributing/releasing/" class="md-nav__link">
+      <a href="/kevent-ai/contributing/releasing/" class="md-nav__link">
         
   
   
@@ -944,7 +808,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../runbooks/KeventGatewayHighErrorRate/" class="md-nav__link">
+      <a href="/kevent-ai/runbooks/KeventGatewayHighErrorRate/" class="md-nav__link">
         
   
   
@@ -967,7 +831,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../runbooks/KeventGatewayKafkaPublishErrors/" class="md-nav__link">
+      <a href="/kevent-ai/runbooks/KeventGatewayKafkaPublishErrors/" class="md-nav__link">
         
   
   
@@ -990,7 +854,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../runbooks/KeventGatewayS3Errors/" class="md-nav__link">
+      <a href="/kevent-ai/runbooks/KeventGatewayS3Errors/" class="md-nav__link">
         
   
   
@@ -1013,7 +877,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../runbooks/KeventGatewaySyncJobsInFlightHigh/" class="md-nav__link">
+      <a href="/kevent-ai/runbooks/KeventGatewaySyncJobsInFlightHigh/" class="md-nav__link">
         
   
   
@@ -1036,7 +900,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../runbooks/KeventRelayInferenceSlow/" class="md-nav__link">
+      <a href="/kevent-ai/runbooks/KeventRelayInferenceSlow/" class="md-nav__link">
         
   
   
@@ -1059,7 +923,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../runbooks/KeventRelayJobFailureRate/" class="md-nav__link">
+      <a href="/kevent-ai/runbooks/KeventRelayJobFailureRate/" class="md-nav__link">
         
   
   
@@ -1082,7 +946,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../runbooks/KeventRelayS3Errors/" class="md-nav__link">
+      <a href="/kevent-ai/runbooks/KeventRelayS3Errors/" class="md-nav__link">
         
   
   
@@ -1112,7 +976,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../changelog/" class="md-nav__link">
+      <a href="/kevent-ai/changelog/" class="md-nav__link">
         
   
   
@@ -1144,94 +1008,6 @@
   
   
   
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#broker" class="md-nav__link">
-    <span class="md-ellipsis">
-      Broker
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#sasltls-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      SASL/TLS configuration
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#strimzi-kafkausers" class="md-nav__link">
-    <span class="md-ellipsis">
-      Strimzi KafkaUsers
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Strimzi KafkaUsers">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#kevent-gateway" class="md-nav__link">
-    <span class="md-ellipsis">
-      kevent-gateway
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#kevent-relay" class="md-nav__link">
-    <span class="md-ellipsis">
-      kevent-relay
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#secret-hygiene" class="md-nav__link">
-    <span class="md-ellipsis">
-      Secret hygiene
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#kafkasources" class="md-nav__link">
-    <span class="md-ellipsis">
-      KafkaSources
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#topic-naming" class="md-nav__link">
-    <span class="md-ellipsis">
-      Topic naming
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
   
 </nav>
                   </div>
@@ -1243,135 +1019,8 @@
             <div class="md-content" data-md-component="content">
               <article class="md-content__inner md-typeset">
                 
-                  
+  <h1>404 - Not found</h1>
 
-
-  
-  
-
-
-<h1 id="kafka-sasl-configuration">Kafka &amp; SASL configuration<a class="headerlink" href="#kafka-sasl-configuration" title="Permanent link">&para;</a></h1>
-<h2 id="broker">Broker<a class="headerlink" href="#broker" title="Permanent link">&para;</a></h2>
-<p>kevent supports any Kafka broker reachable from the cluster. Configure the address in <code>kafka.brokers</code>.</p>
-<h2 id="sasltls-configuration">SASL/TLS configuration<a class="headerlink" href="#sasltls-configuration" title="Permanent link">&para;</a></h2>
-<div class="language-yaml highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">kafka</span><span class="p">:</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">brokers</span><span class="p">:</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;kafka-bootstrap.&lt;kafka-namespace&gt;.svc.cluster.local:9093&quot;</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">sasl</span><span class="p">:</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">    </span><span class="nt">mechanism</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;SCRAM-SHA-512&quot;</span><span class="w">  </span><span class="c1"># or PLAIN, SCRAM-SHA-256</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">    </span><span class="nt">username</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;${KAFKA_USERNAME}&quot;</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">    </span><span class="nt">password</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;${KAFKA_PASSWORD}&quot;</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">  </span><span class="nt">tls</span><span class="p">:</span>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">    </span><span class="nt">ca_cert_path</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;/etc/ssl/certs/kafka-ca.crt&quot;</span>
-</span></code></pre></div>
-<h2 id="strimzi-kafkausers">Strimzi KafkaUsers<a class="headerlink" href="#strimzi-kafkausers" title="Permanent link">&para;</a></h2>
-<p>Apply in the namespace where your Strimzi Kafka cluster is managed:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>examples/kafka-users.yaml<span class="w"> </span>-n<span class="w"> </span>&lt;kafka-namespace&gt;
-</span></code></pre></div>
-<p>See <code>examples/kafka-users.yaml</code> in the repository root for the full manifest.</p>
-<h3 id="kevent-gateway"><code>kevent-gateway</code><a class="headerlink" href="#kevent-gateway" title="Permanent link">&para;</a></h3>
-<ul>
-<li>Write/Read on <code>jobs.*</code> topics</li>
-<li>Read on <code>kevent-gateway*</code> consumer groups</li>
-</ul>
-<h3 id="kevent-relay"><code>kevent-relay</code><a class="headerlink" href="#kevent-relay" title="Permanent link">&para;</a></h3>
-<ul>
-<li>Read on <code>jobs.*</code> topics</li>
-<li>Write on <code>jobs.*</code> topics</li>
-<li>Read + Describe + <strong>Delete</strong> on <code>inference-*</code> groups</li>
-</ul>
-<div class="admonition warning">
-<p class="admonition-title">Delete ACL required</p>
-<p>The <code>Delete</code> ACL on <code>inference-*</code> groups is required by the Knative controller for ConsumerGroup finalization. Without it, KafkaSources will fail to clean up.</p>
-</div>
-<h2 id="secret-hygiene">Secret hygiene<a class="headerlink" href="#secret-hygiene" title="Permanent link">&para;</a></h2>
-<p>Strimzi-generated secrets must not have trailing newlines in values. The Knative KafkaSource controller does exact string comparison on <code>sasl-type</code> — a <code>\n</code> suffix causes:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>[protocol SASL_SSL] unsupported SASL mechanism
-</span></code></pre></div>
-<p>Verify:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>secret<span class="w"> </span>kevent-relay-kafka<span class="w"> </span>-n<span class="w"> </span>default<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.data.sasl-type}&#39;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>base64<span class="w"> </span>-d<span class="w"> </span><span class="p">|</span><span class="w"> </span>xxd
-</span></code></pre></div>
-<p>The output must end with <code>5332 302d 3531 32</code> (<code>S</code> <code>C</code> <code>R</code> <code>A</code> <code>M</code> <code>-</code> <code>S</code> <code>H</code> <code>A</code> <code>-</code> <code>5</code> <code>1</code> <code>2</code>) — no <code>0a</code> byte at the end.</p>
-<h2 id="kafkasources">KafkaSources<a class="headerlink" href="#kafkasources" title="Permanent link">&para;</a></h2>
-<p>Each service type requires two KafkaSources in the InferenceService namespace:</p>
-<table>
-<thead>
-<tr>
-<th>Source</th>
-<th>Topic</th>
-<th>Relay endpoint</th>
-<th>Purpose</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>kafka-source-{model}</code></td>
-<td><code>jobs.{model}.input</code></td>
-<td><code>POST /</code></td>
-<td>Normal async jobs</td>
-</tr>
-<tr>
-<td><code>kafka-source-{model}-sync</code></td>
-<td><code>jobs.{model}.sync</code></td>
-<td><code>POST /sync</code></td>
-<td>Sync-over-Kafka (priority)</td>
-</tr>
-<tr>
-<td><code>kafka-source-{model}-priority</code></td>
-<td><code>jobs.{model}.priority</code></td>
-<td><code>POST /sync</code></td>
-<td>SA priority async jobs</td>
-</tr>
-</tbody>
-</table>
-<p>The <code>sync</code> and <code>priority</code> sources route to <code>POST /sync</code>, which sets <code>syncPriority++</code> and defers normal async processing.</p>
-<h2 id="topic-naming">Topic naming<a class="headerlink" href="#topic-naming" title="Permanent link">&para;</a></h2>
-<table>
-<thead>
-<tr>
-<th>Topic</th>
-<th>Producer</th>
-<th>Consumer</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>jobs.{model}.input</code></td>
-<td>Gateway (async submit)</td>
-<td>Relay via KafkaSource</td>
-</tr>
-<tr>
-<td><code>jobs.{model}.sync</code></td>
-<td>Gateway (sync-over-Kafka)</td>
-<td>Relay via KafkaSource</td>
-</tr>
-<tr>
-<td><code>jobs.{model}.priority</code></td>
-<td>Gateway (priority submit)</td>
-<td>Relay via KafkaSource</td>
-</tr>
-<tr>
-<td><code>jobs.{model}.results</code></td>
-<td>Relay</td>
-<td>Gateway ConsumerManager</td>
-</tr>
-</tbody>
-</table>
-
-
-
-
-
-
-
-
-
-
-
-
-                
               </article>
             </div>
           
@@ -1391,44 +1040,6 @@
       
         <footer class="md-footer">
   
-    
-      
-      <nav class="md-footer__inner md-grid" aria-label="Footer" >
-        
-          
-          <a href="../configuration/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Configuration reference">
-            <div class="md-footer__button md-icon">
-              
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
-            </div>
-            <div class="md-footer__title">
-              <span class="md-footer__direction">
-                Previous
-              </span>
-              <div class="md-ellipsis">
-                Configuration reference
-              </div>
-            </div>
-          </a>
-        
-        
-          
-          <a href="../../contributing/gitflow/" class="md-footer__link md-footer__link--next" aria-label="Next: Gitflow">
-            <div class="md-footer__title">
-              <span class="md-footer__direction">
-                Next
-              </span>
-              <div class="md-ellipsis">
-                Gitflow
-              </div>
-            </div>
-            <div class="md-footer__button md-icon">
-              
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
-            </div>
-          </a>
-        
-      </nav>
     
   
   <div class="md-footer-meta md-typeset">
@@ -1471,10 +1082,10 @@
     
     
       
-      <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.top", "navigation.footer", "search.highlight", "search.suggest", "content.code.copy", "content.code.annotate", "content.tabs.link"], "search": "../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"base": "/kevent-ai/", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.top", "navigation.footer", "search.highlight", "search.suggest", "content.code.copy", "content.code.annotate", "content.tabs.link"], "search": "/kevent-ai/assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.f55a23d4.min.js"></script>
+      <script src="/kevent-ai/assets/javascripts/bundle.f55a23d4.min.js"></script>
       
     
   </body>

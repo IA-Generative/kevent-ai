@@ -10,13 +10,13 @@
       
       
       
-        <link rel="canonical" href="https://ia-generative.github.io/kevent-ai/deployment/kafka/">
+        <link rel="canonical" href="https://ia-generative.github.io/kevent-ai/architecture/service-registry/">
       
       
-        <link rel="prev" href="../configuration/">
+        <link rel="prev" href="../request-flows/">
       
       
-        <link rel="next" href="../../contributing/gitflow/">
+        <link rel="next" href="../priority/">
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
@@ -24,7 +24,7 @@
     
     
       
-        <title>Kafka & SASL - kevent-ai</title>
+        <title>Service registry - kevent-ai</title>
       
     
     
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#kafka-sasl-configuration" class="md-skip">
+        <a href="#service-registry" class="md-skip">
           Skip to content
         </a>
       
@@ -112,7 +112,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Kafka & SASL
+              Service registry
             
           </span>
         </div>
@@ -236,11 +236,13 @@
   
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
-        <a href="../../architecture/overview/" class="md-tabs__link">
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../overview/" class="md-tabs__link">
           
   
   
@@ -256,13 +258,11 @@
   
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="../helm/" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../../deployment/helm/" class="md-tabs__link">
           
   
   
@@ -410,28 +410,31 @@
       
   
   
+    
   
   
+  
     
     
     
     
+      
+        
+        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
         
           
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
-        
-          
-          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
             
   
   
@@ -444,7 +447,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
             Architecture
@@ -458,7 +461,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../architecture/overview/" class="md-nav__link">
+      <a href="../overview/" class="md-nav__link">
         
   
   
@@ -481,159 +484,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../../architecture/request-flows/" class="md-nav__link">
+      <a href="../request-flows/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     Request flows
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../architecture/service-registry/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Service registry
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../architecture/priority/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Priority routing
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-          </ul>
-        </nav>
-      
-    </li>
-  
-
-    
-      
-      
-  
-  
-    
-  
-  
-  
-    
-    
-    
-    
-      
-        
-        
-      
-      
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
-        
-          
-          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
-            
-  
-  
-  <span class="md-ellipsis">
-    Deployment
-    
-  </span>
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
-          <label class="md-nav__title" for="__nav_3">
-            <span class="md-nav__icon md-icon"></span>
-            Deployment
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../helm/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Helm chart
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../configuration/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Configuration reference
     
   </span>
   
@@ -665,7 +521,7 @@
   
   
   <span class="md-ellipsis">
-    Kafka & SASL
+    Service registry
     
   </span>
   
@@ -678,7 +534,7 @@
   
   
   <span class="md-ellipsis">
-    Kafka & SASL
+    Service registry
     
   </span>
   
@@ -701,78 +557,54 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#broker" class="md-nav__link">
+  <a href="#service-entry-fields" class="md-nav__link">
     <span class="md-ellipsis">
-      Broker
+      Service entry fields
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#sasltls-configuration" class="md-nav__link">
+  <a href="#model-resolution-order" class="md-nav__link">
     <span class="md-ellipsis">
-      SASL/TLS configuration
+      Model resolution order
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#strimzi-kafkausers" class="md-nav__link">
+  <a href="#operations" class="md-nav__link">
     <span class="md-ellipsis">
-      Strimzi KafkaUsers
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Strimzi KafkaUsers">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#kevent-gateway" class="md-nav__link">
-    <span class="md-ellipsis">
-      kevent-gateway
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#kevent-relay" class="md-nav__link">
-    <span class="md-ellipsis">
-      kevent-relay
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#secret-hygiene" class="md-nav__link">
-    <span class="md-ellipsis">
-      Secret hygiene
+      Operations
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#kafkasources" class="md-nav__link">
+  <a href="#multiple-models-per-type" class="md-nav__link">
     <span class="md-ellipsis">
-      KafkaSources
+      Multiple models per type
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#topic-naming" class="md-nav__link">
+  <a href="#path-patterns-with-model" class="md-nav__link">
     <span class="md-ellipsis">
-      Topic naming
+      Path patterns with {model}
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#hot-reload" class="md-nav__link">
+    <span class="md-ellipsis">
+      Hot reload
     </span>
   </a>
   
@@ -782,6 +614,150 @@
   
 </nav>
       
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../priority/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Priority routing
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Deployment
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            Deployment
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deployment/helm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Helm chart
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deployment/configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Configuration reference
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deployment/kafka/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Kafka & SASL
+    
+  </span>
+  
+
+      </a>
     </li>
   
 
@@ -1154,78 +1130,54 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#broker" class="md-nav__link">
+  <a href="#service-entry-fields" class="md-nav__link">
     <span class="md-ellipsis">
-      Broker
+      Service entry fields
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#sasltls-configuration" class="md-nav__link">
+  <a href="#model-resolution-order" class="md-nav__link">
     <span class="md-ellipsis">
-      SASL/TLS configuration
+      Model resolution order
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#strimzi-kafkausers" class="md-nav__link">
+  <a href="#operations" class="md-nav__link">
     <span class="md-ellipsis">
-      Strimzi KafkaUsers
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Strimzi KafkaUsers">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#kevent-gateway" class="md-nav__link">
-    <span class="md-ellipsis">
-      kevent-gateway
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#kevent-relay" class="md-nav__link">
-    <span class="md-ellipsis">
-      kevent-relay
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#secret-hygiene" class="md-nav__link">
-    <span class="md-ellipsis">
-      Secret hygiene
+      Operations
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#kafkasources" class="md-nav__link">
+  <a href="#multiple-models-per-type" class="md-nav__link">
     <span class="md-ellipsis">
-      KafkaSources
+      Multiple models per type
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#topic-naming" class="md-nav__link">
+  <a href="#path-patterns-with-model" class="md-nav__link">
     <span class="md-ellipsis">
-      Topic naming
+      Path patterns with {model}
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#hot-reload" class="md-nav__link">
+    <span class="md-ellipsis">
+      Hot reload
     </span>
   </a>
   
@@ -1250,115 +1202,76 @@
   
 
 
-<h1 id="kafka-sasl-configuration">Kafka &amp; SASL configuration<a class="headerlink" href="#kafka-sasl-configuration" title="Permanent link">&para;</a></h1>
-<h2 id="broker">Broker<a class="headerlink" href="#broker" title="Permanent link">&para;</a></h2>
-<p>kevent supports any Kafka broker reachable from the cluster. Configure the address in <code>kafka.brokers</code>.</p>
-<h2 id="sasltls-configuration">SASL/TLS configuration<a class="headerlink" href="#sasltls-configuration" title="Permanent link">&para;</a></h2>
-<div class="language-yaml highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">kafka</span><span class="p">:</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">brokers</span><span class="p">:</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;kafka-bootstrap.&lt;kafka-namespace&gt;.svc.cluster.local:9093&quot;</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">sasl</span><span class="p">:</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">    </span><span class="nt">mechanism</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;SCRAM-SHA-512&quot;</span><span class="w">  </span><span class="c1"># or PLAIN, SCRAM-SHA-256</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">    </span><span class="nt">username</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;${KAFKA_USERNAME}&quot;</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">    </span><span class="nt">password</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;${KAFKA_PASSWORD}&quot;</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">  </span><span class="nt">tls</span><span class="p">:</span>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">    </span><span class="nt">ca_cert_path</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;/etc/ssl/certs/kafka-ca.crt&quot;</span>
+<h1 id="service-registry">Service registry<a class="headerlink" href="#service-registry" title="Permanent link">&para;</a></h1>
+<p>The gateway is entirely config-driven. Adding a new model or service type requires only a YAML block in <code>config.yaml</code> — no Go code change.</p>
+<h2 id="service-entry-fields">Service entry fields<a class="headerlink" href="#service-entry-fields" title="Permanent link">&para;</a></h2>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">services</span><span class="p">:</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">audio</span><span class="w">                        </span><span class="c1"># service type (used in /jobs/{service_type})</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="nt">model</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;whisper-large-v3&quot;</span><span class="w">          </span><span class="c1"># OpenAI &quot;model&quot; field value</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span><span class="nt">default</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w">                      </span><span class="c1"># fallback when request omits model field</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">    </span><span class="c1"># Sync / OpenAI-compatible</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">    </span><span class="nt">operations</span><span class="p">:</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">      </span><span class="nt">transcription</span><span class="p">:</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;/v1/audio/transcriptions&quot;</span><span class="w">   </span><span class="c1"># all paths indexed; first used for async</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">      </span><span class="nt">translation</span><span class="p">:</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;/v1/audio/translations&quot;</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">    </span><span class="nt">inference_url</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;http://...&quot;</span><span class="w">        </span><span class="c1"># backend base URL (path appended at runtime)</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">    </span><span class="nt">sync_topic</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">jobs.whisper.sync</span><span class="w">      </span><span class="c1"># omit → use direct proxy for multipart</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">    </span><span class="c1"># Async / Kafka</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">    </span><span class="nt">input_topic</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">jobs.whisper.input</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="w">    </span><span class="nt">result_topic</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">jobs.whisper.results</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">    </span><span class="nt">priority_topic</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">jobs.whisper.priority</span><span class="w">  </span><span class="c1"># optional — SA/priority consumers</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="w">    </span><span class="c1"># File validation</span>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="w">    </span><span class="nt">accepted_exts</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;.mp3&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;.wav&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;.m4a&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;.ogg&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;.flac&quot;</span><span class="p p-Indicator">]</span>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="w">    </span><span class="nt">max_file_size_mb</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">500</span>
 </span></code></pre></div>
-<h2 id="strimzi-kafkausers">Strimzi KafkaUsers<a class="headerlink" href="#strimzi-kafkausers" title="Permanent link">&para;</a></h2>
-<p>Apply in the namespace where your Strimzi Kafka cluster is managed:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>examples/kafka-users.yaml<span class="w"> </span>-n<span class="w"> </span>&lt;kafka-namespace&gt;
-</span></code></pre></div>
-<p>See <code>examples/kafka-users.yaml</code> in the repository root for the full manifest.</p>
-<h3 id="kevent-gateway"><code>kevent-gateway</code><a class="headerlink" href="#kevent-gateway" title="Permanent link">&para;</a></h3>
+<h2 id="model-resolution-order">Model resolution order<a class="headerlink" href="#model-resolution-order" title="Permanent link">&para;</a></h2>
+<p>When a request omits the <code>model</code> field:</p>
+<ol>
+<li>Single model registered for the type/path → auto-selected</li>
+<li>Model marked <code>default: true</code> → used as fallback</li>
+<li>Error listing available models</li>
+</ol>
+<h2 id="operations">Operations<a class="headerlink" href="#operations" title="Permanent link">&para;</a></h2>
+<p>The <code>operations</code> map replaces the old flat <code>openai_paths</code> list. Each key is an operation name; the value is a list of URL paths.</p>
 <ul>
-<li>Write/Read on <code>jobs.*</code> topics</li>
-<li>Read on <code>kevent-gateway*</code> consumer groups</li>
+<li><strong>All paths</strong> are indexed for sync routing (<code>POST /v1/*</code>)</li>
+<li><strong>First path</strong> of the selected operation is embedded in the <code>InputEvent.InferenceURL</code> for async jobs</li>
+<li>The <code>operation</code> form field selects which operation to use for async submission (required when a model has multiple operations)</li>
 </ul>
-<h3 id="kevent-relay"><code>kevent-relay</code><a class="headerlink" href="#kevent-relay" title="Permanent link">&para;</a></h3>
-<ul>
-<li>Read on <code>jobs.*</code> topics</li>
-<li>Write on <code>jobs.*</code> topics</li>
-<li>Read + Describe + <strong>Delete</strong> on <code>inference-*</code> groups</li>
-</ul>
-<div class="admonition warning">
-<p class="admonition-title">Delete ACL required</p>
-<p>The <code>Delete</code> ACL on <code>inference-*</code> groups is required by the Knative controller for ConsumerGroup finalization. Without it, KafkaSources will fail to clean up.</p>
-</div>
-<h2 id="secret-hygiene">Secret hygiene<a class="headerlink" href="#secret-hygiene" title="Permanent link">&para;</a></h2>
-<p>Strimzi-generated secrets must not have trailing newlines in values. The Knative KafkaSource controller does exact string comparison on <code>sasl-type</code> — a <code>\n</code> suffix causes:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>[protocol SASL_SSL] unsupported SASL mechanism
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># Async: specify operation when model has multiple</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>/jobs/audio<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span>-F<span class="w"> </span><span class="nv">file</span><span class="o">=</span>@audio.wav<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span>-F<span class="w"> </span><span class="nv">operation</span><span class="o">=</span>translation
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="c1"># Sync: operation is implicit from the URL path</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>/v1/audio/translations<span class="w"> </span>-F<span class="w"> </span><span class="nv">file</span><span class="o">=</span>@audio.wav
 </span></code></pre></div>
-<p>Verify:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>secret<span class="w"> </span>kevent-relay-kafka<span class="w"> </span>-n<span class="w"> </span>default<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.data.sasl-type}&#39;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>base64<span class="w"> </span>-d<span class="w"> </span><span class="p">|</span><span class="w"> </span>xxd
+<h2 id="multiple-models-per-type">Multiple models per type<a class="headerlink" href="#multiple-models-per-type" title="Permanent link">&para;</a></h2>
+<p>Multiple service entries may share the same <code>type</code> with different <code>model</code> values:</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">services</span><span class="p">:</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">audio</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nt">model</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;whisper-large-v3&quot;</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="nt">default</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="l l-Scalar l-Scalar-Plain">...</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">audio</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">    </span><span class="nt">model</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;whisper-large-v3-turbo&quot;</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">    </span><span class="l l-Scalar l-Scalar-Plain">...</span>
 </span></code></pre></div>
-<p>The output must end with <code>5332 302d 3531 32</code> (<code>S</code> <code>C</code> <code>R</code> <code>A</code> <code>M</code> <code>-</code> <code>S</code> <code>H</code> <code>A</code> <code>-</code> <code>5</code> <code>1</code> <code>2</code>) — no <code>0a</code> byte at the end.</p>
-<h2 id="kafkasources">KafkaSources<a class="headerlink" href="#kafkasources" title="Permanent link">&para;</a></h2>
-<p>Each service type requires two KafkaSources in the InferenceService namespace:</p>
-<table>
-<thead>
-<tr>
-<th>Source</th>
-<th>Topic</th>
-<th>Relay endpoint</th>
-<th>Purpose</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>kafka-source-{model}</code></td>
-<td><code>jobs.{model}.input</code></td>
-<td><code>POST /</code></td>
-<td>Normal async jobs</td>
-</tr>
-<tr>
-<td><code>kafka-source-{model}-sync</code></td>
-<td><code>jobs.{model}.sync</code></td>
-<td><code>POST /sync</code></td>
-<td>Sync-over-Kafka (priority)</td>
-</tr>
-<tr>
-<td><code>kafka-source-{model}-priority</code></td>
-<td><code>jobs.{model}.priority</code></td>
-<td><code>POST /sync</code></td>
-<td>SA priority async jobs</td>
-</tr>
-</tbody>
-</table>
-<p>The <code>sync</code> and <code>priority</code> sources route to <code>POST /sync</code>, which sets <code>syncPriority++</code> and defers normal async processing.</p>
-<h2 id="topic-naming">Topic naming<a class="headerlink" href="#topic-naming" title="Permanent link">&para;</a></h2>
-<table>
-<thead>
-<tr>
-<th>Topic</th>
-<th>Producer</th>
-<th>Consumer</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>jobs.{model}.input</code></td>
-<td>Gateway (async submit)</td>
-<td>Relay via KafkaSource</td>
-</tr>
-<tr>
-<td><code>jobs.{model}.sync</code></td>
-<td>Gateway (sync-over-Kafka)</td>
-<td>Relay via KafkaSource</td>
-</tr>
-<tr>
-<td><code>jobs.{model}.priority</code></td>
-<td>Gateway (priority submit)</td>
-<td>Relay via KafkaSource</td>
-</tr>
-<tr>
-<td><code>jobs.{model}.results</code></td>
-<td>Relay</td>
-<td>Gateway ConsumerManager</td>
-</tr>
-</tbody>
-</table>
+<p>The gateway routes by the <code>model</code> field in the request. The <code>default: true</code> flag designates the fallback.</p>
+<h2 id="path-patterns-with-model">Path patterns with <code>{model}</code><a class="headerlink" href="#path-patterns-with-model" title="Permanent link">&para;</a></h2>
+<p>Paths can embed the model name directly in the URL:</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">operations</span><span class="p">:</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">infer</span><span class="p">:</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;/v2/models/{model}/infer&quot;</span>
+</span></code></pre></div>
+<p>The gateway extracts the model name from the URL segment and routes accordingly. No <code>model</code> field is required in the request body.</p>
+<h2 id="hot-reload">Hot reload<a class="headerlink" href="#hot-reload" title="Permanent link">&para;</a></h2>
+<p>The service registry is reloaded atomically via <code>POST /-/reload</code>. The HTTP router is swapped, Kafka consumers are reconciled (stopped for removed topics, started for new ones). Infrastructure (S3, Redis, Kafka connection) is not re-initialised.</p>
 
 
 
@@ -1396,7 +1309,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../configuration/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Configuration reference">
+          <a href="../request-flows/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Request flows">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -1406,20 +1319,20 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                Configuration reference
+                Request flows
               </div>
             </div>
           </a>
         
         
           
-          <a href="../../contributing/gitflow/" class="md-footer__link md-footer__link--next" aria-label="Next: Gitflow">
+          <a href="../priority/" class="md-footer__link md-footer__link--next" aria-label="Next: Priority routing">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Gitflow
+                Priority routing
               </div>
             </div>
             <div class="md-footer__button md-icon">
