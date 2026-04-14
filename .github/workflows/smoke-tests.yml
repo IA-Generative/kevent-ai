@@ -9,7 +9,6 @@ name: Smoke tests — dev
 # Requires the following to be configured on the repository / environment:
 #
 #   Variables  (Settings → Environments → dev → Variables)
-#     GATEWAY_URL            https://api.kevent-dev.example.com
 #     AUDIO_URL              URL of a short speech audio file (.mp3 / .wav / .m4a)
 #     GATEWAY_READY_TIMEOUT  seconds to wait for the gateway after a deploy (default: 120)
 #     WHISPER_MODEL          whisper-large-v3     (optional, this is the default)
@@ -17,6 +16,7 @@ name: Smoke tests — dev
 #     RERANK_ENDPOINT        /v1/rerank           (optional, this is the default)
 #
 #   Secrets    (Settings → Environments → dev → Secrets)
+#     GATEWAY_URL            https://api.kevent-dev.example.com
 #     GATEWAY_API_KEY        API key sent as the 'apikey' header (leave empty if no auth)
 
 on:
@@ -33,7 +33,7 @@ on:
   workflow_dispatch:
     inputs:
       gateway_url:
-        description: "Gateway URL (overrides env var)"
+        description: "Gateway URL (overrides secret GATEWAY_URL)"
         required: false
       audio_url:
         description: "Audio file URL (overrides env var)"
@@ -100,7 +100,7 @@ jobs:
       - name: Wait for gateway to be ready
         if: github.event_name == 'workflow_run'
         env:
-          GATEWAY_URL:     ${{ vars.GATEWAY_URL }}
+          GATEWAY_URL:     ${{ secrets.GATEWAY_URL }}
           GATEWAY_API_KEY: ${{ secrets.GATEWAY_API_KEY }}
           READY_TIMEOUT:   ${{ vars.GATEWAY_READY_TIMEOUT || '120' }}
         run: |
@@ -124,7 +124,7 @@ jobs:
 
       - name: Run smoke tests
         env:
-          GATEWAY_URL:      ${{ inputs.gateway_url   || vars.GATEWAY_URL }}
+          GATEWAY_URL:      ${{ inputs.gateway_url   || secrets.GATEWAY_URL }}
           AUDIO_URL:        ${{ inputs.audio_url     || vars.AUDIO_URL }}
           GATEWAY_API_KEY:  ${{ secrets.GATEWAY_API_KEY }}
           WHISPER_MODEL:    ${{ vars.WHISPER_MODEL   || 'whisper-large-v3' }}
