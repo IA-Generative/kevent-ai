@@ -27,7 +27,7 @@ Apply in the namespace where your Strimzi Kafka cluster is managed:
 kubectl apply -f examples/kafka-users.yaml -n <kafka-namespace>
 ```
 
-See [`examples/kafka-users.yaml`](../../examples/kafka-users.yaml) for the full manifest.
+See `examples/kafka-users.yaml` in the repository root for the full manifest.
 
 ### `kevent-gateway`
 

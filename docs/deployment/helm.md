@@ -88,7 +88,7 @@ extraEnvVars:
 kubectl apply -f examples/kafka-users.yaml -n <kafka-namespace>
 ```
 
-See [`examples/kafka-users.yaml`](../../examples/kafka-users.yaml) for the full manifest. Adjust the `strimzi.io/cluster` label and namespace to match your Strimzi installation.
+See `examples/kafka-users.yaml` in the repository root. Adjust the `strimzi.io/cluster` label and namespace to match your Strimzi installation.
 
 ## Apply KafkaSources
 
@@ -96,7 +96,7 @@ See [`examples/kafka-users.yaml`](../../examples/kafka-users.yaml) for the full 
 kubectl apply -f examples/kafka-sources.yaml
 ```
 
-See [`examples/kafka-sources.yaml`](../../examples/kafka-sources.yaml). Replace the `<placeholder>` values (broker address, secret names, InferenceService name) before applying.
+See `examples/kafka-sources.yaml` in the repository root. Replace the `<placeholder>` values (broker address, secret names, InferenceService name) before applying.
 
 ## Apply InferenceService
 
@@ -104,4 +104,4 @@ See [`examples/kafka-sources.yaml`](../../examples/kafka-sources.yaml). Replace 
 kubectl apply -f examples/inference-service.yaml
 ```
 
-See [`examples/inference-service.yaml`](../../examples/inference-service.yaml). Replace all `<placeholder>` values (model PVC, image, broker address, secret names) before applying.
+See `examples/inference-service.yaml` in the repository root. Replace all `<placeholder>` values (model PVC, image, broker address, secret names) before applying.
