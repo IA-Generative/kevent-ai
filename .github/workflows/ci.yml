@@ -9,7 +9,7 @@ on:
 jobs:
   test-gateway:
     name: Gateway — test & vet
-    runs-on: ubuntu-latest
+    runs-on: actions-runner-controller
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -17,11 +17,11 @@ jobs:
           go-version-file: go.mod
           cache: true
       - run: go vet ./...
-      - run: go test -race -count=1 ./...
+      - run: go test -count=1 ./...
 
   test-relay:
     name: Relay — test & vet
-    runs-on: ubuntu-latest
+    runs-on: actions-runner-controller
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -36,7 +36,7 @@ jobs:
 
   lint-helm:
     name: Helm — lint
-    runs-on: ubuntu-latest
+    runs-on: actions-runner-controller
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4

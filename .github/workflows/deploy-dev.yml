@@ -14,7 +14,7 @@ jobs:
   # ── Compute tag + lowercase image names ────────────────────────────────────
   meta:
     name: Compute image tag
-    runs-on: ubuntu-latest
+    runs-on: actions-runner-controller
     outputs:
       tag:           ${{ steps.tag.outputs.tag }}
       gateway_image: ${{ steps.images.outputs.gateway }}
@@ -40,7 +40,7 @@ jobs:
   # ── Gateway dev image ──────────────────────────────────────────────────────
   gateway:
     name: Gateway — build & push :${{ needs.meta.outputs.tag }}
-    runs-on: ubuntu-latest
+    runs-on: actions-runner-controller
     needs: meta
     permissions:
       packages: write
@@ -68,7 +68,7 @@ jobs:
   # ── Relay dev image ────────────────────────────────────────────────────────
   relay:
     name: Relay — build & push :${{ needs.meta.outputs.tag }}
-    runs-on: ubuntu-latest
+    runs-on: actions-runner-controller
     needs: meta
     permissions:
       packages: write
