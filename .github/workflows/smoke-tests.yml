@@ -1,0 +1,154 @@
+name: Smoke tests — dev
+
+# Three ways to trigger:
+#
+#  1. Automatic — after "Deploy — dev" succeeds (every push to develop / release/*).
+#  2. PR comment — write `/smoke-test` in any PR comment (members / collaborators only).
+#  3. Manual     — workflow_dispatch from the Actions tab.
+#
+# Requires the following to be configured on the repository / environment:
+#
+#   Variables  (Settings → Environments → dev → Variables)
+#     AUDIO_URL              URL of a short speech audio file (.mp3 / .wav / .m4a)
+#     GATEWAY_READY_TIMEOUT  seconds to wait for the gateway after a deploy (default: 120)
+#     WHISPER_MODEL          whisper-large-v3     (optional, this is the default)
+#     RERANK_MODEL           bge-reranker-v2-m3   (optional, this is the default)
+#     RERANK_ENDPOINT        /v1/rerank           (optional, this is the default)
+#
+#   Secrets    (Settings → Environments → dev → Secrets)
+#     GATEWAY_URL            https://api.kevent-dev.example.com
+#     WHISPER_API_KEY        API key for audio endpoints (sent as 'apikey' header)
+#     RERANK_API_KEY         API key for rerank endpoint  (sent as 'apikey' header)
+
+on:
+  # ── 1. Auto: fires when the dev deploy finishes ─────────────────────────────
+  workflow_run:
+    workflows: ["Deploy — dev (hors-prod)"]
+    types: [completed]
+
+  # ── 2. PR comment: `/smoke-test` written on any pull request ─────────────────
+  issue_comment:
+    types: [created]
+
+  # ── 3. Manual: Actions tab → Run workflow ────────────────────────────────────
+  workflow_dispatch:
+    inputs:
+      gateway_url:
+        description: "Gateway URL (overrides secret GATEWAY_URL)"
+        required: false
+      audio_url:
+        description: "Audio file URL (overrides env var)"
+        required: false
+      poll_timeout:
+        description: "Max seconds to wait for async job"
+        required: false
+        default: "300"
+      skip_whisper:
+        description: "Skip Whisper tests (1 = skip)"
+        required: false
+        default: "0"
+      skip_rerank:
+        description: "Skip Rerank test (1 = skip)"
+        required: false
+        default: "0"
+
+jobs:
+  smoke:
+    name: Smoke tests
+    runs-on: actions-runner-controller
+    environment: dev
+
+    # ── Guard: skip if the upstream conditions are not met ────────────────────
+    #
+    # workflow_run  → only run when the deploy succeeded
+    # issue_comment → only run when:
+    #                   - the comment is on a pull request (not a plain issue)
+    #                   - the comment body contains /smoke-test
+    #                   - the author is a repo member or collaborator (not a random contributor)
+    # workflow_dispatch → always run
+    if: |
+      (github.event_name == 'workflow_run'   && github.event.workflow_run.conclusion == 'success') ||
+      (github.event_name == 'issue_comment'  &&
+       github.event.issue.pull_request       &&
+       contains(github.event.comment.body, '/smoke-test') &&
+       contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
+      (github.event_name == 'workflow_dispatch')
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # workflow_run: check out the commit that triggered the deploy
+          # issue_comment / workflow_dispatch: use the default branch (develop)
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      # Acknowledge the /smoke-test comment with a 🚀 reaction so the author
+      # knows the workflow was picked up (only meaningful for the comment trigger).
+      - name: React to PR comment
+        if: github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api \
+            repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
+            -X POST -f content=rocket
+
+      - name: Install jq
+        run: sudo apt-get install -y --no-install-recommends jq
+
+      # The deploy workflow pushes a new image; the cluster rolls out the pod.
+      # Poll /health until 200 so the tests don't start on a stale or restarting pod.
+      # Skipped for comment and manual triggers (gateway is already stable).
+      - name: Wait for gateway to be ready
+        if: github.event_name == 'workflow_run'
+        env:
+          GATEWAY_URL:     ${{ secrets.GATEWAY_URL }}
+          WHISPER_API_KEY:  ${{ secrets.WHISPER_API_KEY }}
+          RERANK_API_KEY:   ${{ secrets.RERANK_API_KEY }}
+          READY_TIMEOUT:   ${{ vars.GATEWAY_READY_TIMEOUT || '120' }}
+        run: |
+          AUTH_HEADER=""
+          [[ -n "$GATEWAY_API_KEY" ]] && AUTH_HEADER="-H apikey:${GATEWAY_API_KEY}"
+
+          echo "Waiting up to ${READY_TIMEOUT}s for ${GATEWAY_URL}/health ..."
+          ELAPSED=0
+          until [[ "$(curl -sf -o /dev/null -w "%{http_code}" \
+                       $AUTH_HEADER --max-time 5 \
+                       "${GATEWAY_URL}/health" 2>/dev/null)" == "200" ]]; do
+            if [[ $ELAPSED -ge $READY_TIMEOUT ]]; then
+              echo "::error::Gateway did not become healthy within ${READY_TIMEOUT}s"
+              exit 1
+            fi
+            echo "  ... not ready yet (${ELAPSED}s elapsed)"
+            sleep 5
+            ELAPSED=$((ELAPSED + 5))
+          done
+          echo "Gateway is ready (${ELAPSED}s)"
+
+      - name: Run smoke tests
+        env:
+          GATEWAY_URL:      ${{ inputs.gateway_url   || secrets.GATEWAY_URL }}
+          AUDIO_URL:        ${{ inputs.audio_url     || vars.AUDIO_URL }}
+          WHISPER_API_KEY:  ${{ secrets.WHISPER_API_KEY }}
+          RERANK_API_KEY:   ${{ secrets.RERANK_API_KEY }}
+          WHISPER_MODEL:    ${{ vars.WHISPER_MODEL   || 'whisper-large-v3' }}
+          RERANK_MODEL:     ${{ vars.RERANK_MODEL    || 'bge-reranker-v2-m3' }}
+          RERANK_ENDPOINT:  ${{ vars.RERANK_ENDPOINT || '/v1/rerank' }}
+          POLL_TIMEOUT:     ${{ inputs.poll_timeout  || '300' }}
+          SYNC_TIMEOUT:     "300"
+          SKIP_WHISPER:     ${{ inputs.skip_whisper  || '0' }}
+          SKIP_RERANK:      ${{ inputs.skip_rerank   || '0' }}
+        run: bash tests/smoke/smoke.sh
+
+      # Post a summary comment on the PR when triggered by /smoke-test.
+      - name: Comment result on PR
+        if: always() && github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [[ "${{ job.status }}" == "success" ]]; then
+            ICON="✅"; MSG="Smoke tests **passed**."
+          else
+            ICON="❌"; MSG="Smoke tests **failed** — [see logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})."
+          fi
+          gh pr comment ${{ github.event.issue.number }} \
+            --body "${ICON} ${MSG}"

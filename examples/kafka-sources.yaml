@@ -1,0 +1,142 @@
+# Knative KafkaSources for a transcription service using the whisper-large-v3 model.
+#
+# Three sources are required per model:
+#   - async:    normal async jobs  → POST /    on the relay
+#   - sync:     sync-over-Kafka    → POST /sync on the relay (priority, sets syncPriority)
+#   - priority: SA priority async  → POST /sync on the relay (priority, sets syncPriority)
+#
+# Prerequisites:
+#   - The kevent-relay KafkaUser secret must be copied to the InferenceService namespace.
+#     The secret must contain keys: sasl-type, username, password.
+#   - The Kafka CA certificate secret must also be available in the namespace.
+#
+# Apply in the namespace where your InferenceService runs:
+#   kubectl apply -f examples/kafka-sources.yaml
+#
+# Replace:
+#   - <kafka-bootstrap-address>  with your broker address (e.g. kafka-bootstrap.kafka.svc.cluster.local:9093)
+#   - <inference-service-name>   with your KServe InferenceService predictor name
+#   - <relay-secret-name>        with the name of the secret holding relay Kafka credentials
+#   - <kafka-ca-secret-name>     with the name of the secret holding the Kafka CA certificate
+---
+apiVersion: sources.knative.dev/v1
+kind: KafkaSource
+metadata:
+  name: kafka-source-whisper-large-v3
+  annotations:
+    # Pin the dispatcher to 1 replica so KEDA does not fan-out messages across
+    # multiple dispatchers — this would bypass containerConcurrency and create
+    # one GPU pod per message instead of filling the concurrency budget.
+    autoscaling.knative.dev/minScale: "1"
+    autoscaling.knative.dev/maxScale: "1"
+spec:
+  bootstrapServers:
+    - <kafka-bootstrap-address>
+  consumerGroup: inference-whisper-large-v3-async
+  topics:
+    - jobs.whisper-large-v3.input
+  ordering: ordered
+  net:
+    sasl:
+      enable: true
+      type:
+        secretKeyRef:
+          name: <relay-secret-name>
+          key: sasl-type
+      user:
+        secretKeyRef:
+          name: <relay-secret-name>
+          key: username
+      password:
+        secretKeyRef:
+          name: <relay-secret-name>
+          key: password
+    tls:
+      enable: true
+      caCert:
+        secretKeyRef:
+          name: <kafka-ca-secret-name>
+          key: ca.crt
+  sink:
+    ref:
+      apiVersion: serving.knative.dev/v1
+      kind: Service
+      name: <inference-service-name>
+---
+apiVersion: sources.knative.dev/v1
+kind: KafkaSource
+metadata:
+  name: kafka-source-whisper-large-v3-sync
+spec:
+  bootstrapServers:
+    - <kafka-bootstrap-address>
+  consumerGroup: inference-whisper-large-v3-sync
+  topics:
+    - jobs.whisper-large-v3.sync
+  ordering: unordered
+  net:
+    sasl:
+      enable: true
+      type:
+        secretKeyRef:
+          name: <relay-secret-name>
+          key: sasl-type
+      user:
+        secretKeyRef:
+          name: <relay-secret-name>
+          key: username
+      password:
+        secretKeyRef:
+          name: <relay-secret-name>
+          key: password
+    tls:
+      enable: true
+      caCert:
+        secretKeyRef:
+          name: <kafka-ca-secret-name>
+          key: ca.crt
+  sink:
+    ref:
+      apiVersion: serving.knative.dev/v1
+      kind: Service
+      name: <inference-service-name>
+    uri: /sync
+---
+apiVersion: sources.knative.dev/v1
+kind: KafkaSource
+metadata:
+  name: kafka-source-whisper-large-v3-priority
+spec:
+  bootstrapServers:
+    - <kafka-bootstrap-address>
+  consumerGroup: inference-whisper-large-v3-priority
+  topics:
+    - jobs.whisper-large-v3.priority
+  ordering: unordered
+  net:
+    sasl:
+      enable: true
+      type:
+        secretKeyRef:
+          name: <relay-secret-name>
+          key: sasl-type
+      user:
+        secretKeyRef:
+          name: <relay-secret-name>
+          key: username
+      password:
+        secretKeyRef:
+          name: <relay-secret-name>
+          key: password
+    tls:
+      enable: true
+      caCert:
+        secretKeyRef:
+          name: <kafka-ca-secret-name>
+          key: ca.crt
+  sink:
+    ref:
+      apiVersion: serving.knative.dev/v1
+      kind: Service
+      name: <inference-service-name>
+    uri: /sync

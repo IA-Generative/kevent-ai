@@ -10,7 +10,7 @@ jobs:
   # ── Detect which module(s) changed ─────────────────────────────────────────
   changes:
     name: Detect changed modules
-    runs-on: ubuntu-latest
+    runs-on: actions-runner-controller
     outputs:
       gateway: ${{ steps.filter.outputs.gateway }}
       relay:   ${{ steps.filter.outputs.relay }}
@@ -33,7 +33,7 @@ jobs:
 
   test-gateway:
     name: Gateway — test & vet
-    runs-on: ubuntu-latest
+    runs-on: actions-runner-controller
     needs: changes
     if: needs.changes.outputs.gateway == 'true'
     steps:
@@ -47,7 +47,7 @@ jobs:
 
   test-relay:
     name: Relay — test & vet
-    runs-on: ubuntu-latest
+    runs-on: actions-runner-controller
     needs: changes
     if: needs.changes.outputs.relay == 'true'
     steps:
@@ -64,7 +64,7 @@ jobs:
 
   lint-helm:
     name: Helm — lint
-    runs-on: ubuntu-latest
+    runs-on: actions-runner-controller
     needs: changes
     if: needs.changes.outputs.helm == 'true'
     steps:

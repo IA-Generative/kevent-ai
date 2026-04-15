@@ -6,7 +6,7 @@
 - [ ] `CHANGELOG.md` updated with the new version
 - [ ] Helm `helm/gateway/Chart.yaml` version bumped (if chart changed)
 - [ ] Helm `helm/gateway/values.yaml` `image.tag` updated
-- [ ] `k8s/inference-transcription.yaml` relay image tag updated (if relay changed)
+- [ ] `examples/inference-service.yaml` relay image tag updated (if relay changed)
 
 ## Tag and release
 

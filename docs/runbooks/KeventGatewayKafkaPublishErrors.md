@@ -35,5 +35,5 @@ Common causes:
 1. Verify broker address in gateway config (`kafka.brokers`)
 2. Check SASL credentials — rotate secret if needed
 3. Confirm topic exists: `kafka-topics.sh --list --bootstrap-server <broker>`
-4. Check Strimzi KafkaUser ACLs (`k8s/kafka-users.yaml`) — `Write` on `jobs.*` required
+4. Check Strimzi KafkaUser ACLs (`examples/kafka-users.yaml`) — `Write` on `jobs.*` required
 5. Failed jobs remain in Redis with status `failed` for TTL duration — clients must resubmit

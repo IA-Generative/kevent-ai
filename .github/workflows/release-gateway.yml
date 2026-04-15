@@ -11,7 +11,7 @@ env:
 jobs:
   release:
     name: Build, push image & create release
-    runs-on: ubuntu-latest
+    runs-on: actions-runner-controller
     permissions:
       contents: write       # create GitHub release + upload assets
       packages: write       # push to ghcr.io

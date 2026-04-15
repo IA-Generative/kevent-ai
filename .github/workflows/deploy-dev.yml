@@ -22,7 +22,7 @@ jobs:
   # ── Detect which module(s) changed ─────────────────────────────────────────
   changes:
     name: Detect changed modules
-    runs-on: ubuntu-latest
+    runs-on: actions-runner-controller
     outputs:
       gateway: ${{ steps.filter.outputs.gateway }}
       relay:   ${{ steps.filter.outputs.relay }}
@@ -44,7 +44,7 @@ jobs:
   # ── Compute tag + lowercase image names ────────────────────────────────────
   meta:
     name: Compute image tag
-    runs-on: ubuntu-latest
+    runs-on: actions-runner-controller
     needs: changes
     outputs:
       tag:           ${{ steps.tag.outputs.tag }}
@@ -71,7 +71,7 @@ jobs:
   # ── Gateway dev image ──────────────────────────────────────────────────────
   gateway:
     name: Gateway — build & push :${{ needs.meta.outputs.tag }}
-    runs-on: ubuntu-latest
+    runs-on: actions-runner-controller
     needs: [meta, changes]
     if: needs.changes.outputs.gateway == 'true'
     permissions:
@@ -100,7 +100,7 @@ jobs:
   # ── Relay dev image ────────────────────────────────────────────────────────
   relay:
     name: Relay — build & push :${{ needs.meta.outputs.tag }}
-    runs-on: ubuntu-latest
+    runs-on: actions-runner-controller
     needs: [meta, changes]
     if: needs.changes.outputs.relay == 'true'
     permissions:
