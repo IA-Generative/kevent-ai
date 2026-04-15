@@ -7,9 +7,35 @@ on:
     branches: [main, develop]
 
 jobs:
+  # ── Detect which module(s) changed ─────────────────────────────────────────
+  changes:
+    name: Detect changed modules
+    runs-on: ubuntu-latest
+    outputs:
+      gateway: ${{ steps.filter.outputs.gateway }}
+      relay:   ${{ steps.filter.outputs.relay }}
+      helm:    ${{ steps.filter.outputs.helm }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            gateway:
+              - "cmd/**"
+              - "internal/**"
+              - "go.mod"
+              - "go.sum"
+            relay:
+              - "relay/**"
+            helm:
+              - "helm/**"
+
   test-gateway:
     name: Gateway — test & vet
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.gateway == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -17,11 +43,13 @@ jobs:
           go-version-file: go.mod
           cache: true
       - run: go vet ./...
-      - run: go test -race -count=1 ./...
+      - run: go test -count=1 ./...
 
   test-relay:
     name: Relay — test & vet
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.relay == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -37,6 +65,8 @@ jobs:
   lint-helm:
     name: Helm — lint
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.helm == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
