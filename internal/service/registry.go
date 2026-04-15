@@ -21,10 +21,11 @@ type Def struct {
 	MaxFileSizeMB int64
 
 	// Sync / OpenAI-compatible mode (optional).
-	InferenceURL  string              // full URL of the backend endpoint (direct proxy fallback)
-	Operations    map[string][]string // operation name → URL paths (all indexed; first used for async)
-	SyncTopic     string              // Kafka topic for priority sync-over-Kafka jobs (overrides direct proxy)
-	PriorityTopic string              // Kafka topic for high-priority async jobs (SA accounts)
+	InferenceURL     string              // full URL of the backend endpoint (direct proxy fallback)
+	Operations       map[string][]string // operation name → URL paths (all indexed; first used for async)
+	SyncTopic        string              // Kafka topic for priority sync-over-Kafka jobs (overrides direct proxy)
+	PriorityTopic    string              // Kafka topic for high-priority async jobs (SA accounts)
+	InferenceHeaders map[string]string   // headers injected on every sync-direct proxy request to the backend
 }
 
 // OperationPath returns the first path for the given operation name.
@@ -132,16 +133,17 @@ func NewRegistry(cfgs []config.ServiceConfig) *Registry {
 			exts[strings.ToLower(ext)] = struct{}{}
 		}
 		def := &Def{
-			Type:          cfg.Type,
-			Model:         cfg.Model,
-			InputTopic:    cfg.InputTopic,
-			ResultTopic:   cfg.ResultTopic,
-			AcceptedExts:  exts,
-			MaxFileSizeMB: cfg.MaxFileSizeMB,
-			InferenceURL:  cfg.InferenceURL,
-			Operations:    cfg.Operations,
-			SyncTopic:     cfg.SyncTopic,
-			PriorityTopic: cfg.PriorityTopic,
+			Type:             cfg.Type,
+			Model:            cfg.Model,
+			InputTopic:       cfg.InputTopic,
+			ResultTopic:      cfg.ResultTopic,
+			AcceptedExts:     exts,
+			MaxFileSizeMB:    cfg.MaxFileSizeMB,
+			InferenceURL:     cfg.InferenceURL,
+			Operations:       cfg.Operations,
+			SyncTopic:        cfg.SyncTopic,
+			PriorityTopic:    cfg.PriorityTopic,
+			InferenceHeaders: cfg.InferenceHeaders,
 		}
 
 		if r.byTypeModel[cfg.Type] == nil {

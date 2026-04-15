@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -33,6 +34,28 @@ type routerHolder struct {
 
 func (h *routerHolder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.p.Load().ServeHTTP(w, r)
+}
+
+// reservedGatewayPaths lists the path prefixes owned by the gateway itself.
+// Configured service paths matching any of these are silently skipped to
+// prevent accidental overrides of built-in routes.
+var reservedGatewayPaths = []string{
+	"/health",
+	"/metrics",
+	"/docs",
+	"/openapi.yaml",
+	"/jobs",
+	"/-",
+}
+
+// reservedGatewayPath reports whether path starts with a reserved gateway prefix.
+func reservedGatewayPath(path string) bool {
+	for _, prefix := range reservedGatewayPaths {
+		if path == prefix || strings.HasPrefix(path, prefix+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func buildRouter(
@@ -68,8 +91,16 @@ func buildRouter(
 	if reg.HasSyncServices() {
 		syncHandler := handler.NewSyncHandler(reg, s3Client, redisClient, producer, cfg.Server.ConsumerHeader)
 		r.Get("/v1/models", handler.ListModels(reg))
-		for _, prefix := range reg.SyncPathPrefixes() {
-			r.Post(prefix+"/*", syncHandler.ServeHTTP)
+		// Register each configured path exactly. Chi handles {model} parameter
+		// patterns natively. Single-segment paths (e.g. /rerank) are reachable
+		// without needing a separate wildcard route.
+		// Reserved gateway paths are skipped — they cannot be overridden by config.
+		for _, path := range reg.SyncPaths() {
+			if reservedGatewayPath(path) {
+				slog.Warn("skipping sync path: conflicts with reserved gateway route", "path", path)
+				continue
+			}
+			r.Post(path, syncHandler.ServeHTTP)
 		}
 		slog.Info("sync proxy enabled", "paths", reg.SyncPaths())
 	}

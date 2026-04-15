@@ -123,6 +123,15 @@ type ServiceConfig struct {
 	//     Accept: application/octet-stream
 	//     Authorization: "Bearer ${GITHUB_TOKEN}"
 	SwaggerHeaders map[string]string `yaml:"swagger_headers"`
+	// InferenceHeaders are optional HTTP headers injected on every request
+	// forwarded to the inference backend (sync-direct proxy only).
+	// Values support ${VAR} env expansion (same as the rest of config.yaml).
+	// These headers override anything sent by the client with the same name.
+	// Example:
+	//   inference_headers:
+	//     Authorization: "Bearer ${RERANKER_API_KEY}"
+	//     X-Api-Key: "${BACKEND_KEY}"
+	InferenceHeaders map[string]string `yaml:"inference_headers"`
 }
 
 // Load reads and validates the YAML config file at path.

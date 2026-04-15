@@ -110,6 +110,11 @@ services:
     accepted_exts: [".mp3", ".wav", ".m4a", ".ogg", ".flac"]
     max_file_size_mb: 500
 
+    # Backend authentication (sync-direct only, optional)
+    inference_headers:
+      Authorization: "Bearer ${RERANKER_API_KEY}"
+      X-Api-Key: "${BACKEND_KEY}"
+
     # Swagger spec (optional)
     swagger_url: "https://example.com/openapi.json"
     swagger_headers:
@@ -132,8 +137,24 @@ services:
 | `priority_topic` | no | `""` | Kafka topic for priority async jobs |
 | `accepted_exts` | no | any | Allowed file extensions (e.g. `.mp3`) |
 | `max_file_size_mb` | no | `100` | Max upload size in MB |
+| `inference_headers` | no | `{}` | HTTP headers injected on every sync-direct proxy request |
 | `swagger_url` | no | `""` | URL to fetch an OpenAPI spec from |
 | `swagger_headers` | no | `{}` | HTTP headers for `swagger_url` fetch |
+
+### `inference_headers`
+
+Arbitrary HTTP headers injected on every request forwarded to the inference backend. Only applies to the **sync-direct proxy** flow (JSON requests and multipart without `sync_topic`). Has no effect on async or sync-over-Kafka jobs.
+
+- Header values support `${VAR}` / `${VAR:-default}` env expansion — store credentials in environment variables, not in plain config.
+- Config headers **override** any header with the same name sent by the client.
+
+```yaml
+# Typical use cases:
+inference_headers:
+  Authorization: "Bearer ${RERANKER_API_KEY}"   # Bearer token
+  X-Api-Key: "${BACKEND_KEY}"                   # custom API key header
+  apikey: "${BACKEND_KEY}"                      # APISIX-style key
+```
 
 ## Hot reload
 

@@ -16,17 +16,23 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Gateway
 
-### [v0.6.3] — 2026-04-14
+### [v0.6.3] — 2026-04-15
 
 #### Added
+- `inference_headers` — per-service map of HTTP headers injected on every sync-direct proxy request (auth Bearer, API key…). Values support `${VAR}` env expansion. Applies to JSON requests and multipart without `sync_topic` only. Closes #18
 - Smoke tests (`tests/smoke/smoke.sh`): automated end-to-end validation against a live gateway — Whisper async, Whisper sync, and Rerank sync-direct
 - CI workflow `smoke-tests.yml`: triggered automatically after each dev deploy (`workflow_run`) and on demand via `/smoke-test` PR comment (members/collaborators only); posts pass/fail result as a PR comment
 - All CI workflows migrated to organisation runner (`actions-runner-controller`)
 
 #### Fixed
+- Sync path routing: configured paths are now registered exactly in chi instead of prefix wildcards (`/prefix/*`). Chi handles `{model}` parameter patterns natively. Fixes 404 on single-segment endpoints (e.g. `POST /rerank`)
+- Reserved gateway routes (`/health`, `/metrics`, `/docs`, `/openapi.yaml`, `/jobs`, `/-/`) cannot be overridden by a service config path — silently skipped with a warning log at startup
 - CI: removed `-race` flag from `go test` (CGO not available on ARC runner)
 - CI: `GATEWAY_URL` moved to secrets; separate `WHISPER_API_KEY` / `RERANK_API_KEY` for each service
 - Docs: replaced unresolvable MkDocs cross-directory links (`../../examples/`) with inline code references, fixing the `Deploy docs` CI failure in `--strict` mode
+
+#### Tests
+- `cmd/gateway/main_test.go`: `TestReservedGatewayPath` (23 table-driven cases) + `TestReservedPathsNotOverriddenBySync` (chi router integration)
 
 ---
 

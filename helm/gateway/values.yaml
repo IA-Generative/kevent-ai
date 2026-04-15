@@ -2,7 +2,7 @@ replicaCount: 1
 
 image:
   repository: ghcr.io/ia-generative/kevent-ai/gateway
-  tag: "v0.6.2"
+  tag: "v0.6.3"
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
@@ -131,6 +131,13 @@ services:
   #       - "/v1/rerank"
   #   inferenceURL: "http://kevent-reranker-predictor.default.svc.cluster.local"
   #   # Pas de inputTopic / resultTopic → sync-direct uniquement
+  #
+  #   # Headers injectés sur chaque requête vers le backend (sync-direct uniquement).
+  #   # Les valeurs supportent ${VAR} (expansion depuis les variables d'environnement).
+  #   # Ces headers écrasent ceux éventuellement envoyés par le client.
+  #   # inferenceHeaders:
+  #   #   Authorization: "Bearer ${RERANKER_API_KEY}"
+  #   #   X-Api-Key: "${BACKEND_KEY}"
 
 # ── Redis ─────────────────────────────────────────────────────────────────────
 # Valeurs passées au subchart dandydeveloper/redis-ha.
