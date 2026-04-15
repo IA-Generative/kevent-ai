@@ -45,7 +45,7 @@ var reservedGatewayPaths = []string{
 	"/docs",
 	"/openapi.yaml",
 	"/jobs",
-	"/-/",
+	"/-",
 }
 
 // reservedGatewayPath reports whether path starts with a reserved gateway prefix.
