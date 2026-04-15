@@ -382,6 +382,9 @@ func (h *SyncHandler) proxyToInference(w http.ResponseWriter, r *http.Request, d
 	if auth := r.Header.Get("Authorization"); auth != "" {
 		upstreamReq.Header.Set("Authorization", auth)
 	}
+	for k, v := range def.InferenceHeaders {
+		upstreamReq.Header.Set(k, v)
+	}
 
 	resp, err := h.httpClient.Do(upstreamReq)
 	if err != nil {
