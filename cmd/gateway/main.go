@@ -68,8 +68,11 @@ func buildRouter(
 	if reg.HasSyncServices() {
 		syncHandler := handler.NewSyncHandler(reg, s3Client, redisClient, producer, cfg.Server.ConsumerHeader)
 		r.Get("/v1/models", handler.ListModels(reg))
-		for _, prefix := range reg.SyncPathPrefixes() {
-			r.Post(prefix+"/*", syncHandler.ServeHTTP)
+		// Register each configured path exactly. Chi handles {model} parameter
+		// patterns natively. Single-segment paths (e.g. /rerank) are reachable
+		// without needing a separate wildcard route.
+		for _, path := range reg.SyncPaths() {
+			r.Post(path, syncHandler.ServeHTTP)
 		}
 		slog.Info("sync proxy enabled", "paths", reg.SyncPaths())
 	}
