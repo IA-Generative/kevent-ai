@@ -22,7 +22,7 @@ jobs:
   # ── Detect which module(s) changed ─────────────────────────────────────────
   changes:
     name: Detect changed modules
-    runs-on: actions-runner-controller
+    runs-on: ubuntu-latest
     outputs:
       gateway: ${{ steps.filter.outputs.gateway }}
       relay:   ${{ steps.filter.outputs.relay }}

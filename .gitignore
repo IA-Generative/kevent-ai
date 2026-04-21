@@ -6,3 +6,8 @@
 **/Chart.lock
 **/k8s/**
 /site/
+
+# MemPalace (local only)
+mempalace.yaml
+memory/
+entities.json
