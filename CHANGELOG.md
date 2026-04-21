@@ -16,6 +16,13 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Gateway
 
+### [v0.6.4] — 2026-04-21
+
+#### Changed
+- CI: `ci.yml` and `deploy-dev.yml` skip gateway/relay/helm jobs when unrelated files change (`dorny/paths-filter`) — avoids unnecessary builds on pure docs or CI-config commits
+
+---
+
 ### [v0.6.3] — 2026-04-15
 
 #### Added
