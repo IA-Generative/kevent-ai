@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"kevent/gateway/internal/config"
 )
@@ -26,6 +27,10 @@ type Def struct {
 	SyncTopic        string              // Kafka topic for priority sync-over-Kafka jobs (overrides direct proxy)
 	PriorityTopic    string              // Kafka topic for high-priority async jobs (SA accounts)
 	InferenceHeaders map[string]string   // headers injected on every sync-direct proxy request to the backend
+	Provider         string
+	APIKey           string
+	BackendModel     string        // real model name sent to backend; empty = use Model (the alias)
+	ResponseCacheTTL time.Duration
 }
 
 // OperationPath returns the first path for the given operation name.
@@ -60,6 +65,11 @@ func (d *Def) OperationPath(op string) (string, error) {
 		return "", fmt.Errorf("operation %q has no paths configured for model %q", op, d.Model)
 	}
 	return paths[0], nil
+}
+
+// IsLLM reports whether this service uses the LLM proxy handler.
+func (d *Def) IsLLM() bool {
+	return d.Provider != "" || d.ResponseCacheTTL > 0
 }
 
 // pathPattern supports openai_paths entries that contain a {model} placeholder,
@@ -111,6 +121,15 @@ func matchModelSegment(pattern, actual string) (model string, ok bool) {
 	return actual[len(prefix) : len(actual)-len(suffix)], true
 }
 
+// wildcardRoute holds services registered under a path prefix wildcard (e.g. "/v1/*").
+// It matches any request path that starts with prefix (the path with "*" stripped).
+type wildcardRoute struct {
+	pattern  string          // original pattern, e.g. "/v1/*"
+	prefix   string          // prefix to match against, e.g. "/v1/"
+	byModel  map[string]*Def
+	deflt    *Def // default def when model is empty or not found by name
+}
+
 // Registry maps (service_type, model) pairs to their runtime definitions.
 type Registry struct {
 	byTypeModel   map[string]map[string]*Def // type → model → Def
@@ -118,6 +137,7 @@ type Registry struct {
 	bySync        map[string]map[string]*Def // exact openai_path → model → Def
 	defaultByPath map[string]*Def            // exact openai_path → default Def
 	byPattern     []*pathPattern             // pattern paths containing {model}
+	byWildcard    []*wildcardRoute           // wildcard prefix paths ending with /*
 }
 
 func NewRegistry(cfgs []config.ServiceConfig) *Registry {
@@ -144,6 +164,10 @@ func NewRegistry(cfgs []config.ServiceConfig) *Registry {
 			SyncTopic:        cfg.SyncTopic,
 			PriorityTopic:    cfg.PriorityTopic,
 			InferenceHeaders: cfg.InferenceHeaders,
+			Provider:         cfg.Provider,
+			APIKey:           cfg.APIKey,
+			BackendModel:     cfg.BackendModel,
+			ResponseCacheTTL: time.Duration(cfg.ResponseCacheTTL) * time.Second,
 		}
 
 		if r.byTypeModel[cfg.Type] == nil {
@@ -166,6 +190,9 @@ func NewRegistry(cfgs []config.ServiceConfig) *Registry {
 					if strings.Contains(path, "{model}") {
 						// Pattern path — model is embedded in the URL.
 						r.indexPattern(path, cfg.Model, def)
+					} else if strings.HasSuffix(path, "/*") {
+						// Wildcard prefix path — matches any sub-path under the prefix.
+						r.indexWildcard(path, cfg.Model, def, cfg.Default)
 					} else {
 						// Exact path — model is expected in the request body.
 						if r.bySync[path] == nil {
@@ -197,6 +224,30 @@ func (r *Registry) indexPattern(pattern, model string, def *Def) {
 		segments:    strings.Split(pattern, "/"),
 		defsByModel: map[string]*Def{model: def},
 	})
+}
+
+// indexWildcard adds def to the wildcard index under the given pattern (e.g. "/v1/*").
+// Multiple service configs may share the same wildcard pattern (different models).
+func (r *Registry) indexWildcard(pattern, model string, def *Def, isDefault bool) {
+	prefix := strings.TrimSuffix(pattern, "*") // "/v1/*" → "/v1/"
+	for _, w := range r.byWildcard {
+		if w.pattern == pattern {
+			w.byModel[model] = def
+			if isDefault {
+				w.deflt = def
+			}
+			return
+		}
+	}
+	w := &wildcardRoute{
+		pattern: pattern,
+		prefix:  prefix,
+		byModel: map[string]*Def{model: def},
+	}
+	if isDefault {
+		w.deflt = def
+	}
+	r.byWildcard = append(r.byWildcard, w)
 }
 
 // RouteAsync returns the Def for the given (service_type, model) pair.
@@ -241,6 +292,7 @@ func (r *Registry) RouteAsync(serviceType, model string) (*Def, error) {
 //  1. Exact path match — model from request body.
 //     If model is empty: single registered model, then default model, then error.
 //  2. Pattern path match — model extracted from URL.
+//  3. Wildcard prefix match (e.g. "/v1/*") — model from request body.
 func (r *Registry) RouteSync(openaiPath, model string) (*Def, error) {
 	// 1. Exact path.
 	if models, ok := r.bySync[openaiPath]; ok {
@@ -281,22 +333,52 @@ func (r *Registry) RouteSync(openaiPath, model string) (*Def, error) {
 			openaiPath, p.pattern, extracted, available)
 	}
 
+	// 3. Wildcard prefix — any sub-path under the configured prefix.
+	for _, w := range r.byWildcard {
+		if !strings.HasPrefix(openaiPath, w.prefix) {
+			continue
+		}
+		if d, ok := w.byModel[model]; ok {
+			return d, nil
+		}
+		if model == "" {
+			if len(w.byModel) == 1 {
+				for _, d := range w.byModel {
+					return d, nil
+				}
+			}
+			if w.deflt != nil {
+				return w.deflt, nil
+			}
+		}
+		available := make([]string, 0, len(w.byModel))
+		for m := range w.byModel {
+			available = append(available, m)
+		}
+		return nil, fmt.Errorf("no service for path %q (matched wildcard %q) with model %q (available: %v)",
+			openaiPath, w.pattern, model, available)
+	}
+
 	return nil, fmt.Errorf("no sync service configured for path %q", openaiPath)
 }
 
 // HasSyncServices reports whether at least one service has sync mode configured.
 func (r *Registry) HasSyncServices() bool {
-	return len(r.bySync) > 0 || len(r.byPattern) > 0
+	return len(r.bySync) > 0 || len(r.byPattern) > 0 || len(r.byWildcard) > 0
 }
 
 // SyncPaths returns the unique OpenAI paths/patterns that have a sync backend.
+// Wildcard paths (e.g. "/v1/*") are included as-is and registered directly with chi.
 func (r *Registry) SyncPaths() []string {
-	paths := make([]string, 0, len(r.bySync)+len(r.byPattern))
+	paths := make([]string, 0, len(r.bySync)+len(r.byPattern)+len(r.byWildcard))
 	for p := range r.bySync {
 		paths = append(paths, p)
 	}
 	for _, p := range r.byPattern {
 		paths = append(paths, p.pattern)
+	}
+	for _, w := range r.byWildcard {
+		paths = append(paths, w.pattern)
 	}
 	return paths
 }
@@ -310,6 +392,9 @@ func (r *Registry) SyncPathPrefixes() []string {
 	}
 	for _, p := range r.byPattern {
 		seen[pathPrefix(p.pattern)] = struct{}{}
+	}
+	for _, w := range r.byWildcard {
+		seen[pathPrefix(w.pattern)] = struct{}{}
 	}
 	prefixes := make([]string, 0, len(seen))
 	for prefix := range seen {

@@ -146,7 +146,7 @@ func TestSyncHandler_JSONAlwaysUsesDirectProxy(t *testing.T) {
 	}}
 	reg := service.NewRegistry(cfgs)
 
-	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "")
+	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
 		strings.NewReader(`{"model":"llava","messages":[]}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -183,7 +183,7 @@ func TestSyncHandler_MultipartNoSyncTopic_UsesDirectProxy(t *testing.T) {
 	}}
 	reg := service.NewRegistry(cfgs)
 
-	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "")
+	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil)
 	req := multipartRequest(t, "/v1/audio/transcriptions", "whisper-large-v3", []byte("fake audio"))
 	w := httptest.NewRecorder()
 
@@ -216,7 +216,7 @@ func TestSyncHandler_MultipartWithSyncTopic_UsesKafka(t *testing.T) {
 	prod := &mockProducer{sub: sub} // signals sub.ch on publish
 
 	reg := buildRegistry("jobs.whisper-large-v3.sync")
-	h := handler.NewSyncHandler(reg, s3, redis, prod, "")
+	h := handler.NewSyncHandler(reg, s3, redis, prod, "", nil)
 
 	req := multipartRequest(t, "/v1/audio/transcriptions", "whisper-large-v3", []byte("fake audio"))
 	w := httptest.NewRecorder()
@@ -248,7 +248,7 @@ func TestSyncHandler_S3UploadFailure(t *testing.T) {
 	prod := &mockProducer{}
 
 	reg := buildRegistry("jobs.whisper-large-v3.sync")
-	h := handler.NewSyncHandler(reg, s3, redis, prod, "")
+	h := handler.NewSyncHandler(reg, s3, redis, prod, "", nil)
 
 	req := multipartRequest(t, "/v1/audio/transcriptions", "whisper-large-v3", []byte("audio"))
 	w := httptest.NewRecorder()
@@ -271,7 +271,7 @@ func TestSyncHandler_KafkaPublishFailure(t *testing.T) {
 	prod := &mockProducer{publishErr: fmt.Errorf("kafka unavailable")}
 
 	reg := buildRegistry("jobs.whisper-large-v3.sync")
-	h := handler.NewSyncHandler(reg, s3, redis, prod, "")
+	h := handler.NewSyncHandler(reg, s3, redis, prod, "", nil)
 
 	req := multipartRequest(t, "/v1/audio/transcriptions", "whisper-large-v3", []byte("audio"))
 	w := httptest.NewRecorder()
@@ -292,7 +292,7 @@ func TestSyncHandler_ClientDisconnect(t *testing.T) {
 	prod := &mockProducer{} // does not signal sub
 
 	reg := buildRegistry("jobs.whisper-large-v3.sync")
-	h := handler.NewSyncHandler(reg, s3, redis, prod, "")
+	h := handler.NewSyncHandler(reg, s3, redis, prod, "", nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -323,7 +323,7 @@ func TestSyncHandler_InferenceFailure(t *testing.T) {
 	prod := &mockProducer{sub: sub}
 
 	reg := buildRegistry("jobs.whisper-large-v3.sync")
-	h := handler.NewSyncHandler(reg, s3, redis, prod, "")
+	h := handler.NewSyncHandler(reg, s3, redis, prod, "", nil)
 
 	req := multipartRequest(t, "/v1/audio/transcriptions", "whisper-large-v3", []byte("audio"))
 	w := httptest.NewRecorder()
@@ -351,7 +351,7 @@ func TestSyncHandler_MissingModelField_SingleModel(t *testing.T) {
 	prod := &mockProducer{sub: sub}
 
 	reg := buildRegistry("jobs.whisper-large-v3.sync")
-	h := handler.NewSyncHandler(reg, s3, redis, prod, "")
+	h := handler.NewSyncHandler(reg, s3, redis, prod, "", nil)
 
 	body := &bytes.Buffer{}
 	mw := multipart.NewWriter(body)
@@ -399,7 +399,7 @@ func TestSyncHandler_MissingModelField_MultipleModels(t *testing.T) {
 		},
 	}
 	reg := service.NewRegistry(cfgs)
-	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "")
+	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil)
 
 	body := &bytes.Buffer{}
 	mw := multipart.NewWriter(body)
@@ -421,7 +421,7 @@ func TestSyncHandler_MissingModelField_MultipleModels(t *testing.T) {
 // TestSyncHandler_UnknownModel verifies that an unknown model returns 400.
 func TestSyncHandler_UnknownModel(t *testing.T) {
 	reg := buildRegistry("jobs.whisper-large-v3.sync")
-	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "")
+	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil)
 
 	req := multipartRequest(t, "/v1/audio/transcriptions", "unknown-model", []byte("audio"))
 	w := httptest.NewRecorder()
@@ -437,7 +437,7 @@ func TestSyncHandler_UnknownModel(t *testing.T) {
 // return 415.
 func TestSyncHandler_UnsupportedContentType(t *testing.T) {
 	reg := buildRegistry("")
-	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "")
+	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions",
 		strings.NewReader("plain text body"))

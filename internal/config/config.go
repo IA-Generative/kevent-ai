@@ -132,6 +132,21 @@ type ServiceConfig struct {
 	//     Authorization: "Bearer ${RERANKER_API_KEY}"
 	//     X-Api-Key: "${BACKEND_KEY}"
 	InferenceHeaders map[string]string `yaml:"inference_headers"`
+	// BackendModel is the real model name sent to the backend. Allows clients to use
+	// a short alias (model field) while the gateway rewrites it to the backend's
+	// expected identifier (e.g. "meta-llama/Meta-Llama-3-8B-Instruct" for vLLM).
+	// Only applied when Provider is set. Empty means the alias is forwarded as-is.
+	BackendModel string `yaml:"backend_model"`
+	// Provider selects the LLM backend protocol. When set, JSON requests are routed
+	// through the LLM proxy handler instead of the bare direct proxy.
+	// Valid values: "openai", "anthropic", "ollama", "passthrough". Empty = legacy direct proxy.
+	Provider string `yaml:"provider"`
+	// APIKey is the server-side credential for the provider. Supports ${VAR} expansion.
+	// Not forwarded from the client — kevent injects it at the gateway.
+	APIKey string `yaml:"api_key"`
+	// ResponseCacheTTL is the TTL in seconds for caching LLM responses in Redis.
+	// 0 = caching disabled. Only applied when Provider is set.
+	ResponseCacheTTL int `yaml:"response_cache_ttl"`
 }
 
 // Load reads and validates the YAML config file at path.
@@ -228,6 +243,15 @@ func (c *Config) validate() error {
 	}
 	if needsKafka && len(c.Kafka.Brokers) == 0 {
 		return fmt.Errorf("kafka.brokers is required when services use Kafka topics")
+	}
+	validProviders := map[string]bool{"openai": true, "anthropic": true, "ollama": true, "passthrough": true}
+	for _, svc := range c.Services {
+		if svc.Provider != "" && !validProviders[svc.Provider] {
+			return fmt.Errorf("service %q: unknown provider %q (valid: openai, anthropic, ollama, passthrough)", svc.Type, svc.Provider)
+		}
+		if svc.ResponseCacheTTL < 0 {
+			return fmt.Errorf("service %q: response_cache_ttl must be >= 0", svc.Type)
+		}
 	}
 	return nil
 }

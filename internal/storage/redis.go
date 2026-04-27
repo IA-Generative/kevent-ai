@@ -44,6 +44,10 @@ func (r *RedisClient) Close() error {
 	return r.client.Close()
 }
 
+// Raw exposes the underlying go-redis client for subsystems that need
+// generic Redis access (e.g. the LLM response cache).
+func (r *RedisClient) Raw() *redis.Client { return r.client }
+
 func jobKey(id string) string        { return "job:" + id }
 func consumerKey(name string) string { return "consumer:" + name + ":jobs" }
 

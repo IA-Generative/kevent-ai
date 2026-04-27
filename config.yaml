@@ -114,3 +114,50 @@ services:
   #   result_topic: jobs.whisper-large-v3-turbo.results
   #   accepted_exts: [".mp3", ".wav", ".m4a", ".ogg", ".flac"]
   #   max_file_size_mb: 500
+
+  # ── Example: LLM proxy services (provider + optional response cache) ────────
+  #
+  # OpenAI passthrough — proxy to api.openai.com, cache responses for 1 hour.
+  # - type: llm
+  #   model: "gpt-4o"
+  #   default: true
+  #   provider: openai
+  #   api_key: "${OPENAI_API_KEY}"
+  #   response_cache_ttl: 3600        # seconds; 0 = disabled
+  #   operations:
+  #     chat:
+  #       - "/v1/chat/completions"
+  #   inference_url: ""               # empty = defaults to https://api.openai.com
+  #
+  # Anthropic — translate OpenAI-format requests to the Messages API automatically.
+  # - type: llm
+  #   model: "claude-3-5-sonnet-20241022"
+  #   provider: anthropic
+  #   api_key: "${ANTHROPIC_API_KEY}"
+  #   response_cache_ttl: 3600
+  #   operations:
+  #     chat:
+  #       - "/v1/chat/completions"
+  #   inference_url: ""               # empty = defaults to https://api.anthropic.com
+  #
+  # Ollama — OpenAI-compatible local model, no translation needed.
+  # - type: llm
+  #   model: "llama3.2"
+  #   provider: ollama
+  #   response_cache_ttl: 0           # disable caching for local models
+  #   operations:
+  #     chat:
+  #       - "/v1/chat/completions"
+  #   inference_url: "http://ollama.default.svc.cluster.local:11434"
+  #
+  # Passthrough — forward verbatim with server-side headers injected.
+  # - type: llm
+  #   model: "mixtral-8x7b"
+  #   provider: passthrough
+  #   response_cache_ttl: 1800
+  #   operations:
+  #     chat:
+  #       - "/v1/chat/completions"
+  #   inference_url: "http://vllm.default.svc.cluster.local:8000"
+  #   inference_headers:
+  #     Authorization: "Bearer ${VLLM_TOKEN}"
