@@ -15,9 +15,12 @@ import (
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"kevent/gateway/internal/cache"
 	"kevent/gateway/internal/config"
 	"kevent/gateway/internal/handler"
 	"kevent/gateway/internal/kafka"
+	"kevent/gateway/internal/llmproxy"
+	"kevent/gateway/internal/llmproxy/provider"
 	_ "kevent/gateway/internal/metrics" // register Prometheus metrics
 	"kevent/gateway/internal/service"
 	"kevent/gateway/internal/storage"
@@ -66,6 +69,7 @@ func buildRouter(
 	producer *kafka.Producer,
 	logger *slog.Logger,
 	reloadFn func() error,
+	llmHandler *llmproxy.Handler,
 ) *chi.Mux {
 	jobHandler := handler.NewJobHandler(reg, s3Client, redisClient, producer, cfg.Server.PriorityHeader, cfg.Server.ConsumerHeader)
 
@@ -89,7 +93,7 @@ func buildRouter(
 	r.Post("/-/reload", handler.NewReloadHandler(reloadFn))
 
 	if reg.HasSyncServices() {
-		syncHandler := handler.NewSyncHandler(reg, s3Client, redisClient, producer, cfg.Server.ConsumerHeader)
+		syncHandler := handler.NewSyncHandler(reg, s3Client, redisClient, producer, cfg.Server.ConsumerHeader, llmHandler)
 		r.Get("/v1/models", handler.ListModels(reg))
 		// Register each configured path exactly. Chi handles {model} parameter
 		// patterns natively. Single-segment paths (e.g. /rerank) are reachable
@@ -167,6 +171,11 @@ func main() {
 		slog.Info("Kafka initialised", "brokers", cfg.Kafka.Brokers)
 	}
 
+	// ── LLM proxy ─────────────────────────────────────────────────────────────
+	providerRegistry := provider.NewRegistry()
+	responseCache := cache.NewRedisCache(redisClient.Raw())
+	llmHandler := llmproxy.New(responseCache, providerRegistry, &http.Client{Timeout: 15 * time.Minute})
+
 	// ── Hot-reload ────────────────────────────────────────────────────────────
 	// reloadFn re-reads the config file, atomically swaps the active router,
 	// and reconciles Kafka consumers (stopping removed, starting added topics).
@@ -180,7 +189,7 @@ func main() {
 			return err
 		}
 		newReg := service.NewRegistry(newCfg.Services)
-		newRouter := buildRouter(newCfg, newReg, s3Client, redisClient, producer, logger, reloadFn)
+		newRouter := buildRouter(newCfg, newReg, s3Client, redisClient, producer, logger, reloadFn, llmHandler)
 		holder.p.Store(newRouter)
 		if consumerManager != nil {
 			consumerManager.Reconcile(newReg)
@@ -190,7 +199,7 @@ func main() {
 	}
 
 	// ── HTTP router ───────────────────────────────────────────────────────────
-	initialRouter := buildRouter(cfg, initialRegistry, s3Client, redisClient, producer, logger, reloadFn)
+	initialRouter := buildRouter(cfg, initialRegistry, s3Client, redisClient, producer, logger, reloadFn, llmHandler)
 	holder.p.Store(initialRouter)
 
 	// ── Result consumers ──────────────────────────────────────────────────────

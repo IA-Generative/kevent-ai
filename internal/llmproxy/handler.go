@@ -1,0 +1,223 @@
+// Package llmproxy implements the LLM proxy handler: cache lookup, provider
+// routing, response translation, and metric emission for JSON LLM requests.
+package llmproxy
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"strconv"
+	"time"
+
+	"kevent/gateway/internal/cache"
+	"kevent/gateway/internal/llmproxy/provider"
+	"kevent/gateway/internal/metrics"
+	"kevent/gateway/internal/service"
+)
+
+// providerLookup is the subset of provider.Registry used by Handler,
+// allowing test injection without depending on the concrete type.
+type providerLookup interface {
+	Get(name string) (provider.Provider, error)
+}
+
+// Handler orchestrates LLM requests: cache → provider → translate → cache-fill.
+type Handler struct {
+	cache      cache.Cache
+	providers  providerLookup
+	httpClient *http.Client
+}
+
+// New creates a Handler. httpClient should have a generous timeout (e.g. 15 min).
+func New(c cache.Cache, p *provider.Registry, hc *http.Client) *Handler {
+	return &Handler{cache: c, providers: p, httpClient: hc}
+}
+
+// ServeJSON handles a JSON-body LLM request. It writes the response to w directly.
+// consumer is the authenticated consumer name (e.g. from X-Consumer-Username); empty
+// means unauthenticated and per-consumer metrics are skipped.
+func (h *Handler) ServeJSON(w http.ResponseWriter, r *http.Request, def *service.Def, body []byte, consumer string) {
+	start := time.Now()
+	prov, err := h.providers.Get(def.Provider)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "unknown provider: "+def.Provider)
+		return
+	}
+
+	// Honour Cache-Control: no-cache from client.
+	noCache := r.Header.Get("Cache-Control") == "no-cache"
+
+	// ── Cache lookup ──────────────────────────────────────────────────────────
+	var cacheKey string
+	var cacheable bool
+	if !noCache && def.ResponseCacheTTL > 0 {
+		var keyErr error
+		cacheKey, cacheable, keyErr = cache.Key(def.Provider, def.Model, body)
+		if keyErr != nil {
+			slog.WarnContext(r.Context(), "llm cache key error", "error", keyErr)
+			metrics.CacheErrorsTotal.WithLabelValues(def.Type, def.Model, "key").Inc()
+		}
+	}
+
+	if cacheable && cacheKey != "" {
+		entry, hit, err := h.cache.Get(r.Context(), cacheKey)
+		if err != nil {
+			slog.WarnContext(r.Context(), "llm cache get error", "error", err)
+			metrics.CacheErrorsTotal.WithLabelValues(def.Type, def.Model, "get").Inc()
+		} else if hit {
+			metrics.CacheHitsTotal.WithLabelValues(def.Type, def.Model).Inc()
+			usage := emitTokenMetrics(def, entry.Body)
+			metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, "cache", "200").Inc()
+			metrics.LLMRequestDuration.WithLabelValues(def.Type, def.Model, "cache").Observe(time.Since(start).Seconds())
+			if consumer != "" && usage != nil {
+				metrics.LLMConsumerRequestsTotal.WithLabelValues(def.Type, def.Model, consumer, "200").Inc()
+				metrics.LLMConsumerTokensTotal.WithLabelValues(def.Type, def.Model, consumer, "prompt").Add(float64(usage.PromptTokens))
+				metrics.LLMConsumerTokensTotal.WithLabelValues(def.Type, def.Model, consumer, "completion").Add(float64(usage.CompletionTokens))
+			}
+			w.Header().Set("Content-Type", entry.ContentType)
+			w.Header().Set("X-Cache", "HIT")
+			w.WriteHeader(entry.StatusCode)
+			_, _ = w.Write(entry.Body)
+			return
+		}
+		metrics.CacheMissesTotal.WithLabelValues(def.Type, def.Model).Inc()
+	}
+
+	// ── Rewrite model alias → backend model ──────────────────────────────────
+	// Cache key is derived from the alias (def.Model); the backend receives the
+	// real model name. Rewrite happens after key derivation so cache hits are
+	// keyed on the alias, not the backend identifier.
+	upstreamBody := body
+	if def.BackendModel != "" {
+		var rewriteErr error
+		upstreamBody, rewriteErr = rewriteBodyModel(body, def.BackendModel)
+		if rewriteErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to rewrite model field: "+rewriteErr.Error())
+			return
+		}
+	}
+
+	// ── Forward to provider ───────────────────────────────────────────────────
+	upstreamReq, err := prov.BuildRequest(r.Context(), def, upstreamBody, r.URL.Path)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to build upstream request: "+err.Error())
+		return
+	}
+
+	resp, err := h.httpClient.Do(upstreamReq)
+	if err != nil {
+		metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, def.Provider, "502").Inc()
+		writeError(w, http.StatusBadGateway, "upstream error: "+err.Error())
+		return
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, def.Provider, "502").Inc()
+		writeError(w, http.StatusBadGateway, "failed to read upstream response")
+		return
+	}
+
+	// ── Translate response ────────────────────────────────────────────────────
+	finalStatus, finalBody, usage, err := prov.TranslateResponse(r.Context(), resp.StatusCode, resp.Header, respBody)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "llm response translation failed", "provider", def.Provider, "error", err)
+		metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, def.Provider, "500").Inc()
+		writeError(w, http.StatusInternalServerError, "failed to translate provider response")
+		return
+	}
+
+	statusStr := strconv.Itoa(finalStatus)
+	metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, def.Provider, statusStr).Inc()
+	metrics.LLMRequestDuration.WithLabelValues(def.Type, def.Model, def.Provider).Observe(time.Since(start).Seconds())
+
+	if usage != nil {
+		metrics.LLMTokensTotal.WithLabelValues(def.Type, def.Model, "prompt").Add(float64(usage.PromptTokens))
+		metrics.LLMTokensTotal.WithLabelValues(def.Type, def.Model, "completion").Add(float64(usage.CompletionTokens))
+		if consumer != "" {
+			metrics.LLMConsumerRequestsTotal.WithLabelValues(def.Type, def.Model, consumer, statusStr).Inc()
+			metrics.LLMConsumerTokensTotal.WithLabelValues(def.Type, def.Model, consumer, "prompt").Add(float64(usage.PromptTokens))
+			metrics.LLMConsumerTokensTotal.WithLabelValues(def.Type, def.Model, consumer, "completion").Add(float64(usage.CompletionTokens))
+		}
+	}
+
+	// ── Cache-fill (only 200 responses, non-streaming) ────────────────────────
+	if cacheable && cacheKey != "" && finalStatus == http.StatusOK {
+		ct := resp.Header.Get("Content-Type")
+		if ct == "" {
+			ct = "application/json"
+		}
+		entry := &cache.Entry{
+			Body:        finalBody,
+			ContentType: ct,
+			StatusCode:  finalStatus,
+		}
+		if err := h.cache.Set(context.Background(), cacheKey, entry, def.ResponseCacheTTL); err != nil {
+			slog.WarnContext(r.Context(), "llm cache set error", "error", err)
+			metrics.CacheErrorsTotal.WithLabelValues(def.Type, def.Model, "set").Inc()
+		}
+	}
+
+	// ── Write response ────────────────────────────────────────────────────────
+	ct := resp.Header.Get("Content-Type")
+	if ct == "" {
+		ct = "application/json"
+	}
+	w.Header().Set("Content-Type", ct)
+	w.Header().Set("X-Cache", "MISS")
+	w.WriteHeader(finalStatus)
+	_, _ = w.Write(finalBody)
+}
+
+func emitTokenMetrics(def *service.Def, body []byte) *provider.Usage {
+	var resp struct {
+		Usage struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil
+	}
+	if resp.Usage.PromptTokens > 0 {
+		metrics.LLMTokensTotal.WithLabelValues(def.Type, def.Model, "prompt").Add(float64(resp.Usage.PromptTokens))
+	}
+	if resp.Usage.CompletionTokens > 0 {
+		metrics.LLMTokensTotal.WithLabelValues(def.Type, def.Model, "completion").Add(float64(resp.Usage.CompletionTokens))
+	}
+	return &provider.Usage{
+		PromptTokens:     resp.Usage.PromptTokens,
+		CompletionTokens: resp.Usage.CompletionTokens,
+	}
+}
+
+// rewriteBodyModel replaces the "model" field in a JSON body with newModel.
+// The rest of the body is preserved verbatim.
+func rewriteBodyModel(body []byte, newModel string) ([]byte, error) {
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("rewrite model: unmarshal: %w", err)
+	}
+	raw["model"] = newModel
+	out, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("rewrite model: marshal: %w", err)
+	}
+	return out, nil
+}
+
+func writeError(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	body, _ := json.Marshal(map[string]any{
+		"error": map[string]any{
+			"message": msg,
+			"type":    fmt.Sprintf("http_%d", status),
+		},
+	})
+	_, _ = w.Write(body)
+}

@@ -286,3 +286,132 @@ func TestRouteAsync_NoDefaultMultipleModels(t *testing.T) {
 		t.Error("expected error when multiple models and no default")
 	}
 }
+
+// ── wildcard routing ─────────────────────────────────────────────────────────
+
+func wildcardLLMConfig(model string, isDefault bool) config.ServiceConfig {
+	return config.ServiceConfig{
+		Type:         "llm",
+		Model:        model,
+		Default:      isDefault,
+		Provider:     "passthrough",
+		InferenceURL: "http://vllm.svc:8000",
+		Operations:   map[string][]string{"proxy": {"/v1/*"}},
+	}
+}
+
+func TestRouteSync_Wildcard_MatchesAnySubPath(t *testing.T) {
+	reg := service.NewRegistry([]config.ServiceConfig{wildcardLLMConfig("gpt-4o", false)})
+
+	paths := []string{
+		"/v1/chat/completions",
+		"/v1/completions",
+		"/v1/embeddings",
+		"/v1/responses",
+		"/v1/audio/speech",
+	}
+	for _, p := range paths {
+		def, err := reg.RouteSync(p, "gpt-4o")
+		if err != nil {
+			t.Errorf("RouteSync(%q) failed: %v", p, err)
+			continue
+		}
+		if def.Model != "gpt-4o" {
+			t.Errorf("RouteSync(%q): expected model gpt-4o, got %q", p, def.Model)
+		}
+	}
+}
+
+func TestRouteSync_Wildcard_DoesNotMatchDifferentPrefix(t *testing.T) {
+	reg := service.NewRegistry([]config.ServiceConfig{wildcardLLMConfig("gpt-4o", false)})
+
+	_, err := reg.RouteSync("/v2/chat/completions", "gpt-4o")
+	if err == nil {
+		t.Error("wildcard /v1/* should not match /v2/chat/completions")
+	}
+}
+
+func TestRouteSync_Wildcard_ExactPathTakesPrecedence(t *testing.T) {
+	// Exact path for audio + wildcard for LLM on the same prefix.
+	cfgs := []config.ServiceConfig{
+		{
+			Type:         "audio",
+			Model:        "whisper-large-v3",
+			Provider:     "",
+			InferenceURL: "http://whisper.svc",
+			SyncTopic:    "jobs.whisper.sync",
+			Operations:   map[string][]string{"transcription": {"/v1/audio/transcriptions"}},
+		},
+		wildcardLLMConfig("gpt-4o", false),
+	}
+	reg := service.NewRegistry(cfgs)
+
+	// Exact path → whisper, not gpt-4o.
+	def, err := reg.RouteSync("/v1/audio/transcriptions", "whisper-large-v3")
+	if err != nil {
+		t.Fatalf("exact path should route to whisper: %v", err)
+	}
+	if def.Model != "whisper-large-v3" {
+		t.Errorf("expected whisper-large-v3, got %q", def.Model)
+	}
+
+	// Other /v1/* path → gpt-4o via wildcard.
+	def, err = reg.RouteSync("/v1/chat/completions", "gpt-4o")
+	if err != nil {
+		t.Fatalf("wildcard should catch /v1/chat/completions: %v", err)
+	}
+	if def.Model != "gpt-4o" {
+		t.Errorf("expected gpt-4o, got %q", def.Model)
+	}
+}
+
+func TestRouteSync_Wildcard_DefaultModel(t *testing.T) {
+	cfgs := []config.ServiceConfig{
+		wildcardLLMConfig("gpt-4o", true),
+		wildcardLLMConfig("gpt-4o-mini", false),
+	}
+	reg := service.NewRegistry(cfgs)
+
+	// No model specified → default selected.
+	def, err := reg.RouteSync("/v1/chat/completions", "")
+	if err != nil {
+		t.Fatalf("wildcard default model resolution failed: %v", err)
+	}
+	if def.Model != "gpt-4o" {
+		t.Errorf("expected default model gpt-4o, got %q", def.Model)
+	}
+}
+
+func TestRouteSync_Wildcard_SingleModel_AutoSelected(t *testing.T) {
+	reg := service.NewRegistry([]config.ServiceConfig{wildcardLLMConfig("gpt-4o", false)})
+
+	// Single model → auto-selected when no model specified.
+	def, err := reg.RouteSync("/v1/embeddings", "")
+	if err != nil {
+		t.Fatalf("single wildcard model should be auto-selected: %v", err)
+	}
+	if def.Model != "gpt-4o" {
+		t.Errorf("expected gpt-4o, got %q", def.Model)
+	}
+}
+
+func TestRegistry_HasSyncServices_WildcardOnly(t *testing.T) {
+	reg := service.NewRegistry([]config.ServiceConfig{wildcardLLMConfig("gpt-4o", false)})
+	if !reg.HasSyncServices() {
+		t.Error("registry with only wildcard routes should report HasSyncServices=true")
+	}
+}
+
+func TestRegistry_SyncPaths_IncludesWildcard(t *testing.T) {
+	reg := service.NewRegistry([]config.ServiceConfig{wildcardLLMConfig("gpt-4o", false)})
+	paths := reg.SyncPaths()
+	found := false
+	for _, p := range paths {
+		if p == "/v1/*" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("SyncPaths should include /v1/*; got %v", paths)
+	}
+}
