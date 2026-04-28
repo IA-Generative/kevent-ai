@@ -15,11 +15,13 @@ kevent-ai consists of two independent components deployed separately:
 
 - Accepts HTTP requests from clients
 - Routes to the correct service based on `service_type`, `model`, and path
+- Enforces per-consumer, per-service rate limits (Redis fixed-window)
 - Uploads input files to S3
 - Persists job records in Redis (TTL 72h)
 - Publishes `InputEvent` messages to Kafka
 - Consumes `ResultEvent` messages and notifies clients
 - Proxies sync requests directly to `inference_url`
+- LLM proxy for JSON requests: provider translation, response caching, consumer token tracking
 
 ### Relay
 
@@ -41,3 +43,11 @@ The gateway is entirely config-driven. See [Service registry](service-registry.m
 ## Priority mechanism
 
 High-priority consumers can preempt async jobs. See [Priority routing](priority.md).
+
+## LLM proxy
+
+JSON requests to services with `provider` set go through a built-in LLM proxy with provider translation (OpenAI ↔ Anthropic), response caching, and consumer metrics. See [LLM proxy](llm-proxy.md).
+
+## Rate limiting
+
+Per-consumer fixed-window rate limiting across all request modes. See [Rate limiting](rate-limiting.md).

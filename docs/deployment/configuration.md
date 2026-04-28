@@ -12,6 +12,7 @@ server:
   idle_timeout: 120s
   consumer_header: ""      # header name for consumer identification (e.g. X-Consumer-Username)
   priority_header: ""      # header name for priority routing (e.g. X-Priority)
+  user_type_header: ""     # header name for user type (e.g. X-User-Type) — rate limiting + LLM metrics
 ```
 
 ### `consumer_header`
@@ -30,6 +31,63 @@ Leave empty in deployments without upstream authentication — no behaviour chan
 When set and a request carries this header, the job is published to `services[].priority_topic` instead of `input_topic`. The relay processes priority-topic jobs via `POST /sync`, which sets `syncPriority++` and defers normal async jobs for its duration.
 
 Leave empty to disable priority routing.
+
+### `user_type_header`
+
+HTTP header injected by the upstream API gateway (e.g. APISIX, OPA) after token introspection. Typical value: `X-User-Type`. The header value (e.g. `sa`, `user`) is used:
+
+- As a label on all LLM request/token/duration metrics (`user_type`)
+- To select the rate limit tier from `rate_limits[service_type][user_type]`
+
+Leave empty to disable user-type differentiation — the `"*"` fallback tier applies for rate limiting.
+
+## Metrics
+
+```yaml
+metrics:
+  top_consumers: 10        # expose top-N consumers in Prometheus; 0 = disabled
+  consumer_labels: false   # direct per-consumer Prometheus labels (< 50 consumers only)
+```
+
+### `top_consumers`
+
+When set to a positive integer, enables Redis sorted-set tracking of per-consumer LLM token usage. A background goroutine reads the top-N consumers every 60 seconds (and immediately at startup) and exposes them as `kevent_llm_consumer_tokens_top{consumer, user_type, type}`.
+
+Only suitable when `server.consumer_header` is configured. Requires `server.user_type_header` for `user_type` labelling.
+
+!!! warning
+    Do **not** use `consumer_labels: true` with more than ~50 consumers. Each consumer creates a new Prometheus time series; at 100 k+ consumers this causes OOM. Use `top_consumers` instead.
+
+## Rate limits
+
+```yaml
+rate_limits:
+  audio:
+    sa:
+      rate: 100
+      period: 1m
+    user:
+      rate: 20
+      period: 1m
+    "*":             # fallback: user_type absent or not listed
+      rate: 10
+      period: 1m
+  ocr:
+    "*":
+      rate: 5
+      period: 1m
+```
+
+Per-consumer, per-service fixed-window rate limiting backed by Redis. Returns `429 Too Many Requests` with a `Retry-After` header when exceeded.
+
+| Field | Description |
+|---|---|
+| Key (e.g. `audio`) | Matches `services[].type` — all models of the same type share the counter |
+| Sub-key (e.g. `sa`) | User type from `server.user_type_header`; `"*"` is the catch-all fallback |
+| `rate` | Maximum requests allowed in the `period` |
+| `period` | Window duration: `30s`, `1m`, `1h`, `24h` |
+
+Leave `rate_limits` empty to disable. See [Rate limiting](../architecture/rate-limiting.md) for details.
 
 ## Kafka
 
@@ -115,6 +173,11 @@ services:
       Authorization: "Bearer ${RERANKER_API_KEY}"
       X-Api-Key: "${BACKEND_KEY}"
 
+    # LLM proxy (optional — activates when provider is set)
+    provider: passthrough          # openai | anthropic | ollama | passthrough
+    backend_model: "meta-llama/Meta-Llama-3-8B-Instruct"  # rewrites model field sent to backend
+    response_cache_ttl: 3600       # seconds; 0 = disabled
+
     # Swagger spec (optional)
     swagger_url: "https://example.com/openapi.json"
     swagger_headers:
@@ -137,7 +200,10 @@ services:
 | `priority_topic` | no | `""` | Kafka topic for priority async jobs |
 | `accepted_exts` | no | any | Allowed file extensions (e.g. `.mp3`) |
 | `max_file_size_mb` | no | `100` | Max upload size in MB |
-| `inference_headers` | no | `{}` | HTTP headers injected on every sync-direct proxy request |
+| `inference_headers` | no | `{}` | HTTP headers injected on every sync-direct / LLM proxy request |
+| `provider` | no | `""` | LLM provider: `openai`, `anthropic`, `ollama`, `passthrough` |
+| `backend_model` | no | `""` | Backend model name — gateway rewrites the `model` field in the request |
+| `response_cache_ttl` | no | `0` | Redis response cache TTL in seconds; `0` = disabled |
 | `swagger_url` | no | `""` | URL to fetch an OpenAPI spec from |
 | `swagger_headers` | no | `{}` | HTTP headers for `swagger_url` fetch |
 

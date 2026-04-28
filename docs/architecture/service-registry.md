@@ -109,6 +109,28 @@ Headers are injected on every outgoing request to the backend. Values support `$
 !!! note
     `inference_headers` only applies to **sync-direct** proxy. Async and sync-over-Kafka jobs run via the relay sidecar (local `127.0.0.1:9000`) and are unaffected.
 
+## LLM proxy services
+
+When `provider` is set, JSON requests bypass the standard direct proxy and go through the built-in LLM proxy:
+
+```yaml
+- type: llm
+  model: "gpt-4o"
+  provider: openai            # openai | anthropic | ollama | passthrough
+  backend_model: ""           # optional: rewrites model field sent to the backend
+  response_cache_ttl: 3600    # seconds; 0 = disabled
+  operations:
+    chat:
+      - "/v1/*"               # wildcard: matches all paths under /v1/
+  inference_url: ""           # empty = provider default (e.g. https://api.openai.com)
+  inference_headers:
+    Authorization: "Bearer ${OPENAI_API_KEY}"
+```
+
+`backend_model` rewrites the `model` field in the JSON body before forwarding — useful for vLLM which expects HuggingFace model IDs. The cache key always uses the alias (`model` from config), not the backend name.
+
+See [LLM proxy](llm-proxy.md) for full documentation.
+
 ## Hot reload
 
 The service registry is reloaded atomically via `POST /-/reload`. The HTTP router is swapped, Kafka consumers are reconciled (stopped for removed topics, started for new ones). Infrastructure (S3, Redis, Kafka connection) is not re-initialised.

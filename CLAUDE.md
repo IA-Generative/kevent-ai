@@ -39,7 +39,7 @@ Images:
 - Gateway:    `ghcr.io/ia-generative/kevent-ai/gateway:vX.Y.Z`
 - Relay: `ghcr.io/ia-generative/kevent-ai/relay:vX.Y.Z`
 
-Current tags: gateway `v0.4.8`, relay `v0.4.5`.
+Current tags: gateway `v0.7.0`, relay `v0.4.5`.
 
 After tagging, also update:
 1. `helm/gateway/values.yaml` → `image.tag`

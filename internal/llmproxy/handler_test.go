@@ -11,8 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus/testutil"
-
 	"kevent/gateway/internal/cache"
 	"kevent/gateway/internal/llmproxy/provider"
 	"kevent/gateway/internal/metrics"
@@ -22,11 +20,19 @@ import (
 // ── in-memory cache ──────────────────────────────────────────────────────────
 
 type memCache struct {
-	mu   sync.Mutex
-	data map[string]*cache.Entry
+	mu     sync.Mutex
+	data   map[string]*cache.Entry
+	setted chan struct{} // closed on first Set; nil = no notification needed
 }
 
 func newMemCache() *memCache { return &memCache{data: make(map[string]*cache.Entry)} }
+
+// withSetNotify returns a new memCache that closes the returned channel on the
+// first successful Set call, allowing tests to wait for async cache-fill.
+func newMemCacheWithNotify() (*memCache, <-chan struct{}) {
+	ch := make(chan struct{})
+	return &memCache{data: make(map[string]*cache.Entry), setted: ch}, ch
+}
 
 func (m *memCache) Get(_ context.Context, key string) (*cache.Entry, bool, error) {
 	m.mu.Lock()
@@ -37,8 +43,13 @@ func (m *memCache) Get(_ context.Context, key string) (*cache.Entry, bool, error
 
 func (m *memCache) Set(_ context.Context, key string, entry *cache.Entry, _ time.Duration) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	ch := m.setted
 	m.data[key] = entry
+	m.setted = nil // only notify once
+	m.mu.Unlock()
+	if ch != nil {
+		close(ch)
+	}
 	return nil
 }
 
@@ -86,9 +97,9 @@ func TestServeJSON_CacheMiss_ThenHit(t *testing.T) {
 	}))
 	defer backend.Close()
 
-	mc := newMemCache()
+	mc, filled := newMemCacheWithNotify()
 	reg := provider.NewRegistry()
-	h := New(mc, reg, &http.Client{Timeout: 5 * time.Second})
+	h := New(mc, reg, &http.Client{Timeout: 5 * time.Second}, "", metrics.NoopTracker{})
 
 	def := llmDef("passthrough", "", 60*time.Second)
 	def.InferenceURL = backend.URL
@@ -100,6 +111,13 @@ func TestServeJSON_CacheMiss_ThenHit(t *testing.T) {
 	}
 	if rr.Header().Get("X-Cache") != "MISS" {
 		t.Errorf("first call: expected X-Cache=MISS, got %q", rr.Header().Get("X-Cache"))
+	}
+
+	// Wait for the async cache-fill goroutine to write the entry.
+	select {
+	case <-filled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for async cache-fill")
 	}
 
 	// Second call: cache hit.
@@ -127,7 +145,7 @@ func TestServeJSON_NoCacheHeader_BypassesCache(t *testing.T) {
 
 	mc := newMemCache()
 	reg := provider.NewRegistry()
-	h := New(mc, reg, &http.Client{Timeout: 5 * time.Second})
+	h := New(mc, reg, &http.Client{Timeout: 5 * time.Second}, "", metrics.NoopTracker{})
 
 	def := llmDef("passthrough", "", 60*time.Second)
 	def.InferenceURL = backend.URL
@@ -153,7 +171,7 @@ func TestServeJSON_Non200NotCached(t *testing.T) {
 
 	mc := newMemCache()
 	reg := provider.NewRegistry()
-	h := New(mc, reg, &http.Client{Timeout: 5 * time.Second})
+	h := New(mc, reg, &http.Client{Timeout: 5 * time.Second}, "", metrics.NoopTracker{})
 
 	def := llmDef("passthrough", "", 60*time.Second)
 	def.InferenceURL = backend.URL
@@ -178,7 +196,7 @@ func TestServeJSON_CacheDisabled_WhenTTLZero(t *testing.T) {
 
 	mc := newMemCache()
 	reg := provider.NewRegistry()
-	h := New(mc, reg, &http.Client{Timeout: 5 * time.Second})
+	h := New(mc, reg, &http.Client{Timeout: 5 * time.Second}, "", metrics.NoopTracker{})
 
 	def := llmDef("passthrough", "", 0) // TTL=0 → no cache
 	def.InferenceURL = backend.URL
@@ -205,7 +223,7 @@ func TestServeJSON_BackendModel_RewrittenInRequest(t *testing.T) {
 	defer backend.Close()
 
 	reg := provider.NewRegistry()
-	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second})
+	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second}, "", metrics.NoopTracker{})
 
 	def := llmDef("passthrough", "meta-llama/Meta-Llama-3-8B-Instruct", 0)
 	def.InferenceURL = backend.URL
@@ -232,7 +250,7 @@ func TestServeJSON_BackendModel_NotRewritten_WhenEmpty(t *testing.T) {
 	defer backend.Close()
 
 	reg := provider.NewRegistry()
-	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second})
+	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second}, "", metrics.NoopTracker{})
 
 	def := llmDef("passthrough", "", 0) // no backend_model
 	def.InferenceURL = backend.URL
@@ -260,7 +278,7 @@ func TestServeJSON_CacheHit_ReturnsCachedBody(t *testing.T) {
 	}, 60*time.Second)
 
 	reg := provider.NewRegistry()
-	h := New(mc, reg, &http.Client{Timeout: 5 * time.Second})
+	h := New(mc, reg, &http.Client{Timeout: 5 * time.Second}, "", metrics.NoopTracker{})
 
 	def := llmDef("passthrough", "", 60*time.Second)
 
@@ -278,7 +296,7 @@ func TestServeJSON_CacheHit_ReturnsCachedBody(t *testing.T) {
 
 func TestServeJSON_UnknownProvider_Returns500(t *testing.T) {
 	reg := provider.NewRegistry()
-	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second})
+	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second}, "", metrics.NoopTracker{})
 
 	def := &service.Def{
 		Type:     "llm",
@@ -318,31 +336,58 @@ func TestRewriteBodyModel_InvalidJSON(t *testing.T) {
 	}
 }
 
+// ── consumer tracker ─────────────────────────────────────────────────────────
+
+// testTracker records Track calls for assertion in tests.
+type testTracker struct {
+	mu   sync.Mutex
+	calls []trackCall
+}
+
+type trackCall struct {
+	consumer, userType, tokenType string
+	count                         int
+}
+
+func (t *testTracker) Track(_ context.Context, consumer, userType, tokenType string, count int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.calls = append(t.calls, trackCall{consumer, userType, tokenType, count})
+}
+
+func (t *testTracker) sum(consumer, tokenType string) int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	total := 0
+	for _, c := range t.calls {
+		if c.consumer == consumer && c.tokenType == tokenType {
+			total += c.count
+		}
+	}
+	return total
+}
+
 // ── consumer metrics ─────────────────────────────────────────────────────────
 
 func TestServeJSON_ConsumerMetrics_EmittedOnBackendResponse(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		// Response with known token counts.
 		io.WriteString(w, `{"id":"c1","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"Hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":3}}`)
 	}))
 	defer backend.Close()
 
-	mc := newMemCache()
+	tracker := &testTracker{}
 	reg := provider.NewRegistry()
-	h := New(mc, reg, &http.Client{Timeout: 5 * time.Second})
+	h := New(newMemCache(), reg, &http.Client{Timeout: 5 * time.Second}, "", tracker)
 
 	def := llmDef("passthrough", "", 0)
 	def.InferenceURL = backend.URL
 
-	// Prometheus counters are global — read before and after to check the delta.
-	before := consumerTokens(def, "alice", "prompt")
 	doServeJSONAs(h, def, chatBody, "alice")
-	after := consumerTokens(def, "alice", "prompt")
 
-	if after-before != 7 {
-		t.Errorf("expected +7 prompt tokens for alice, got delta=%v", after-before)
+	if got := tracker.sum("alice", "prompt"); got != 7 {
+		t.Errorf("expected 7 prompt tokens tracked for alice, got %d", got)
 	}
 }
 
@@ -355,17 +400,16 @@ func TestServeJSON_ConsumerMetrics_EmittedOnCacheHit(t *testing.T) {
 		StatusCode:  200,
 	}, 60*time.Second)
 
+	tracker := &testTracker{}
 	reg := provider.NewRegistry()
-	h := New(mc, reg, &http.Client{Timeout: 5 * time.Second})
+	h := New(mc, reg, &http.Client{Timeout: 5 * time.Second}, "", tracker)
 
 	def := llmDef("passthrough", "", 60*time.Second)
 
-	before := consumerTokens(def, "bob", "completion")
 	doServeJSONAs(h, def, chatBody, "bob")
-	after := consumerTokens(def, "bob", "completion")
 
-	if after-before != 2 {
-		t.Errorf("expected +2 completion tokens for bob on cache hit, got delta=%v", after-before)
+	if got := tracker.sum("bob", "completion"); got != 2 {
+		t.Errorf("expected 2 completion tokens tracked for bob on cache hit, got %d", got)
 	}
 }
 
@@ -377,24 +421,18 @@ func TestServeJSON_ConsumerMetrics_SkippedWhenNoConsumer(t *testing.T) {
 	}))
 	defer backend.Close()
 
+	tracker := &testTracker{}
 	reg := provider.NewRegistry()
-	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second})
+	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second}, "", tracker)
 
 	def := llmDef("passthrough", "", 0)
 	def.InferenceURL = backend.URL
 
-	// Empty consumer — should not panic or emit consumer metrics.
 	rr := doServeJSONAs(h, def, chatBody, "")
 	if rr.Code != http.StatusOK {
 		t.Errorf("expected 200, got %d", rr.Code)
 	}
-}
-
-// consumerTokens returns the current value of the consumer token counter for
-// the given def, consumer, and token type. Tests use before/after deltas to
-// assert on increments without resetting global Prometheus state.
-func consumerTokens(def *service.Def, consumer, tokenType string) float64 {
-	return testutil.ToFloat64(
-		metrics.LLMConsumerTokensTotal.WithLabelValues(def.Type, def.Model, consumer, tokenType),
-	)
+	if len(tracker.calls) != 0 {
+		t.Errorf("expected no tracker calls for empty consumer, got %d", len(tracker.calls))
+	}
 }

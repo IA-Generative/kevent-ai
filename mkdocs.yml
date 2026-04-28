@@ -72,6 +72,8 @@ nav:
       - Request flows: architecture/request-flows.md
       - Service registry: architecture/service-registry.md
       - Priority routing: architecture/priority.md
+      - LLM proxy: architecture/llm-proxy.md
+      - Rate limiting: architecture/rate-limiting.md
   - Deployment:
       - Helm chart: deployment/helm.md
       - Configuration reference: deployment/configuration.md
@@ -84,6 +86,8 @@ nav:
       - Gateway — Kafka Publish Errors: runbooks/KeventGatewayKafkaPublishErrors.md
       - Gateway — S3 Errors: runbooks/KeventGatewayS3Errors.md
       - Gateway — Sync Jobs In-Flight High: runbooks/KeventGatewaySyncJobsInFlightHigh.md
+      - Gateway — Rate Limit High Rejection Rate: runbooks/KeventGatewayRateLimitHighRejectionRate.md
+      - Gateway — Rate Limit Errors: runbooks/KeventGatewayRateLimitErrors.md
       - Relay — Inference Slow: runbooks/KeventRelayInferenceSlow.md
       - Relay — Job Failure Rate: runbooks/KeventRelayJobFailureRate.md
       - Relay — S3 Errors: runbooks/KeventRelayS3Errors.md

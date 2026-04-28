@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"kevent/gateway/internal/cache"
@@ -26,20 +27,34 @@ type providerLookup interface {
 
 // Handler orchestrates LLM requests: cache → provider → translate → cache-fill.
 type Handler struct {
-	cache      cache.Cache
-	providers  providerLookup
-	httpClient *http.Client
+	cache          cache.Cache
+	providers      providerLookup
+	httpClient     *http.Client
+	userTypeHeader string // HTTP header carrying consumer type (e.g. "X-User-Type")
+	tracker        metrics.ConsumerTracker
 }
 
 // New creates a Handler. httpClient should have a generous timeout (e.g. 15 min).
-func New(c cache.Cache, p *provider.Registry, hc *http.Client) *Handler {
-	return &Handler{cache: c, providers: p, httpClient: hc}
+// userTypeHeader is the request header name for the consumer type (e.g. "X-User-Type");
+// empty disables user_type labelling. tracker records per-consumer token usage.
+func New(c cache.Cache, p *provider.Registry, hc *http.Client, userTypeHeader string, tracker metrics.ConsumerTracker) *Handler {
+	return &Handler{
+		cache:          c,
+		providers:      p,
+		httpClient:     hc,
+		userTypeHeader: userTypeHeader,
+		tracker:        tracker,
+	}
 }
 
 // ServeJSON handles a JSON-body LLM request. It writes the response to w directly.
 // consumer is the authenticated consumer name (e.g. from X-Consumer-Username); empty
-// means unauthenticated and per-consumer metrics are skipped.
+// means unauthenticated and per-consumer tracking is skipped.
 func (h *Handler) ServeJSON(w http.ResponseWriter, r *http.Request, def *service.Def, body []byte, consumer string) {
+	userType := ""
+	if h.userTypeHeader != "" {
+		userType = r.Header.Get(h.userTypeHeader)
+	}
 	start := time.Now()
 	prov, err := h.providers.Get(def.Provider)
 	if err != nil {
@@ -47,8 +62,9 @@ func (h *Handler) ServeJSON(w http.ResponseWriter, r *http.Request, def *service
 		return
 	}
 
-	// Honour Cache-Control: no-cache from client.
-	noCache := r.Header.Get("Cache-Control") == "no-cache"
+	// Honour Cache-Control: no-cache from client (may appear alongside other
+	// directives, e.g. "no-cache, no-store").
+	noCache := strings.Contains(r.Header.Get("Cache-Control"), "no-cache")
 
 	// ── Cache lookup ──────────────────────────────────────────────────────────
 	var cacheKey string
@@ -69,13 +85,14 @@ func (h *Handler) ServeJSON(w http.ResponseWriter, r *http.Request, def *service
 			metrics.CacheErrorsTotal.WithLabelValues(def.Type, def.Model, "get").Inc()
 		} else if hit {
 			metrics.CacheHitsTotal.WithLabelValues(def.Type, def.Model).Inc()
-			usage := emitTokenMetrics(def, entry.Body)
-			metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, "cache", "200").Inc()
-			metrics.LLMRequestDuration.WithLabelValues(def.Type, def.Model, "cache").Observe(time.Since(start).Seconds())
+			// Tokens are counted on every delivery (including cache hits) for billing purposes.
+			usage := emitTokenMetrics(def, userType, entry.Body)
+			metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, "cache", userType, "200").Inc()
+			metrics.LLMRequestDuration.WithLabelValues(def.Type, def.Model, "cache", userType).Observe(time.Since(start).Seconds())
 			if consumer != "" && usage != nil {
-				metrics.LLMConsumerRequestsTotal.WithLabelValues(def.Type, def.Model, consumer, "200").Inc()
-				metrics.LLMConsumerTokensTotal.WithLabelValues(def.Type, def.Model, consumer, "prompt").Add(float64(usage.PromptTokens))
-				metrics.LLMConsumerTokensTotal.WithLabelValues(def.Type, def.Model, consumer, "completion").Add(float64(usage.CompletionTokens))
+				tCtx := context.WithoutCancel(r.Context())
+				h.tracker.Track(tCtx, consumer, userType, "prompt", usage.PromptTokens)
+				h.tracker.Track(tCtx, consumer, userType, "completion", usage.CompletionTokens)
 			}
 			w.Header().Set("Content-Type", entry.ContentType)
 			w.Header().Set("X-Cache", "HIT")
@@ -109,7 +126,7 @@ func (h *Handler) ServeJSON(w http.ResponseWriter, r *http.Request, def *service
 
 	resp, err := h.httpClient.Do(upstreamReq)
 	if err != nil {
-		metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, def.Provider, "502").Inc()
+		metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, def.Provider, userType, "502").Inc()
 		writeError(w, http.StatusBadGateway, "upstream error: "+err.Error())
 		return
 	}
@@ -117,7 +134,7 @@ func (h *Handler) ServeJSON(w http.ResponseWriter, r *http.Request, def *service
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, def.Provider, "502").Inc()
+		metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, def.Provider, userType, "502").Inc()
 		writeError(w, http.StatusBadGateway, "failed to read upstream response")
 		return
 	}
@@ -126,43 +143,30 @@ func (h *Handler) ServeJSON(w http.ResponseWriter, r *http.Request, def *service
 	finalStatus, finalBody, usage, err := prov.TranslateResponse(r.Context(), resp.StatusCode, resp.Header, respBody)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "llm response translation failed", "provider", def.Provider, "error", err)
-		metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, def.Provider, "500").Inc()
+		metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, def.Provider, userType, "500").Inc()
 		writeError(w, http.StatusInternalServerError, "failed to translate provider response")
 		return
 	}
 
 	statusStr := strconv.Itoa(finalStatus)
-	metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, def.Provider, statusStr).Inc()
-	metrics.LLMRequestDuration.WithLabelValues(def.Type, def.Model, def.Provider).Observe(time.Since(start).Seconds())
+	metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, def.Provider, userType, statusStr).Inc()
+	metrics.LLMRequestDuration.WithLabelValues(def.Type, def.Model, def.Provider, userType).Observe(time.Since(start).Seconds())
 
 	if usage != nil {
-		metrics.LLMTokensTotal.WithLabelValues(def.Type, def.Model, "prompt").Add(float64(usage.PromptTokens))
-		metrics.LLMTokensTotal.WithLabelValues(def.Type, def.Model, "completion").Add(float64(usage.CompletionTokens))
+		total := usage.PromptTokens + usage.CompletionTokens
+		metrics.LLMTokensTotal.WithLabelValues(def.Type, def.Model, userType, "prompt").Add(float64(usage.PromptTokens))
+		metrics.LLMTokensTotal.WithLabelValues(def.Type, def.Model, userType, "completion").Add(float64(usage.CompletionTokens))
+		if total > 0 {
+			metrics.LLMTokensPerRequest.WithLabelValues(def.Type, def.Model, userType).Observe(float64(total))
+		}
 		if consumer != "" {
-			metrics.LLMConsumerRequestsTotal.WithLabelValues(def.Type, def.Model, consumer, statusStr).Inc()
-			metrics.LLMConsumerTokensTotal.WithLabelValues(def.Type, def.Model, consumer, "prompt").Add(float64(usage.PromptTokens))
-			metrics.LLMConsumerTokensTotal.WithLabelValues(def.Type, def.Model, consumer, "completion").Add(float64(usage.CompletionTokens))
+			tCtx := context.WithoutCancel(r.Context())
+			h.tracker.Track(tCtx, consumer, userType, "prompt", usage.PromptTokens)
+			h.tracker.Track(tCtx, consumer, userType, "completion", usage.CompletionTokens)
 		}
 	}
 
-	// ── Cache-fill (only 200 responses, non-streaming) ────────────────────────
-	if cacheable && cacheKey != "" && finalStatus == http.StatusOK {
-		ct := resp.Header.Get("Content-Type")
-		if ct == "" {
-			ct = "application/json"
-		}
-		entry := &cache.Entry{
-			Body:        finalBody,
-			ContentType: ct,
-			StatusCode:  finalStatus,
-		}
-		if err := h.cache.Set(context.Background(), cacheKey, entry, def.ResponseCacheTTL); err != nil {
-			slog.WarnContext(r.Context(), "llm cache set error", "error", err)
-			metrics.CacheErrorsTotal.WithLabelValues(def.Type, def.Model, "set").Inc()
-		}
-	}
-
-	// ── Write response ────────────────────────────────────────────────────────
+	// ── Write response (before cache-fill to avoid blocking the client) ───────
 	ct := resp.Header.Get("Content-Type")
 	if ct == "" {
 		ct = "application/json"
@@ -171,9 +175,27 @@ func (h *Handler) ServeJSON(w http.ResponseWriter, r *http.Request, def *service
 	w.Header().Set("X-Cache", "MISS")
 	w.WriteHeader(finalStatus)
 	_, _ = w.Write(finalBody)
+
+	// ── Cache-fill async (only 200 responses, non-streaming) ─────────────────
+	if cacheable && cacheKey != "" && finalStatus == http.StatusOK {
+		entry := &cache.Entry{
+			Body:        finalBody,
+			ContentType: "application/json",
+			StatusCode:  finalStatus,
+		}
+		ttl := def.ResponseCacheTTL
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := h.cache.Set(ctx, cacheKey, entry, ttl); err != nil {
+				slog.Warn("llm cache set error", "error", err)
+				metrics.CacheErrorsTotal.WithLabelValues(def.Type, def.Model, "set").Inc()
+			}
+		}()
+	}
 }
 
-func emitTokenMetrics(def *service.Def, body []byte) *provider.Usage {
+func emitTokenMetrics(def *service.Def, userType string, body []byte) *provider.Usage {
 	var resp struct {
 		Usage struct {
 			PromptTokens     int `json:"prompt_tokens"`
@@ -184,10 +206,14 @@ func emitTokenMetrics(def *service.Def, body []byte) *provider.Usage {
 		return nil
 	}
 	if resp.Usage.PromptTokens > 0 {
-		metrics.LLMTokensTotal.WithLabelValues(def.Type, def.Model, "prompt").Add(float64(resp.Usage.PromptTokens))
+		metrics.LLMTokensTotal.WithLabelValues(def.Type, def.Model, userType, "prompt").Add(float64(resp.Usage.PromptTokens))
 	}
 	if resp.Usage.CompletionTokens > 0 {
-		metrics.LLMTokensTotal.WithLabelValues(def.Type, def.Model, "completion").Add(float64(resp.Usage.CompletionTokens))
+		metrics.LLMTokensTotal.WithLabelValues(def.Type, def.Model, userType, "completion").Add(float64(resp.Usage.CompletionTokens))
+	}
+	total := resp.Usage.PromptTokens + resp.Usage.CompletionTokens
+	if total > 0 {
+		metrics.LLMTokensPerRequest.WithLabelValues(def.Type, def.Model, userType).Observe(float64(total))
 	}
 	return &provider.Usage{
 		PromptTokens:     resp.Usage.PromptTokens,

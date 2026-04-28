@@ -16,6 +16,55 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Gateway
 
+### [v0.7.0] — 2026-04-28
+
+#### Added
+
+**LLM proxy** (`internal/llmproxy/`, `internal/cache/`)
+- Pluggable provider interface with four built-in implementations: `openai`, `anthropic` (full OpenAI ↔ Anthropic Messages API translation), `ollama`, and `passthrough` (vLLM and other OpenAI-compatible backends)
+- Model aliases: clients send a short alias in the `model` field; gateway rewrites to `backend_model` before forwarding — e.g. `"gpt-4o"` → `"meta-llama/Meta-Llama-3-8B-Instruct"` for vLLM
+- Redis response cache: exact-match keyed on SHA-256 of canonical request body; configurable TTL per service (`response_cache_ttl`); `stream=true` and `Cache-Control: no-cache` (multi-directive) bypass the cache; `X-Cache: HIT / MISS` on every LLM response; async cache-fill (5 s timeout, never blocks the HTTP response)
+- Dynamic wildcard routing: operation paths ending with `/*` (e.g. `/v1/*`) register as chi wildcard routes — LLM services can proxy all OpenAI-compatible endpoints without enumerating them in config
+- New config fields per service: `provider`, `backend_model`, `response_cache_ttl`
+
+**Rate limiting** (`internal/ratelimit/`)
+- Per-consumer Redis fixed-window rate limiting keyed by `{consumer}:{service_type}:{user_type}` — multi-model services share a single counter
+- Applies at job submission (async) and sync-direct proxy; returns `429` with `Retry-After` header
+- New top-level config block: `rate_limits[service_type][user_type]: {rate: N, period: Xs}`
+- New server config: `user_type_header` — HTTP header injected by APISIX after token introspection (e.g. `X-User-Type`); used for rate limiting and metric labelling
+- PrometheusRule: `KeventGatewayRateLimitHighRejectionRate` (> 20%, warning) and `KeventGatewayRateLimitErrors`
+- New Grafana dashboard section: "Gateway — Rate Limiting" (5 panels including distinct consumer count via PromQL `group` trick)
+
+**Consumer metrics** (`internal/metrics/consumer_tracker.go`)
+- `ConsumerTracker` interface backed by Redis sorted sets (`ZINCRBY` on `llm:consumer:tokens:{user_type}:{token_type}`); top-N consumers loaded from Redis and exposed as `kevent_llm_consumer_tokens_top{consumer, user_type, type}`
+- Enabled via `metrics.top_consumers: N`; refreshed every 60 s and immediately at startup
+- `NoopTracker` used when tracking is disabled (zero overhead)
+
+**New Prometheus metrics (10)**
+
+| Metric | Labels |
+|---|---|
+| `kevent_llm_requests_total` | `service_type, model, provider, user_type, status` |
+| `kevent_llm_request_duration_seconds` | `service_type, model, provider, user_type` |
+| `kevent_llm_tokens_total` | `service_type, model, user_type, type` |
+| `kevent_llm_tokens_per_request` | `service_type, model, user_type` (histogram) |
+| `kevent_llm_consumer_tokens_top` | `consumer, user_type, type` (top-N gauge) |
+| `kevent_cache_hits_total` | `service_type, model` |
+| `kevent_cache_misses_total` | `service_type, model` |
+| `kevent_cache_errors_total` | `service_type, model, op` |
+| `kevent_ratelimit_requests_total` | `service_type, user_type, result` |
+| `kevent_ratelimit_consumer_hits_total` | `service_type, user_type` |
+| `kevent_ratelimit_errors_total` | `service_type` |
+
+#### Fixed
+- Cache-fill goroutine is now launched after `w.Write` — cache population never adds latency to the HTTP response
+- `Cache-Control: no-cache` parsed with `strings.Contains` to correctly handle multi-directive values (e.g. `no-cache, no-store`)
+- `IsLLM()` uses `Provider != ""` only; was incorrectly also triggering on `ResponseCacheTTL > 0`
+- `api_key` removed from `ServiceConfig` — credentials belong in `inference_headers` (`Authorization: Bearer …`)
+- Consumer `Track()` calls use `context.WithoutCancel` — billing is recorded even when the HTTP client disconnects mid-request
+
+---
+
 ### [v0.6.4] — 2026-04-21
 
 #### Changed

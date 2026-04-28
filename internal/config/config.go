@@ -16,6 +16,18 @@ type Config struct {
 	Redis      RedisConfig      `yaml:"redis"`
 	Services   []ServiceConfig  `yaml:"services"`
 	Encryption EncryptionConfig `yaml:"encryption"`
+	Metrics    MetricsConfig    `yaml:"metrics"`
+}
+
+// MetricsConfig controls optional high-cardinality metric features.
+type MetricsConfig struct {
+	// TopConsumers sets how many top consumers to expose in Prometheus via a
+	// Redis sorted-set backed GaugeVec, refreshed every 60s. 0 = disabled.
+	TopConsumers int `yaml:"top_consumers"`
+	// ConsumerLabels enables direct per-consumer Prometheus labels.
+	// Only suitable for deployments with a small, bounded number of consumers
+	// (< 50). Disabled by default — use TopConsumers for large deployments.
+	ConsumerLabels bool `yaml:"consumer_labels"`
 }
 
 type EncryptionConfig struct {
@@ -45,6 +57,11 @@ type ServerConfig struct {
 	//     present, the job's consumer_name must match or 404 is returned
 	// Leave empty in deployments without upstream authentication.
 	ConsumerHeader string `yaml:"consumer_header"`
+	// UserTypeHeader is the HTTP header carrying the consumer type (e.g. "sa" or
+	// "user"), typically set by the APISIX Lua plugin after token introspection
+	// (e.g. "X-User-Type"). Used to label LLM token and request metrics by
+	// consumer category. Leave empty to disable user_type labelling.
+	UserTypeHeader string `yaml:"user_type_header"`
 }
 
 type KafkaConfig struct {
@@ -141,9 +158,6 @@ type ServiceConfig struct {
 	// through the LLM proxy handler instead of the bare direct proxy.
 	// Valid values: "openai", "anthropic", "ollama", "passthrough". Empty = legacy direct proxy.
 	Provider string `yaml:"provider"`
-	// APIKey is the server-side credential for the provider. Supports ${VAR} expansion.
-	// Not forwarded from the client — kevent injects it at the gateway.
-	APIKey string `yaml:"api_key"`
 	// ResponseCacheTTL is the TTL in seconds for caching LLM responses in Redis.
 	// 0 = caching disabled. Only applied when Provider is set.
 	ResponseCacheTTL int `yaml:"response_cache_ttl"`

@@ -17,19 +17,26 @@ curl https://your-gateway/jobs/audio/{job_id}
 curl -X POST https://your-gateway/v1/audio/transcriptions \
   -F file=@audio.wav \
   -F model=whisper-large-v3
+
+# LLM proxy (OpenAI SDK compatible)
+curl -X POST https://your-gateway/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-4o","messages":[{"role":"user","content":"Hello"}]}'
 ```
 
-## Two operating modes
+## Operating modes
 
 | Mode | Endpoint | When to use |
 |---|---|---|
 | **Async** | `POST /jobs/{service_type}` | Large files, batch workloads, fire-and-forget |
 | **Sync** | `POST /v1/*` | Low-latency, OpenAI-compatible clients |
+| **LLM proxy** | `POST /v1/*` (JSON + `provider` set) | LLM APIs: OpenAI, Anthropic, vLLM, Ollama |
 
 Sync mode has two sub-modes depending on config:
 
 - **Direct proxy** — HTTP proxy to `inference_url` (JSON or multipart without `sync_topic`)
 - **Sync-over-Kafka** — priority Kafka round-trip with keep-alive response (multipart + `sync_topic`)
+- **LLM proxy** — provider translation, response caching, consumer metrics (JSON + `provider` in config)
 
 ## Components
 
@@ -48,7 +55,9 @@ The **relay** runs as a sidecar in each Knative InferenceService pod. It consume
 - Hot-reload via `POST /-/reload` — update config without pod restart
 - Priority routing — dedicated Kafka topic for SA/priority consumers
 - Consumer tracking — link jobs to API consumers via a configurable header
-- Prometheus metrics — requests, latency, Kafka errors, Redis operations, jobs by consumer
+- **LLM proxy** — built-in OpenAI/Anthropic/Ollama/passthrough proxy with response caching and consumer token metrics
+- **Rate limiting** — per-consumer Redis fixed-window limits, configurable per service type and user type
+- Prometheus metrics — requests, latency, tokens, cache hits, rate limits, top-N consumer usage
 - OpenAPI 3.0 spec generated at runtime from the live registry
 - AES-256-GCM at-rest encryption for S3 objects
 

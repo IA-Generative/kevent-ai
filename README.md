@@ -1,12 +1,13 @@
 # kevent-gateway
 
-API Gateway pour les services d'inférence KServe. Deux modes de fonctionnement coexistent pour chaque service :
+API Gateway pour les services d'inférence KServe. Plusieurs modes de fonctionnement coexistent pour chaque service :
 
 | Mode | Endpoints | Quand l'utiliser |
 |---|---|---|
 | **Async** (Kafka) | `POST /jobs/{service_type}`, `GET /jobs/{service_type}/{id}`, `GET /jobs` | Fichiers lourds, traitements longs (>30s), besoin de webhook |
 | **Sync-over-Kafka** | `POST /v1/*` multipart + `sync_topic` configuré | Latence maîtrisée, priorité sur les jobs async, fichiers lourds |
 | **Sync direct proxy** | `POST /v1/*` (JSON ou multipart sans `sync_topic`) | Intégration SDK OpenAI, services sans Kafka (reranker, embeddings…) |
+| **LLM proxy** | `POST /v1/*` JSON + `provider` configuré | Proxying LLM (OpenAI, Anthropic, Ollama, vLLM) avec cache et métriques |
 
 ## Architecture
 
@@ -79,6 +80,22 @@ Gateway → HTTP proxy → inference_url + chemin d'origine → modèle GPU
 Client
 ```
 
+**C — LLM proxy** (requête `application/json` + service avec `provider` configuré) :
+```
+Client  POST /v1/chat/completions  {"model": "my-alias", ...}
+  │
+  ▼
+Gateway — LLM proxy
+  ├── Vérification cache Redis (clé SHA-256 du body canonique)  ── HIT → réponse + X-Cache: HIT
+  │                                                                            ↑
+  ├── MISS → réécriture model alias → backend_model                    (async goroutine, 5s)
+  ├── Traduction requête (si anthropic : OpenAI → Messages API)
+  ├── Forwarding vers inference_url
+  ├── Traduction réponse → format OpenAI
+  ├── Métriques tokens + tracking consumer (Redis sorted set)
+  └── Réponse client  X-Cache: MISS  +  cache-fill async
+```
+
 ### Composants externes requis
 
 | Composant | Rôle | Requis |
@@ -143,6 +160,9 @@ server:
   # priority_header: header HTTP pour le routage prioritaire (ex: "X-Priority").
   # Si présent et que le service a un priority_topic, le job est routé vers ce topic.
   priority_header: "${PRIORITY_HEADER:-}"
+  # user_type_header: header HTTP pour le type d'utilisateur (ex: "X-User-Type" → "sa" | "user").
+  # Utilisé pour le rate limiting et le labelling des métriques LLM.
+  user_type_header: "${USER_TYPE_HEADER:-}"
 
 kafka:
   # Optionnel si aucun service ne configure de topic Kafka (sync-direct uniquement).
@@ -172,6 +192,23 @@ redis:
   password: ""
   db: 0
   job_ttl_hours: 72
+
+# Métriques haute cardinalité — consumer token tracking
+metrics:
+  top_consumers: 10      # expose le top-N dans Prometheus via Redis sorted sets; 0 = désactivé
+
+# Rate limiting par consumer, service type et user type (Redis fixed-window)
+rate_limits:
+  audio:
+    sa:                  # header user_type_header = "sa"
+      rate: 100
+      period: 1m
+    user:
+      rate: 20
+      period: 1m
+    "*":                 # fallback si user_type absent ou non listé
+      rate: 10
+      period: 1m
 
 services:
   - type: audio
@@ -212,6 +249,20 @@ services:
         - "/v1/rerank"
     inference_url: "http://kevent-reranker-predictor.default.svc.cluster.local"
     # Pas de input_topic / result_topic → sync-direct uniquement
+
+  # LLM proxy — openai, anthropic, ollama ou passthrough (vLLM…)
+  # Les requêtes JSON POST /v1/* passent par le proxy LLM (cache, métriques, traduction).
+  - type: llm
+    model: "gpt-4o"                    # alias client-facing
+    provider: openai                   # openai | anthropic | ollama | passthrough
+    backend_model: ""                  # vide = alias transmis tel quel
+    response_cache_ttl: 3600           # secondes; 0 = désactivé
+    operations:
+      chat:
+        - "/v1/*"                      # wildcard : toutes les paths OpenAI-compatibles
+    inference_url: ""                  # vide → défaut provider (ex: https://api.openai.com)
+    inference_headers:
+      Authorization: "Bearer ${OPENAI_API_KEY}"
 ```
 
 #### Champs `services[]`
@@ -229,6 +280,10 @@ services:
 | `priority_topic` | Topic Kafka pour les jobs prioritaires (SA/comptes de service). Optionnel — si absent, le routing prioritaire est désactivé pour ce service. |
 | `accepted_exts` | Extensions acceptées. Vide ou absent = toutes les extensions acceptées. |
 | `max_file_size_mb` | Taille max du fichier. Absent ou 0 = 100 MB par défaut. |
+| `inference_headers` | Headers HTTP injectés sur chaque requête vers le backend (sync-direct et LLM proxy). Supporte `${VAR}`. |
+| `provider` | Active le LLM proxy : `openai`, `anthropic`, `ollama`, `passthrough`. Absent = proxy direct classique. |
+| `backend_model` | Nom du modèle transmis au backend — le gateway réécrit le champ `model` du body. |
+| `response_cache_ttl` | TTL du cache Redis en secondes. `0` = désactivé. |
 | `swagger_url` | URL vers le spec OpenAPI JSON du service (ex: URL raw GitHub). Optionnel — si absent, le service n'apparaît pas dans le dropdown `/docs`. |
 
 ### Relay sidecar (`relay/config.yaml`)
@@ -287,6 +342,7 @@ inference:
 | `ENCRYPTION_KEY` | _(vide)_ | Clé AES-256-GCM hex-encodée (32 octets) |
 | `CONSUMER_HEADER` | _(vide)_ | Header HTTP pour identifier le consumer (ex: `X-Consumer-Username`) |
 | `PRIORITY_HEADER` | _(vide)_ | Header HTTP pour le routing prioritaire (ex: `X-Priority`) |
+| `USER_TYPE_HEADER` | _(vide)_ | Header HTTP pour le type d'utilisateur (ex: `X-User-Type`) — rate limiting + métriques LLM |
 
 ### Variables d'environnement (relay sidecar)
 
@@ -710,6 +766,17 @@ Les deux composants exposent des métriques Prometheus sur `GET /metrics`.
 | `kevent_redis_operation_duration_seconds` | histogram | `operation` (save_job/get_job/delete_job/update_job_result) | Latence des opérations Redis |
 | `kevent_redis_errors_total` | counter | `operation` | Erreurs Redis |
 | `kevent_jobs_by_consumer_total` | counter | `mode`, `service_type`, `model`, `consumer` | Jobs soumis par consumer (uniquement si `consumer_header` configuré) |
+| `kevent_llm_requests_total` | counter | `service_type`, `model`, `provider`, `user_type`, `status` | Requêtes LLM proxy |
+| `kevent_llm_request_duration_seconds` | histogram | `service_type`, `model`, `provider`, `user_type` | Latence LLM proxy |
+| `kevent_llm_tokens_total` | counter | `service_type`, `model`, `user_type`, `type` | Tokens consommés (`prompt`/`completion`) |
+| `kevent_llm_tokens_per_request` | histogram | `service_type`, `model`, `user_type` | Distribution des tokens par requête |
+| `kevent_llm_consumer_tokens_top` | gauge | `consumer`, `user_type`, `type` | Top-N consumers par tokens (Redis, si `metrics.top_consumers > 0`) |
+| `kevent_cache_hits_total` | counter | `service_type`, `model` | Cache hits LLM |
+| `kevent_cache_misses_total` | counter | `service_type`, `model` | Cache misses LLM |
+| `kevent_cache_errors_total` | counter | `service_type`, `model`, `op` | Erreurs cache LLM |
+| `kevent_ratelimit_requests_total` | counter | `service_type`, `user_type`, `result` | Checks rate limit (`allowed`/`rejected`) |
+| `kevent_ratelimit_consumer_hits_total` | counter | `service_type`, `user_type` | Consumers ayant dépassé leur limite |
+| `kevent_ratelimit_errors_total` | counter | `service_type` | Erreurs Redis lors du rate limiting |
 
 ### Relay sidecar
 
@@ -758,11 +825,21 @@ scrape_configs:
 │   │   ├── auth.go              # Helpers SASL (PLAIN/SCRAM) + TLS
 │   │   ├── producer.go          # Producteur Kafka — un writer par topic
 │   │   └── consumer.go          # Consumer résultats — une goroutine par result_topic
+│   ├── ratelimit/
+│   │   └── ratelimit.go         # Fixed-window rate limiting Redis (Lua INCR+EXPIRE)
+│   ├── cache/
+│   │   ├── cache.go             # Interface Cache + entrée Redis
+│   │   ├── key.go               # Clé SHA-256 canonique du body LLM
+│   │   └── redis.go             # Implémentation Redis
+│   ├── llmproxy/
+│   │   ├── handler.go           # LLM proxy : cache → provider → translate → cache-fill async
+│   │   └── provider/            # openai, anthropic, ollama, passthrough
 │   ├── metrics/
-│   │   └── metrics.go           # Définitions Prometheus (promauto) — GET /metrics
+│   │   ├── metrics.go           # Définitions Prometheus (promauto) — GET /metrics
+│   │   └── consumer_tracker.go  # ConsumerTracker interface + Redis sorted-set + top-N refresh
 │   └── handler/
 │       ├── jobs.go              # POST /jobs/{service_type}  •  GET /jobs/{service_type}/{id}
-│       ├── sync.go              # POST /v1/*  (sync-over-Kafka ou direct proxy)
+│       ├── sync.go              # POST /v1/*  (sync-over-Kafka, direct proxy, ou LLM proxy)
 │       ├── docs.go              # GET /docs (Swagger UI)  •  GET /openapi.yaml (spec généré dynamiquement)
 │       ├── health.go            # GET /health
 │       └── middleware.go        # Logger structuré (slog/JSON)
