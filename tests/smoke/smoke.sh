@@ -53,7 +53,7 @@ fail() { FAIL=$((FAIL+1));  printf "  ${RED}FAIL${NC} %s\n" "$1"; ERRORS+=("$1")
 skip() { SKIP=$((SKIP+1));  printf "  ${YELLOW}SKIP${NC} %s\n" "$1"; }
 
 # Per-service curl base args (auth header differs between Whisper and Rerank).
-CURL_BASE=(-sf --max-time 30 -H "Accept: application/json")
+CURL_BASE=(-s --max-time 30 -H "Accept: application/json")
 
 curl_whisper() {
   local args=("${CURL_BASE[@]}")
@@ -115,12 +115,16 @@ else
     -F "file=@${AUDIO_FILE};type=audio/mpeg" \
     -F "model=${WHISPER_MODEL}" \
     -F "operation=transcription" \
-    "${GATEWAY_URL}/jobs/audio" 2>&1) || SUBMIT_BODY="curl_error"
+    -w "\n__HTTP_STATUS__:%{http_code}" \
+    "${GATEWAY_URL}/jobs/audio" 2>&1) || true
+  _HTTP=$(echo "$SUBMIT_BODY" | grep -o '__HTTP_STATUS__:[0-9]*' | cut -d: -f2 || true)
+  SUBMIT_BODY=$(echo "$SUBMIT_BODY" | sed 's/__HTTP_STATUS__:[0-9]*//')
+  [[ -z "$_HTTP" ]] && _HTTP="000"
 
   JOB_ID=$(echo "$SUBMIT_BODY" | jq -r '.job_id // empty' 2>/dev/null || true)
 
   if [[ -z "$JOB_ID" || "$JOB_ID" == "null" ]]; then
-    fail "POST /jobs/audio → no job_id in response: ${SUBMIT_BODY}"
+    fail "POST /jobs/audio → HTTP ${_HTTP} — no job_id in response: ${SUBMIT_BODY}"
   else
     pass "POST /jobs/audio → job_id=${JOB_ID}"
     log "  Polling GET /jobs/audio/${JOB_ID} (timeout=${POLL_TIMEOUT}s) ..."
@@ -174,7 +178,10 @@ else
     -X POST \
     -F "file=@${AUDIO_FILE};type=audio/mpeg" \
     -F "model=${WHISPER_MODEL}" \
-    "${GATEWAY_URL}/v1/audio/transcriptions" 2>&1) || SYNC_BODY="curl_error"
+    -w "\n__HTTP_STATUS__:%{http_code}" \
+    "${GATEWAY_URL}/v1/audio/transcriptions" 2>&1) || true
+  _SYNC_HTTP=$(echo "$SYNC_BODY" | grep -o '__HTTP_STATUS__:[0-9]*' | cut -d: -f2 || true)
+  SYNC_BODY=$(echo "$SYNC_BODY" | sed 's/__HTTP_STATUS__:[0-9]*//')
 
   TRANSCRIPTION=$(echo "$SYNC_BODY" | jq -r '.text // empty' 2>/dev/null || true)
 
@@ -182,7 +189,7 @@ else
     TRUNC="${TRANSCRIPTION:0:80}"
     pass "Sync transcription → \"${TRUNC}...\" (${#TRANSCRIPTION} chars)"
   else
-    fail "Sync transcription → no .text in response: ${SYNC_BODY}"
+    fail "Sync transcription → HTTP ${_SYNC_HTTP:-000} — no .text in response: ${SYNC_BODY}"
   fi
 fi
 
@@ -210,11 +217,16 @@ else
     ]' \
     '{query: $q, model: $m, documents: $docs, top_n: 3, return_documents: true}')
 
+  RERANK_HTTP_STATUS=""
   RERANK_BODY=$(curl_rerank \
     -X POST \
     -H "Content-Type: application/json" \
     -d "$RERANK_PAYLOAD" \
-    "${GATEWAY_URL}${RERANK_ENDPOINT}" 2>&1) || RERANK_BODY="curl_error"
+    -w "\n__HTTP_STATUS__:%{http_code}" \
+    "${GATEWAY_URL}${RERANK_ENDPOINT}" 2>&1) || true
+  # Extract HTTP status appended by -w and strip it from body
+  RERANK_HTTP_STATUS=$(echo "$RERANK_BODY" | grep -o '__HTTP_STATUS__:[0-9]*' | cut -d: -f2 || true)
+  RERANK_BODY=$(echo "$RERANK_BODY" | sed 's/__HTTP_STATUS__:[0-9]*//')
 
   # Accept {"results":[...]}, {"data":[...]} or a bare array (all three seen in the wild)
   RESULTS_COUNT=$(echo "$RERANK_BODY" | \
@@ -225,7 +237,7 @@ else
     TOP_IDX=$(echo "$RERANK_BODY" | jq -r '(.results // .data // .)[0].index // "?"' 2>/dev/null || true)
     pass "Rerank → ${RESULTS_COUNT} results (top index=${TOP_IDX})"
   else
-    fail "Rerank → no results in response: ${RERANK_BODY}"
+    fail "Rerank → HTTP ${RERANK_HTTP_STATUS:-000} — no results in response: ${RERANK_BODY}"
   fi
 fi
 
