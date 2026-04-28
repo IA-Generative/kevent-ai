@@ -32,9 +32,6 @@ func (p *anthropicProvider) BuildRequest(ctx context.Context, def *service.Def, 
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("anthropic-version", "2023-06-01")
-	if def.APIKey != "" {
-		req.Header.Set("x-api-key", def.APIKey)
-	}
 	for k, v := range def.InferenceHeaders {
 		req.Header.Set(k, v)
 	}

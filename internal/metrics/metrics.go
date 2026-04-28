@@ -98,33 +98,35 @@ var (
 		Help: "LLM response cache errors.",
 	}, []string{"service_type", "model", "operation"}) // operation: get|set|key
 
+	// user_type label = "sa" | "user" | "" (when UserTypeHeader not configured).
 	LLMTokensTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "kevent_llm_tokens_total",
 		Help: "Tokens served by LLM requests (prompt+completion, includes cache hits).",
-	}, []string{"service_type", "model", "type"}) // type: prompt|completion
+	}, []string{"service_type", "model", "user_type", "type"})
 
 	LLMRequestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "kevent_llm_requests_total",
-		Help: "Total LLM requests by provider and HTTP status.",
-	}, []string{"service_type", "model", "provider", "status"})
+		Help: "Total LLM requests by provider, user_type, and HTTP status.",
+	}, []string{"service_type", "model", "provider", "user_type", "status"})
 
 	LLMRequestDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "kevent_llm_request_duration_seconds",
 		Help:    "End-to-end LLM request latency.",
 		Buckets: []float64{.05, .1, .25, .5, 1, 2, 5, 10, 30, 60, 120},
-	}, []string{"service_type", "model", "provider"})
+	}, []string{"service_type", "model", "provider", "user_type"})
 
-	// LLMConsumerTokensTotal counts tokens served per identified consumer.
-	// Only incremented when the consumer header is present on the request.
-	LLMConsumerTokensTotal = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "kevent_llm_consumer_tokens_total",
-		Help: "Tokens served to identified consumers (prompt and completion).",
-	}, []string{"service_type", "model", "consumer", "type"})
+	// LLMTokensPerRequest is a histogram of tokens per request, enabling p50/p95/p99
+	// analysis by user_type. Useful to detect large contexts and capacity planning.
+	LLMTokensPerRequest = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "kevent_llm_tokens_per_request",
+		Help:    "Distribution of total tokens (prompt+completion) per LLM request.",
+		Buckets: []float64{50, 100, 250, 500, 1000, 2000, 5000, 10000, 32000, 100000},
+	}, []string{"service_type", "model", "user_type"})
 
-	// LLMConsumerRequestsTotal counts LLM requests per identified consumer.
-	// Only incremented when the consumer header is present on the request.
-	LLMConsumerRequestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "kevent_llm_consumer_requests_total",
-		Help: "LLM requests by identified consumer and HTTP status.",
-	}, []string{"service_type", "model", "consumer", "status"})
+	// LLMConsumerTokensTop exposes the top-N consumers by token usage, refreshed
+	// periodically from a Redis sorted set. Only populated when metrics.top_consumers > 0.
+	LLMConsumerTokensTop = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "kevent_llm_consumer_tokens_top",
+		Help: "Token usage for top consumers (refreshed from Redis sorted set).",
+	}, []string{"consumer", "user_type", "type"})
 )

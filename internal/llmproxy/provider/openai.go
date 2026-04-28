@@ -24,9 +24,6 @@ func (p *openAIProvider) BuildRequest(ctx context.Context, def *service.Def, bod
 		return nil, fmt.Errorf("openai: build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if def.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+def.APIKey)
-	}
 	for k, v := range def.InferenceHeaders {
 		req.Header.Set(k, v)
 	}

@@ -122,23 +122,25 @@ services:
   #   model: "gpt-4o"
   #   default: true
   #   provider: openai
-  #   api_key: "${OPENAI_API_KEY}"
   #   response_cache_ttl: 3600        # seconds; 0 = disabled
   #   operations:
   #     chat:
   #       - "/v1/chat/completions"
   #   inference_url: ""               # empty = defaults to https://api.openai.com
+  #   inference_headers:
+  #     Authorization: "Bearer ${OPENAI_API_KEY}"
   #
   # Anthropic — translate OpenAI-format requests to the Messages API automatically.
   # - type: llm
   #   model: "claude-3-5-sonnet-20241022"
   #   provider: anthropic
-  #   api_key: "${ANTHROPIC_API_KEY}"
   #   response_cache_ttl: 3600
   #   operations:
   #     chat:
   #       - "/v1/chat/completions"
   #   inference_url: ""               # empty = defaults to https://api.anthropic.com
+  #   inference_headers:
+  #     x-api-key: "${ANTHROPIC_API_KEY}"
   #
   # Ollama — OpenAI-compatible local model, no translation needed.
   # - type: llm

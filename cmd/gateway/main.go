@@ -21,7 +21,7 @@ import (
 	"kevent/gateway/internal/kafka"
 	"kevent/gateway/internal/llmproxy"
 	"kevent/gateway/internal/llmproxy/provider"
-	_ "kevent/gateway/internal/metrics" // register Prometheus metrics
+	gmetrics "kevent/gateway/internal/metrics"
 	"kevent/gateway/internal/service"
 	"kevent/gateway/internal/storage"
 )
@@ -174,7 +174,14 @@ func main() {
 	// ── LLM proxy ─────────────────────────────────────────────────────────────
 	providerRegistry := provider.NewRegistry()
 	responseCache := cache.NewRedisCache(redisClient.Raw())
-	llmHandler := llmproxy.New(responseCache, providerRegistry, &http.Client{Timeout: 15 * time.Minute})
+
+	var consumerTracker gmetrics.ConsumerTracker = gmetrics.NoopTracker{}
+	if cfg.Metrics.TopConsumers > 0 {
+		consumerTracker = gmetrics.NewRedisTracker(redisClient.Raw())
+	}
+
+	llmHandler := llmproxy.New(responseCache, providerRegistry, &http.Client{Timeout: 15 * time.Minute},
+		cfg.Server.UserTypeHeader, consumerTracker)
 
 	// ── Hot-reload ────────────────────────────────────────────────────────────
 	// reloadFn re-reads the config file, atomically swaps the active router,
@@ -205,6 +212,10 @@ func main() {
 	// ── Result consumers ──────────────────────────────────────────────────────
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	if cfg.Metrics.TopConsumers > 0 {
+		gmetrics.StartTopNRefresh(ctx, redisClient.Raw(), cfg.Metrics.TopConsumers, 60*time.Second)
+	}
 
 	if consumerManager != nil {
 		consumerManager.Start(ctx, initialRegistry)

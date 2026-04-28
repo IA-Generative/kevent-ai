@@ -28,7 +28,6 @@ type Def struct {
 	PriorityTopic    string              // Kafka topic for high-priority async jobs (SA accounts)
 	InferenceHeaders map[string]string   // headers injected on every sync-direct proxy request to the backend
 	Provider         string
-	APIKey           string
 	BackendModel     string        // real model name sent to backend; empty = use Model (the alias)
 	ResponseCacheTTL time.Duration
 }
@@ -69,7 +68,7 @@ func (d *Def) OperationPath(op string) (string, error) {
 
 // IsLLM reports whether this service uses the LLM proxy handler.
 func (d *Def) IsLLM() bool {
-	return d.Provider != "" || d.ResponseCacheTTL > 0
+	return d.Provider != ""
 }
 
 // pathPattern supports openai_paths entries that contain a {model} placeholder,
@@ -165,7 +164,6 @@ func NewRegistry(cfgs []config.ServiceConfig) *Registry {
 			PriorityTopic:    cfg.PriorityTopic,
 			InferenceHeaders: cfg.InferenceHeaders,
 			Provider:         cfg.Provider,
-			APIKey:           cfg.APIKey,
 			BackendModel:     cfg.BackendModel,
 			ResponseCacheTTL: time.Duration(cfg.ResponseCacheTTL) * time.Second,
 		}
