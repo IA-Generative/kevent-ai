@@ -192,11 +192,15 @@ func (h *SyncHandler) handleJSON(w http.ResponseWriter, r *http.Request) {
 
 	// JSON requests: route through LLM proxy if configured, else direct proxy.
 	if h.llm != nil && def.IsLLM() {
+		start := time.Now()
 		consumer := ""
 		if h.consumerHeader != "" {
 			consumer = r.Header.Get(h.consumerHeader)
 		}
-		h.llm.ServeJSON(w, r, def, raw, consumer)
+		sw := &statusWriter{ResponseWriter: w}
+		h.llm.ServeJSON(sw, r, def, raw, consumer)
+		metrics.RequestsTotal.WithLabelValues("llm", def.Type, def.Model, strconv.Itoa(sw.Status())).Inc()
+		metrics.RequestDuration.WithLabelValues("llm", def.Type, def.Model).Observe(time.Since(start).Seconds())
 		return
 	}
 
@@ -442,6 +446,25 @@ func (h *SyncHandler) proxyToInference(w http.ResponseWriter, r *http.Request, d
 	}
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
+}
+
+// statusWriter wraps http.ResponseWriter to capture the written status code.
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (sw *statusWriter) WriteHeader(status int) {
+	sw.status = status
+	sw.ResponseWriter.WriteHeader(status)
+}
+
+// Status returns the captured status code, defaulting to 200 if WriteHeader was never called.
+func (sw *statusWriter) Status() int {
+	if sw.status == 0 {
+		return http.StatusOK
+	}
+	return sw.status
 }
 
 // reconstructMultipart rebuilds the multipart body from the already-parsed form,

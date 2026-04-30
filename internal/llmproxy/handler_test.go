@@ -413,6 +413,100 @@ func TestServeJSON_ConsumerMetrics_EmittedOnCacheHit(t *testing.T) {
 	}
 }
 
+// ── streaming ────────────────────────────────────────────────────────────────
+
+const streamBody = `{"model":"my-alias","messages":[{"role":"user","content":"Hello"}],"stream":true}`
+
+func TestServeJSON_Streaming_PipedToClient(t *testing.T) {
+	sseChunks := "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\ndata: [DONE]\n\n"
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		io.WriteString(w, sseChunks)
+	}))
+	defer backend.Close()
+
+	reg := provider.NewRegistry()
+	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second}, "", &noopTracker{})
+
+	def := llmDef("passthrough", "", 60*time.Second)
+	def.InferenceURL = backend.URL
+
+	rr := doServeJSON(h, def, streamBody)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if rr.Header().Get("X-Accel-Buffering") != "no" {
+		t.Errorf("expected X-Accel-Buffering=no, got %q", rr.Header().Get("X-Accel-Buffering"))
+	}
+	if rr.Header().Get("Cache-Control") != "no-cache" {
+		t.Errorf("expected Cache-Control=no-cache, got %q", rr.Header().Get("Cache-Control"))
+	}
+	if rr.Body.String() != sseChunks {
+		t.Errorf("body mismatch: got %q", rr.Body.String())
+	}
+}
+
+func TestServeJSON_Streaming_SkipsCache(t *testing.T) {
+	callCount := 0
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer backend.Close()
+
+	mc := newMemCache()
+	reg := provider.NewRegistry()
+	h := New(mc, reg, &http.Client{Timeout: 5 * time.Second}, "", &noopTracker{})
+
+	def := llmDef("passthrough", "", 60*time.Second)
+	def.InferenceURL = backend.URL
+
+	doServeJSON(h, def, streamBody)
+	doServeJSON(h, def, streamBody)
+
+	if callCount != 2 {
+		t.Errorf("streaming should bypass cache: backend called %d times (want 2)", callCount)
+	}
+	// Cache should not have been written.
+	if len(mc.data) != 0 {
+		t.Errorf("streaming should not populate cache, got %d entries", len(mc.data))
+	}
+}
+
+func TestServeJSON_Streaming_BackendModel_Rewritten(t *testing.T) {
+	var receivedModel string
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]any
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &req)
+		receivedModel, _ = req["model"].(string)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer backend.Close()
+
+	reg := provider.NewRegistry()
+	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second}, "", &noopTracker{})
+
+	def := llmDef("passthrough", "real-model-id", 0)
+	def.InferenceURL = backend.URL
+
+	doServeJSON(h, def, streamBody)
+
+	if receivedModel != "real-model-id" {
+		t.Errorf("expected backend to receive real-model-id, got %q", receivedModel)
+	}
+}
+
+type noopTracker struct{}
+
+func (n *noopTracker) Track(_ context.Context, _, _, _ string, _ int) {}
+
 func TestServeJSON_ConsumerMetrics_SkippedWhenNoConsumer(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

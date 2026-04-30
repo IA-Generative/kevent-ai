@@ -62,6 +62,13 @@ func (h *Handler) ServeJSON(w http.ResponseWriter, r *http.Request, def *service
 		return
 	}
 
+	// Streaming requests bypass cache and response translation entirely.
+	// The SSE stream is piped directly to the client with per-chunk flushing.
+	if isStreamingRequest(body) {
+		h.serveStream(w, r, def, body, prov, userType, start)
+		return
+	}
+
 	// Honour Cache-Control: no-cache from client (may appear alongside other
 	// directives, e.g. "no-cache, no-store").
 	noCache := strings.Contains(r.Header.Get("Cache-Control"), "no-cache")
@@ -234,6 +241,79 @@ func rewriteBodyModel(body []byte, newModel string) ([]byte, error) {
 		return nil, fmt.Errorf("rewrite model: marshal: %w", err)
 	}
 	return out, nil
+}
+
+// isStreamingRequest reports whether the JSON body sets "stream": true.
+func isStreamingRequest(body []byte) bool {
+	var req struct {
+		Stream bool `json:"stream"`
+	}
+	_ = json.Unmarshal(body, &req)
+	return req.Stream
+}
+
+// serveStream pipes a streaming (SSE) LLM response directly to the client.
+// Cache and response translation are skipped; chunks are flushed as received.
+// Token metrics are not emitted — usage counts are embedded in SSE chunks and
+// not parsed to avoid buffering the stream.
+func (h *Handler) serveStream(w http.ResponseWriter, r *http.Request, def *service.Def, body []byte, prov provider.Provider, userType string, start time.Time) {
+	upstreamBody := body
+	if def.BackendModel != "" {
+		var err error
+		upstreamBody, err = rewriteBodyModel(body, def.BackendModel)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to rewrite model field: "+err.Error())
+			return
+		}
+	}
+
+	upstreamReq, err := prov.BuildRequest(r.Context(), def, upstreamBody, r.URL.Path)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to build upstream request: "+err.Error())
+		return
+	}
+
+	resp, err := h.httpClient.Do(upstreamReq)
+	if err != nil {
+		metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, def.Provider, userType, "502").Inc()
+		writeError(w, http.StatusBadGateway, "upstream error: "+err.Error())
+		return
+	}
+	defer resp.Body.Close()
+
+	// Forward SSE headers. X-Accel-Buffering: no tells nginx/APISIX to disable
+	// proxy buffering so chunks reach the client in real time.
+	ct := resp.Header.Get("Content-Type")
+	if ct == "" {
+		ct = "text/event-stream"
+	}
+	w.Header().Set("Content-Type", ct)
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.Header().Set("X-Cache", "MISS")
+	w.WriteHeader(resp.StatusCode)
+
+	statusStr := strconv.Itoa(resp.StatusCode)
+	metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, def.Provider, userType, statusStr).Inc()
+	metrics.LLMRequestDuration.WithLabelValues(def.Type, def.Model, def.Provider, userType).Observe(time.Since(start).Seconds())
+
+	// Pipe response, flushing after each read to deliver chunks immediately.
+	flusher, canFlush := w.(http.Flusher)
+	buf := make([]byte, 4096)
+	for {
+		n, readErr := resp.Body.Read(buf)
+		if n > 0 {
+			if _, writeErr := w.Write(buf[:n]); writeErr != nil {
+				return // client disconnected
+			}
+			if canFlush {
+				flusher.Flush()
+			}
+		}
+		if readErr != nil {
+			break
+		}
+	}
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {
