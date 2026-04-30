@@ -151,6 +151,17 @@ redis-ha:
     masterGroupName: "mymaster"
   replicas: 3
 
+# ── Consumer token tracking ───────────────────────────────────────────────────
+# Suivi de la consommation LLM par consumer (kevent_llm_consumer_tokens_top).
+# Nécessite server.consumerHeader configuré. Indépendant du ServiceMonitor ci-dessous.
+metricsConfig:
+  # Nombre de top consumers à exposer dans Prometheus (Redis sorted set, refresh 60s).
+  # 0 = désactivé. Recommandé : 20–50.
+  topConsumers: 0
+  # Labels Prometheus directs par consumer. Uniquement pour < 50 consumers connus.
+  # Pour des consumers dynamiques, utiliser topConsumers à la place.
+  consumerLabels: false
+
 # ── Monitoring (Prometheus Operator) ─────────────────────────────────────
 metrics:
   serviceMonitor:

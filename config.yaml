@@ -54,6 +54,25 @@ redis:
   job_ttl_hours: 72  # keep job records for 3 days
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Metrics — consumer tracking
+# Ces options activent un suivi fin de la consommation LLM par consumer.
+# Les deux mécanismes sont indépendants et peuvent être activés simultanément.
+# ─────────────────────────────────────────────────────────────────────────────
+metrics:
+  # top_consumers: expose les N meilleurs consommateurs LLM dans Prometheus via
+  # kevent_llm_consumer_tokens_top{consumer, user_type, type="prompt|completion"}.
+  # Stocké dans un sorted set Redis (ZINCRBY), rafraîchi toutes les 60s.
+  # Nécessite que server.consumer_header soit configuré.
+  # 0 = désactivé (défaut).
+  top_consumers: ${METRICS_TOP_CONSUMERS:-0}
+  # consumer_labels: émet des labels Prometheus directs par consumer
+  # (kevent_llm_tokens_total{consumer=...}).
+  # Réservé aux déploiements avec un nombre borné de consumers (< 50).
+  # Pour des deployments avec des consumers dynamiques, préférer top_consumers.
+  # false = désactivé (défaut).
+  consumer_labels: false
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Service registry
 # To add a new inference service: append a block below. No code change needed.
 #

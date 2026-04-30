@@ -45,6 +45,10 @@ data:
       db:           0
       job_ttl_hours: 72
 
+    metrics:
+      top_consumers: {{ .Values.metricsConfig.topConsumers | default 0 }}
+      consumer_labels: {{ .Values.metricsConfig.consumerLabels | default false }}
+
     services:
     {{- range .Values.services }}
       - type:              {{ .type }}
