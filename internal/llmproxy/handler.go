@@ -86,9 +86,9 @@ func (h *Handler) ServeJSON(w http.ResponseWriter, r *http.Request, def *service
 		} else if hit {
 			metrics.CacheHitsTotal.WithLabelValues(def.Type, def.Model).Inc()
 			// Tokens are counted on every delivery (including cache hits) for billing purposes.
-			usage := emitTokenMetrics(def, userType, entry.Body)
-			metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, "cache", userType, "200").Inc()
-			metrics.LLMRequestDuration.WithLabelValues(def.Type, def.Model, "cache", userType).Observe(time.Since(start).Seconds())
+			usage := emitTokenMetrics(def, "", userType, entry.Body)
+			metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, "", "cache", userType, "200").Inc()
+			metrics.LLMRequestDuration.WithLabelValues(def.Type, def.Model, "", "cache", userType).Observe(time.Since(start).Seconds())
 			if consumer != "" && usage != nil {
 				tCtx := context.WithoutCancel(r.Context())
 				h.tracker.Track(tCtx, consumer, userType, "prompt", usage.PromptTokens)
@@ -111,6 +111,7 @@ func (h *Handler) ServeJSON(w http.ResponseWriter, r *http.Request, def *service
 	var resp *http.Response
 	var respBody []byte
 	var lastBackendErr string
+	var winningBackendModel string
 	for i, backend := range backends {
 		effectiveModel := backend.Model
 		if effectiveModel == "" {
@@ -135,7 +136,7 @@ func (h *Handler) ServeJSON(w http.ResponseWriter, r *http.Request, def *service
 		if doErr != nil {
 			slog.WarnContext(r.Context(), "llm backend error, trying next",
 				"backend_index", i, "url", backend.URL, "error", doErr)
-			metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, def.Provider, userType, "502").Inc()
+			metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, effectiveModel, def.Provider, userType, "502").Inc()
 			lastBackendErr = doErr.Error()
 			resp = nil
 			continue
@@ -143,7 +144,7 @@ func (h *Handler) ServeJSON(w http.ResponseWriter, r *http.Request, def *service
 		if resp.StatusCode >= 500 {
 			slog.WarnContext(r.Context(), "llm backend returned 5xx, trying next",
 				"backend_index", i, "url", backend.URL, "status", resp.StatusCode)
-			metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, def.Provider, userType,
+			metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, effectiveModel, def.Provider, userType,
 				strconv.Itoa(resp.StatusCode)).Inc()
 			lastBackendErr = fmt.Sprintf("backend returned %d", resp.StatusCode)
 			_, _ = io.Copy(io.Discard, resp.Body)
@@ -151,10 +152,11 @@ func (h *Handler) ServeJSON(w http.ResponseWriter, r *http.Request, def *service
 			resp = nil
 			continue
 		}
+		winningBackendModel = effectiveModel
 		break // success or 4xx — do not retry
 	}
 	if resp == nil {
-		metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, def.Provider, userType, "502").Inc()
+		metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, "", def.Provider, userType, "502").Inc()
 		writeError(w, http.StatusBadGateway, "all backends failed: "+lastBackendErr)
 		return
 	}
@@ -163,7 +165,7 @@ func (h *Handler) ServeJSON(w http.ResponseWriter, r *http.Request, def *service
 	var readErr error
 	respBody, readErr = io.ReadAll(resp.Body)
 	if readErr != nil {
-		metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, def.Provider, userType, "502").Inc()
+		metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, winningBackendModel, def.Provider, userType, "502").Inc()
 		writeError(w, http.StatusBadGateway, "failed to read upstream response")
 		return
 	}
@@ -172,21 +174,21 @@ func (h *Handler) ServeJSON(w http.ResponseWriter, r *http.Request, def *service
 	finalStatus, finalBody, usage, err := prov.TranslateResponse(r.Context(), resp.StatusCode, resp.Header, respBody)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "llm response translation failed", "provider", def.Provider, "error", err)
-		metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, def.Provider, userType, "500").Inc()
+		metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, winningBackendModel, def.Provider, userType, "500").Inc()
 		writeError(w, http.StatusInternalServerError, "failed to translate provider response")
 		return
 	}
 
 	statusStr := strconv.Itoa(finalStatus)
-	metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, def.Provider, userType, statusStr).Inc()
-	metrics.LLMRequestDuration.WithLabelValues(def.Type, def.Model, def.Provider, userType).Observe(time.Since(start).Seconds())
+	metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, winningBackendModel, def.Provider, userType, statusStr).Inc()
+	metrics.LLMRequestDuration.WithLabelValues(def.Type, def.Model, winningBackendModel, def.Provider, userType).Observe(time.Since(start).Seconds())
 
 	if usage != nil {
 		total := usage.PromptTokens + usage.CompletionTokens
-		metrics.LLMTokensTotal.WithLabelValues(def.Type, def.Model, userType, "prompt").Add(float64(usage.PromptTokens))
-		metrics.LLMTokensTotal.WithLabelValues(def.Type, def.Model, userType, "completion").Add(float64(usage.CompletionTokens))
+		metrics.LLMTokensTotal.WithLabelValues(def.Type, def.Model, winningBackendModel, userType, "prompt").Add(float64(usage.PromptTokens))
+		metrics.LLMTokensTotal.WithLabelValues(def.Type, def.Model, winningBackendModel, userType, "completion").Add(float64(usage.CompletionTokens))
 		if total > 0 {
-			metrics.LLMTokensPerRequest.WithLabelValues(def.Type, def.Model, userType).Observe(float64(total))
+			metrics.LLMTokensPerRequest.WithLabelValues(def.Type, def.Model, winningBackendModel, userType).Observe(float64(total))
 		}
 		if consumer != "" {
 			tCtx := context.WithoutCancel(r.Context())
@@ -224,7 +226,7 @@ func (h *Handler) ServeJSON(w http.ResponseWriter, r *http.Request, def *service
 	}
 }
 
-func emitTokenMetrics(def *service.Def, userType string, body []byte) *provider.Usage {
+func emitTokenMetrics(def *service.Def, backendModel, userType string, body []byte) *provider.Usage {
 	var resp struct {
 		Usage struct {
 			PromptTokens     int `json:"prompt_tokens"`
@@ -235,14 +237,14 @@ func emitTokenMetrics(def *service.Def, userType string, body []byte) *provider.
 		return nil
 	}
 	if resp.Usage.PromptTokens > 0 {
-		metrics.LLMTokensTotal.WithLabelValues(def.Type, def.Model, userType, "prompt").Add(float64(resp.Usage.PromptTokens))
+		metrics.LLMTokensTotal.WithLabelValues(def.Type, def.Model, backendModel, userType, "prompt").Add(float64(resp.Usage.PromptTokens))
 	}
 	if resp.Usage.CompletionTokens > 0 {
-		metrics.LLMTokensTotal.WithLabelValues(def.Type, def.Model, userType, "completion").Add(float64(resp.Usage.CompletionTokens))
+		metrics.LLMTokensTotal.WithLabelValues(def.Type, def.Model, backendModel, userType, "completion").Add(float64(resp.Usage.CompletionTokens))
 	}
 	total := resp.Usage.PromptTokens + resp.Usage.CompletionTokens
 	if total > 0 {
-		metrics.LLMTokensPerRequest.WithLabelValues(def.Type, def.Model, userType).Observe(float64(total))
+		metrics.LLMTokensPerRequest.WithLabelValues(def.Type, def.Model, backendModel, userType).Observe(float64(total))
 	}
 	return &provider.Usage{
 		PromptTokens:     resp.Usage.PromptTokens,
