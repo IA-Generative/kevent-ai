@@ -15,8 +15,8 @@ type passthroughProvider struct{}
 
 func (p *passthroughProvider) Name() string { return "passthrough" }
 
-func (p *passthroughProvider) BuildRequest(ctx context.Context, def *service.Def, body []byte, urlPath string) (*http.Request, error) {
-	target := def.InferenceURL + urlPath
+func (p *passthroughProvider) BuildRequest(ctx context.Context, def *service.Def, body []byte, urlPath string, baseURL string) (*http.Request, error) {
+	target := baseURL + urlPath
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("passthrough: build request: %w", err)

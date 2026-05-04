@@ -15,8 +15,7 @@ type ollamaProvider struct{}
 
 func (p *ollamaProvider) Name() string { return "ollama" }
 
-func (p *ollamaProvider) BuildRequest(ctx context.Context, def *service.Def, body []byte, urlPath string) (*http.Request, error) {
-	baseURL := def.InferenceURL
+func (p *ollamaProvider) BuildRequest(ctx context.Context, def *service.Def, body []byte, urlPath string, baseURL string) (*http.Request, error) {
 	if baseURL == "" {
 		baseURL = "http://localhost:11434"
 	}

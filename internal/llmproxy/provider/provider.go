@@ -22,7 +22,9 @@ type Provider interface {
 	// Name returns the provider identifier ("openai", "anthropic", etc.).
 	Name() string
 	// BuildRequest constructs an outbound HTTP request from an OpenAI-format body.
-	BuildRequest(ctx context.Context, def *service.Def, openAIBody []byte, urlPath string) (*http.Request, error)
+	// baseURL is the selected backend URL; providers use it instead of def.InferenceURL.
+	// An empty baseURL falls back to the provider's built-in default (e.g. https://api.openai.com).
+	BuildRequest(ctx context.Context, def *service.Def, openAIBody []byte, urlPath string, baseURL string) (*http.Request, error)
 	// TranslateResponse converts the provider's response back to OpenAI format.
 	// Returns the normalised status, body, usage counts, and any error.
 	TranslateResponse(ctx context.Context, status int, headers http.Header, body []byte) (int, []byte, *Usage, error)

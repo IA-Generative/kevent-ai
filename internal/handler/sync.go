@@ -146,12 +146,18 @@ func (h *SyncHandler) handleMultipart(w http.ResponseWriter, r *http.Request) {
 	if def.SyncTopic != "" {
 		h.handleMultipartViaKafka(w, r, def)
 	} else {
-		body, contentType, err := reconstructMultipart(r)
+		bodyRC, contentType, err := reconstructMultipart(r)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to rebuild request: "+err.Error())
 			return
 		}
-		h.proxyToInference(w, r, def, body, contentType)
+		defer bodyRC.Close()
+		bodyBytes, err := io.ReadAll(bodyRC)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to read request body: "+err.Error())
+			return
+		}
+		h.proxyToInference(w, r, def, bodyBytes, contentType)
 	}
 }
 
@@ -204,10 +210,7 @@ func (h *SyncHandler) handleJSON(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.proxyToInference(w, r, def,
-		io.NopCloser(bytes.NewReader(raw)),
-		r.Header.Get("Content-Type"),
-	)
+	h.proxyToInference(w, r, def, raw, r.Header.Get("Content-Type"))
 }
 
 // handleMultipartViaKafka uploads the file to S3, publishes to the priority sync
@@ -400,52 +403,83 @@ waitLoop:
 }
 
 // proxyToInference forwards the request body directly to the inference backend.
-func (h *SyncHandler) proxyToInference(w http.ResponseWriter, r *http.Request, def *service.Def, body io.ReadCloser, contentType string) {
+func (h *SyncHandler) proxyToInference(w http.ResponseWriter, r *http.Request, def *service.Def, body []byte, contentType string) {
 	start := time.Now()
 	defer func() {
 		metrics.RequestDuration.WithLabelValues("sync-direct", def.Type, def.Model).Observe(time.Since(start).Seconds())
 	}()
-	defer body.Close()
 
-	target, err := url.Parse(def.InferenceURL)
-	if err != nil {
+	backends := service.OrderedBackends(def.Backends)
+	if len(backends) == 0 {
 		metrics.RequestsTotal.WithLabelValues("sync-direct", def.Type, def.Model, "500").Inc()
-		writeError(w, http.StatusInternalServerError, "invalid inference_url configuration")
+		writeError(w, http.StatusInternalServerError, "no backends configured")
 		return
 	}
-	target.Path = r.URL.Path
-	target.RawQuery = r.URL.RawQuery
 
-	upstreamReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, target.String(), body)
-	if err != nil {
-		metrics.RequestsTotal.WithLabelValues("sync-direct", def.Type, def.Model, "500").Inc()
-		writeError(w, http.StatusInternalServerError, "failed to build upstream request")
-		return
-	}
-	upstreamReq.Header.Set("Content-Type", contentType)
-	if auth := r.Header.Get("Authorization"); auth != "" {
-		upstreamReq.Header.Set("Authorization", auth)
-	}
-	for k, v := range def.InferenceHeaders {
-		upstreamReq.Header.Set(k, v)
-	}
+	auth := r.Header.Get("Authorization")
+	var lastErr string
 
-	resp, err := h.httpClient.Do(upstreamReq)
-	if err != nil {
-		metrics.RequestsTotal.WithLabelValues("sync-direct", def.Type, def.Model, "502").Inc()
-		writeError(w, http.StatusBadGateway, "upstream error: "+err.Error())
-		return
-	}
-	defer resp.Body.Close()
-
-	metrics.RequestsTotal.WithLabelValues("sync-direct", def.Type, def.Model, fmt.Sprintf("%d", resp.StatusCode)).Inc()
-	for key, values := range resp.Header {
-		for _, v := range values {
-			w.Header().Add(key, v)
+	for i, backend := range backends {
+		target, err := url.Parse(backend.URL)
+		if err != nil {
+			slog.WarnContext(r.Context(), "invalid backend url, skipping",
+				"backend_index", i, "url", backend.URL, "error", err)
+			lastErr = "invalid backend url: " + err.Error()
+			continue
 		}
+		target.Path = r.URL.Path
+		target.RawQuery = r.URL.RawQuery
+
+		upstreamReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, target.String(), bytes.NewReader(body))
+		if err != nil {
+			lastErr = "failed to build upstream request: " + err.Error()
+			continue
+		}
+		upstreamReq.Header.Set("Content-Type", contentType)
+		if auth != "" {
+			upstreamReq.Header.Set("Authorization", auth)
+		}
+		for k, v := range def.InferenceHeaders {
+			upstreamReq.Header.Set(k, v)
+		}
+		for k, v := range backend.Headers {
+			upstreamReq.Header.Set(k, v)
+		}
+
+		resp, err := h.httpClient.Do(upstreamReq)
+		if err != nil {
+			slog.WarnContext(r.Context(), "backend network error, trying next",
+				"backend_index", i, "url", backend.URL, "error", err)
+			metrics.RequestsTotal.WithLabelValues("sync-direct", def.Type, def.Model, "502").Inc()
+			lastErr = "upstream error: " + err.Error()
+			continue
+		}
+
+		if resp.StatusCode >= 500 {
+			slog.WarnContext(r.Context(), "backend returned 5xx, trying next",
+				"backend_index", i, "url", backend.URL, "status", resp.StatusCode)
+			metrics.RequestsTotal.WithLabelValues("sync-direct", def.Type, def.Model, strconv.Itoa(resp.StatusCode)).Inc()
+			lastErr = fmt.Sprintf("backend returned %d", resp.StatusCode)
+			_, _ = io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			continue
+		}
+
+		// Success or 4xx: forward immediately, do not retry.
+		defer resp.Body.Close()
+		metrics.RequestsTotal.WithLabelValues("sync-direct", def.Type, def.Model, strconv.Itoa(resp.StatusCode)).Inc()
+		for key, values := range resp.Header {
+			for _, v := range values {
+				w.Header().Add(key, v)
+			}
+		}
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+		return
 	}
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+
+	metrics.RequestsTotal.WithLabelValues("sync-direct", def.Type, def.Model, "502").Inc()
+	writeError(w, http.StatusBadGateway, "all backends failed: "+lastErr)
 }
 
 // statusWriter wraps http.ResponseWriter to capture the written status code.

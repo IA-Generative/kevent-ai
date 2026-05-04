@@ -111,6 +111,14 @@ type RedisConfig struct {
 	JobTTLH  int    `yaml:"job_ttl_hours"`
 }
 
+// BackendConfig describes one backend in a multi-backend list.
+type BackendConfig struct {
+	URL     string            `yaml:"url"`
+	Weight  int               `yaml:"weight"`  // relative weight; 0 = fallback-only
+	Headers map[string]string `yaml:"headers"` // headers added to every request to this backend; override service-level inference_headers
+	Model   string            `yaml:"model"`   // real model name sent to this backend; overrides service-level backend_model
+}
+
 // ServiceConfig declares a single inference service type.
 // New services are added here (config.yaml) — no Go code required.
 type ServiceConfig struct {
@@ -127,7 +135,12 @@ type ServiceConfig struct {
 	// e.g. {"transcription": ["/v1/audio/transcriptions"], "translation": ["/v1/audio/translations"]}
 	// Multiple paths per operation are all indexed for sync routing; the first is used for async.
 	Operations   map[string][]string `yaml:"operations"`
-	InferenceURL string              `yaml:"inference_url"` // InferenceService cluster URL
+	InferenceURL string              `yaml:"inference_url"` // InferenceService cluster URL (single backend, legacy)
+	// Backends is a list of inference backends for this service. When set, takes
+	// precedence over inference_url and enables blue/green, canary, and fallback routing.
+	// weight > 0 = eligible for primary selection (weighted random).
+	// weight = 0 = fallback-only (tried only if all weight>0 backends fail).
+	Backends []BackendConfig `yaml:"backends"`
 	// Async / Kafka mode.
 	InputTopic string `yaml:"input_topic"`
 	ResultTopic string `yaml:"result_topic"`
@@ -278,6 +291,14 @@ func (c *Config) validate() error {
 		}
 		if svc.ResponseCacheTTL < 0 {
 			return fmt.Errorf("service %q: response_cache_ttl must be >= 0", svc.Type)
+		}
+		for i, b := range svc.Backends {
+			if b.URL == "" {
+				return fmt.Errorf("service %q: backends[%d].url must not be empty", svc.Type, i)
+			}
+			if b.Weight < 0 {
+				return fmt.Errorf("service %q: backends[%d].weight must be >= 0", svc.Type, i)
+			}
 		}
 	}
 	return nil

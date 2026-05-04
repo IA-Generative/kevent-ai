@@ -67,6 +67,22 @@ data:
         {{- if .inferenceURL }}
         inference_url:     {{ .inferenceURL | quote }}
         {{- end }}
+        {{- if .backends }}
+        backends:
+          {{- range .backends }}
+          - url:    {{ .url | quote }}
+            weight: {{ .weight }}
+            {{- if .model }}
+            model:  {{ .model | quote }}
+            {{- end }}
+            {{- if .headers }}
+            headers:
+              {{- range $k, $v := .headers }}
+              {{ $k }}: {{ $v | quote }}
+              {{- end }}
+            {{- end }}
+          {{- end }}
+        {{- end }}
         {{- if .inputTopic }}
         input_topic:       {{ .inputTopic }}
         result_topic:      {{ .resultTopic }}

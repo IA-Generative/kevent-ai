@@ -121,6 +121,37 @@ services:
     acceptedExts: [".pdf", ".jpg", ".jpeg", ".png", ".tiff", ".bmp"]
     maxFileSizeMB: 50
 
+  # ── Multi-backend : blue/green, canary, fallback ─────────────────────────
+  # Remplace inferenceURL par une liste backends. Mutuellement exclusif avec
+  # inferenceURL (backends a la priorité si les deux sont renseignés).
+  #
+  # weight > 0 : éligible en sélection primaire (pondération relative).
+  # weight = 0 : fallback-only (jamais sélectionné en primaire ; essayé
+  #              uniquement si tous les backends weight>0 échouent).
+  #
+  # Blue/green  → weight: 100/0 ; promotion = swap des weights
+  # Canary      → weight: 90/10
+  # Fallback    → weight: 100 + weight: 0
+  #
+  # - type: llm
+  #   model: "gpt-4o"
+  #   operations:
+  #     chat:
+  #       - "/v1/chat/completions"
+  #   backends:
+  #     - url: "http://backend-v1.svc"
+  #       weight: 90
+  #       model: "llama-3.1-8b"            # optionnel : nom de modèle réel envoyé à ce backend (override backend_model)
+  #       headers:                          # optionnel : headers spécifiques à ce backend (override inference_headers)
+  #         Authorization: "Bearer ${STABLE_API_KEY}"
+  #     - url: "http://backend-v2.svc"
+  #       weight: 10
+  #       model: "llama-3.2-8b"            # canary : version différente du modèle
+  #       headers:
+  #         Authorization: "Bearer ${CANARY_API_KEY}"
+  #     - url: "http://backend-fallback.svc"
+  #       weight: 0    # last resort
+
   # Exemple de service sync-direct uniquement (sans Kafka).
   # Les requêtes POST /v1/* sont proxifiées directement vers inferenceURL.
   # POST /jobs/{service_type} retourne 405.
