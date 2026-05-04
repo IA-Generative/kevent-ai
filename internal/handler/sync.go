@@ -438,6 +438,9 @@ func (h *SyncHandler) proxyToInference(w http.ResponseWriter, r *http.Request, d
 		for k, v := range def.InferenceHeaders {
 			upstreamReq.Header.Set(k, v)
 		}
+		for k, v := range backend.Headers {
+			upstreamReq.Header.Set(k, v)
+		}
 
 		resp, err := h.httpClient.Do(upstreamReq)
 		if err != nil {

@@ -68,6 +68,12 @@ data:
           {{- range .backends }}
           - url:    {{ .url | quote }}
             weight: {{ .weight }}
+            {{- if .headers }}
+            headers:
+              {{- range $k, $v := .headers }}
+              {{ $k }}: {{ $v | quote }}
+              {{- end }}
+            {{- end }}
           {{- end }}
         {{- end }}
         {{- if .inputTopic }}

@@ -113,8 +113,9 @@ type RedisConfig struct {
 
 // BackendConfig describes one backend in a multi-backend list.
 type BackendConfig struct {
-	URL    string `yaml:"url"`
-	Weight int    `yaml:"weight"` // relative weight; 0 = fallback-only
+	URL     string            `yaml:"url"`
+	Weight  int               `yaml:"weight"`  // relative weight; 0 = fallback-only
+	Headers map[string]string `yaml:"headers"` // headers added to every request to this backend; override service-level inference_headers
 }
 
 // ServiceConfig declares a single inference service type.

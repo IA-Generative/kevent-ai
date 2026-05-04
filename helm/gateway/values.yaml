@@ -141,8 +141,12 @@ services:
   #   backends:
   #     - url: "http://backend-v1.svc"
   #       weight: 90
+  #       headers:                          # optionnel : headers spécifiques à ce backend (override inference_headers)
+  #         Authorization: "Bearer ${STABLE_API_KEY}"
   #     - url: "http://backend-v2.svc"
   #       weight: 10
+  #       headers:
+  #         Authorization: "Bearer ${CANARY_API_KEY}"
   #     - url: "http://backend-fallback.svc"
   #       weight: 0    # last resort
 

@@ -7,8 +7,9 @@ import (
 
 // Backend is a resolved inference backend with its routing weight.
 type Backend struct {
-	URL    string
-	Weight int // 0 = fallback-only (never primary-selected)
+	URL     string
+	Weight  int               // 0 = fallback-only (never primary-selected)
+	Headers map[string]string // per-backend headers; override service-level InferenceHeaders
 }
 
 // OrderedBackends returns the backends in the order they should be tried for a
