@@ -228,7 +228,7 @@ func normalizeBackends(cfgBackends []config.BackendConfig, legacyURL string) []B
 	if len(cfgBackends) > 0 {
 		out := make([]Backend, len(cfgBackends))
 		for i, b := range cfgBackends {
-			out[i] = Backend{URL: b.URL, Weight: b.Weight, Headers: b.Headers}
+			out[i] = Backend{URL: b.URL, Weight: b.Weight, Headers: b.Headers, Model: b.Model}
 		}
 		return out
 	}

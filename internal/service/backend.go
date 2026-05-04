@@ -10,6 +10,7 @@ type Backend struct {
 	URL     string
 	Weight  int               // 0 = fallback-only (never primary-selected)
 	Headers map[string]string // per-backend headers; override service-level InferenceHeaders
+	Model   string            // real model name sent to this backend; overrides service-level BackendModel
 }
 
 // OrderedBackends returns the backends in the order they should be tried for a

@@ -196,10 +196,12 @@ services:
   #   backends:
   #     - url: "http://vllm-stable.default.svc.cluster.local:8000"
   #       weight: 90
+  #       model: "llama-3.1-8b"            # optional: real model name sent to this backend (overrides backend_model)
   #       headers:                          # optional: per-backend headers (override inference_headers)
   #         Authorization: "Bearer ${STABLE_API_KEY}"
   #     - url: "http://vllm-canary.default.svc.cluster.local:8000"
   #       weight: 10
+  #       model: "llama-3.2-8b"            # canary: different model version
   #       headers:
   #         Authorization: "Bearer ${CANARY_API_KEY}"
   #     - url: "http://vllm-fallback.default.svc.cluster.local:8000"

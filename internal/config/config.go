@@ -116,6 +116,7 @@ type BackendConfig struct {
 	URL     string            `yaml:"url"`
 	Weight  int               `yaml:"weight"`  // relative weight; 0 = fallback-only
 	Headers map[string]string `yaml:"headers"` // headers added to every request to this backend; override service-level inference_headers
+	Model   string            `yaml:"model"`   // real model name sent to this backend; overrides service-level backend_model
 }
 
 // ServiceConfig declares a single inference service type.

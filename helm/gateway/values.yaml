@@ -141,10 +141,12 @@ services:
   #   backends:
   #     - url: "http://backend-v1.svc"
   #       weight: 90
+  #       model: "llama-3.1-8b"            # optionnel : nom de modèle réel envoyé à ce backend (override backend_model)
   #       headers:                          # optionnel : headers spécifiques à ce backend (override inference_headers)
   #         Authorization: "Bearer ${STABLE_API_KEY}"
   #     - url: "http://backend-v2.svc"
   #       weight: 10
+  #       model: "llama-3.2-8b"            # canary : version différente du modèle
   #       headers:
   #         Authorization: "Bearer ${CANARY_API_KEY}"
   #     - url: "http://backend-fallback.svc"

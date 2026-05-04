@@ -103,26 +103,28 @@ func (h *Handler) ServeJSON(w http.ResponseWriter, r *http.Request, def *service
 		metrics.CacheMissesTotal.WithLabelValues(def.Type, def.Model).Inc()
 	}
 
-	// ── Rewrite model alias → backend model ──────────────────────────────────
-	// Cache key is derived from the alias (def.Model); the backend receives the
-	// real model name. Rewrite happens after key derivation so cache hits are
-	// keyed on the alias, not the backend identifier.
-	upstreamBody := body
-	if def.BackendModel != "" {
-		var rewriteErr error
-		upstreamBody, rewriteErr = rewriteBodyModel(body, def.BackendModel)
-		if rewriteErr != nil {
-			writeError(w, http.StatusInternalServerError, "failed to rewrite model field: "+rewriteErr.Error())
-			return
-		}
-	}
-
 	// ── Forward to provider (with backend retry) ─────────────────────────────
+	// Model rewrite happens per-backend: backend.Model overrides def.BackendModel.
+	// Cache key is derived from the alias (def.Model) above, before any rewrite,
+	// so cache hits are keyed on the alias regardless of backend model name.
 	backends := service.OrderedBackends(def.Backends)
 	var resp *http.Response
 	var respBody []byte
 	var lastBackendErr string
 	for i, backend := range backends {
+		effectiveModel := backend.Model
+		if effectiveModel == "" {
+			effectiveModel = def.BackendModel
+		}
+		upstreamBody := body
+		if effectiveModel != "" {
+			var rewriteErr error
+			upstreamBody, rewriteErr = rewriteBodyModel(body, effectiveModel)
+			if rewriteErr != nil {
+				writeError(w, http.StatusInternalServerError, "failed to rewrite model field: "+rewriteErr.Error())
+				return
+			}
+		}
 		upstreamReq, reqErr := prov.BuildRequest(r.Context(), def, upstreamBody, r.URL.Path, backend.URL)
 		if reqErr != nil {
 			writeError(w, http.StatusInternalServerError, "failed to build upstream request: "+reqErr.Error())

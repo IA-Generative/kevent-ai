@@ -68,6 +68,9 @@ data:
           {{- range .backends }}
           - url:    {{ .url | quote }}
             weight: {{ .weight }}
+            {{- if .model }}
+            model:  {{ .model | quote }}
+            {{- end }}
             {{- if .headers }}
             headers:
               {{- range $k, $v := .headers }}
