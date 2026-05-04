@@ -16,6 +16,51 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Gateway
 
+### [v0.8.0] — 2026-05-04
+
+#### Added
+
+**Multi-backend routing** (`internal/service/`, `internal/handler/`, `internal/llmproxy/`)
+- `backends` list per service replaces or supplements `inference_url`: weighted-random primary selection, automatic retry on 5xx / network error, `weight: 0` for last-resort fallbacks
+- Supports blue/green (`weight: 100/0`), canary (`weight: 90/10`), and fallback patterns
+- Per-backend `headers` — override service-level `inference_headers` per backend (e.g. separate API keys per endpoint)
+- Per-backend `model` — override service-level `backend_model` per backend, enabling model-version canaries (clients send one alias, each backend receives its real model name)
+- Full backward compatibility: `inference_url` is transparently normalized to `[{url, weight: 1}]`
+
+**SSE streaming** (`internal/llmproxy/`)
+- `stream: true` LLM requests are piped directly to the client without buffering
+- Retry loop runs before `w.WriteHeader`; once the stream starts, no backend switch occurs
+- Cache and response translation are bypassed for streaming responses
+
+**Rate limiting** (`internal/ratelimit/`)
+- Per-consumer Redis fixed-window rate limiting keyed by `{consumer}:{service_type}:{user_type}` — multi-model services share a single counter
+- Applies at job submission (async) and sync-direct proxy; returns `429` with `Retry-After` header
+- New top-level config block: `rate_limits[service_type][user_type]: {rate: N, period: Xs}`
+- New server config: `user_type_header` — HTTP header carrying consumer type (e.g. `X-User-Type`)
+- PrometheusRule: `KeventGatewayRateLimitHighRejectionRate` (> 20 %, warning) and `KeventGatewayRateLimitErrors`
+
+**Observability**
+- `backend_model` label added to `kevent_llm_requests_total`, `kevent_llm_request_duration_seconds`, `kevent_llm_tokens_total`, `kevent_llm_tokens_per_request` — enables per-model-version dashboards during canary deployments
+- New Grafana dashboard `kevent-llm.json` — LLM proxy metrics (requests, latency, tokens, cache, rate limiting)
+- `metrics.top_consumers` and `metrics.consumer_labels` exposed in Helm `values.yaml`
+
+**Updated Prometheus metrics**
+
+| Metric | Labels |
+|---|---|
+| `kevent_llm_requests_total` | `service_type, model, backend_model, provider, user_type, status` |
+| `kevent_llm_request_duration_seconds` | `service_type, model, backend_model, provider, user_type` |
+| `kevent_llm_tokens_total` | `service_type, model, backend_model, user_type, type` |
+| `kevent_llm_tokens_per_request` | `service_type, model, backend_model, user_type` (histogram) |
+| `kevent_ratelimit_requests_total` | `service_type, user_type, result` |
+| `kevent_ratelimit_consumer_hits_total` | `service_type, user_type` |
+| `kevent_ratelimit_errors_total` | `service_type` |
+
+#### Breaking changes
+- `kevent_llm_*` metrics gain a `backend_model` label (empty string `""` when not configured) — existing dashboards and alerts targeting these metrics need to be updated
+
+---
+
 ### [v0.7.0] — 2026-04-28
 
 #### Added
