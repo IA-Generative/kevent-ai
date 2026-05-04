@@ -287,27 +287,59 @@ func isStreamingRequest(body []byte) bool {
 // Cache and response translation are skipped; chunks are flushed as received.
 // Token metrics are not emitted — usage counts are embedded in SSE chunks and
 // not parsed to avoid buffering the stream.
+// Backend retry is possible before w.WriteHeader; once the SSE stream starts,
+// switching backends is no longer possible.
 func (h *Handler) serveStream(w http.ResponseWriter, r *http.Request, def *service.Def, body []byte, prov provider.Provider, userType string, start time.Time) {
-	upstreamBody := body
-	if def.BackendModel != "" {
-		var err error
-		upstreamBody, err = rewriteBodyModel(body, def.BackendModel)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to rewrite model field: "+err.Error())
+	backends := service.OrderedBackends(def.Backends)
+	var resp *http.Response
+	var lastErr string
+	var winningBackendModel string
+	for i, backend := range backends {
+		effectiveModel := backend.Model
+		if effectiveModel == "" {
+			effectiveModel = def.BackendModel
+		}
+		upstreamBody := body
+		if effectiveModel != "" {
+			var rewriteErr error
+			upstreamBody, rewriteErr = rewriteBodyModel(body, effectiveModel)
+			if rewriteErr != nil {
+				writeError(w, http.StatusInternalServerError, "failed to rewrite model field: "+rewriteErr.Error())
+				return
+			}
+		}
+		upstreamReq, reqErr := prov.BuildRequest(r.Context(), def, upstreamBody, r.URL.Path, backend.URL)
+		if reqErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to build upstream request: "+reqErr.Error())
 			return
 		}
+		var doErr error
+		resp, doErr = h.httpClient.Do(upstreamReq)
+		if doErr != nil {
+			slog.WarnContext(r.Context(), "llm stream backend error, trying next",
+				"backend_index", i, "url", backend.URL, "error", doErr)
+			metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, effectiveModel, def.Provider, userType, "502").Inc()
+			lastErr = doErr.Error()
+			resp = nil
+			continue
+		}
+		if resp.StatusCode >= 500 {
+			slog.WarnContext(r.Context(), "llm stream backend returned 5xx, trying next",
+				"backend_index", i, "url", backend.URL, "status", resp.StatusCode)
+			metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, effectiveModel, def.Provider, userType,
+				strconv.Itoa(resp.StatusCode)).Inc()
+			lastErr = fmt.Sprintf("backend returned %d", resp.StatusCode)
+			_, _ = io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			resp = nil
+			continue
+		}
+		winningBackendModel = effectiveModel
+		break
 	}
-
-	upstreamReq, err := prov.BuildRequest(r.Context(), def, upstreamBody, r.URL.Path)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to build upstream request: "+err.Error())
-		return
-	}
-
-	resp, err := h.httpClient.Do(upstreamReq)
-	if err != nil {
-		metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, def.Provider, userType, "502").Inc()
-		writeError(w, http.StatusBadGateway, "upstream error: "+err.Error())
+	if resp == nil {
+		metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, "", def.Provider, userType, "502").Inc()
+		writeError(w, http.StatusBadGateway, "all backends failed: "+lastErr)
 		return
 	}
 	defer resp.Body.Close()
@@ -325,8 +357,8 @@ func (h *Handler) serveStream(w http.ResponseWriter, r *http.Request, def *servi
 	w.WriteHeader(resp.StatusCode)
 
 	statusStr := strconv.Itoa(resp.StatusCode)
-	metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, def.Provider, userType, statusStr).Inc()
-	metrics.LLMRequestDuration.WithLabelValues(def.Type, def.Model, def.Provider, userType).Observe(time.Since(start).Seconds())
+	metrics.LLMRequestsTotal.WithLabelValues(def.Type, def.Model, winningBackendModel, def.Provider, userType, statusStr).Inc()
+	metrics.LLMRequestDuration.WithLabelValues(def.Type, def.Model, winningBackendModel, def.Provider, userType).Observe(time.Since(start).Seconds())
 
 	// Pipe response, flushing after each read to deliver chunks immediately.
 	flusher, canFlush := w.(http.Flusher)

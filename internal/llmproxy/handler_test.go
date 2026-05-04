@@ -436,7 +436,7 @@ func TestServeJSON_Streaming_PipedToClient(t *testing.T) {
 	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second}, "", &noopTracker{})
 
 	def := llmDef("passthrough", "", 60*time.Second)
-	def.InferenceURL = backend.URL
+	setBackend(def, backend.URL)
 
 	rr := doServeJSON(h, def, streamBody)
 
@@ -469,7 +469,7 @@ func TestServeJSON_Streaming_SkipsCache(t *testing.T) {
 	h := New(mc, reg, &http.Client{Timeout: 5 * time.Second}, "", &noopTracker{})
 
 	def := llmDef("passthrough", "", 60*time.Second)
-	def.InferenceURL = backend.URL
+	setBackend(def, backend.URL)
 
 	doServeJSON(h, def, streamBody)
 	doServeJSON(h, def, streamBody)
@@ -500,7 +500,7 @@ func TestServeJSON_Streaming_BackendModel_Rewritten(t *testing.T) {
 	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second}, "", &noopTracker{})
 
 	def := llmDef("passthrough", "real-model-id", 0)
-	def.InferenceURL = backend.URL
+	setBackend(def, backend.URL)
 
 	doServeJSON(h, def, streamBody)
 
