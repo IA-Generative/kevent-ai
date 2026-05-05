@@ -15,13 +15,12 @@ type anthropicProvider struct{}
 
 func (p *anthropicProvider) Name() string { return "anthropic" }
 
-func (p *anthropicProvider) BuildRequest(ctx context.Context, def *service.Def, body []byte, urlPath string) (*http.Request, error) {
+func (p *anthropicProvider) BuildRequest(ctx context.Context, def *service.Def, body []byte, urlPath string, baseURL string) (*http.Request, error) {
 	translated, err := openAIToAnthropic(body)
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: translate request: %w", err)
 	}
 
-	baseURL := def.InferenceURL
 	if baseURL == "" {
 		baseURL = "https://api.anthropic.com"
 	}

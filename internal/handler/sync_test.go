@@ -146,7 +146,7 @@ func TestSyncHandler_JSONAlwaysUsesDirectProxy(t *testing.T) {
 	}}
 	reg := service.NewRegistry(cfgs)
 
-	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil)
+	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
 		strings.NewReader(`{"model":"llava","messages":[]}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -183,7 +183,7 @@ func TestSyncHandler_MultipartNoSyncTopic_UsesDirectProxy(t *testing.T) {
 	}}
 	reg := service.NewRegistry(cfgs)
 
-	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil)
+	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, nil)
 	req := multipartRequest(t, "/v1/audio/transcriptions", "whisper-large-v3", []byte("fake audio"))
 	w := httptest.NewRecorder()
 
@@ -216,7 +216,7 @@ func TestSyncHandler_MultipartWithSyncTopic_UsesKafka(t *testing.T) {
 	prod := &mockProducer{sub: sub} // signals sub.ch on publish
 
 	reg := buildRegistry("jobs.whisper-large-v3.sync")
-	h := handler.NewSyncHandler(reg, s3, redis, prod, "", nil)
+	h := handler.NewSyncHandler(reg, s3, redis, prod, "", nil, nil)
 
 	req := multipartRequest(t, "/v1/audio/transcriptions", "whisper-large-v3", []byte("fake audio"))
 	w := httptest.NewRecorder()
@@ -248,7 +248,7 @@ func TestSyncHandler_S3UploadFailure(t *testing.T) {
 	prod := &mockProducer{}
 
 	reg := buildRegistry("jobs.whisper-large-v3.sync")
-	h := handler.NewSyncHandler(reg, s3, redis, prod, "", nil)
+	h := handler.NewSyncHandler(reg, s3, redis, prod, "", nil, nil)
 
 	req := multipartRequest(t, "/v1/audio/transcriptions", "whisper-large-v3", []byte("audio"))
 	w := httptest.NewRecorder()
@@ -271,7 +271,7 @@ func TestSyncHandler_KafkaPublishFailure(t *testing.T) {
 	prod := &mockProducer{publishErr: fmt.Errorf("kafka unavailable")}
 
 	reg := buildRegistry("jobs.whisper-large-v3.sync")
-	h := handler.NewSyncHandler(reg, s3, redis, prod, "", nil)
+	h := handler.NewSyncHandler(reg, s3, redis, prod, "", nil, nil)
 
 	req := multipartRequest(t, "/v1/audio/transcriptions", "whisper-large-v3", []byte("audio"))
 	w := httptest.NewRecorder()
@@ -292,7 +292,7 @@ func TestSyncHandler_ClientDisconnect(t *testing.T) {
 	prod := &mockProducer{} // does not signal sub
 
 	reg := buildRegistry("jobs.whisper-large-v3.sync")
-	h := handler.NewSyncHandler(reg, s3, redis, prod, "", nil)
+	h := handler.NewSyncHandler(reg, s3, redis, prod, "", nil, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -323,7 +323,7 @@ func TestSyncHandler_InferenceFailure(t *testing.T) {
 	prod := &mockProducer{sub: sub}
 
 	reg := buildRegistry("jobs.whisper-large-v3.sync")
-	h := handler.NewSyncHandler(reg, s3, redis, prod, "", nil)
+	h := handler.NewSyncHandler(reg, s3, redis, prod, "", nil, nil)
 
 	req := multipartRequest(t, "/v1/audio/transcriptions", "whisper-large-v3", []byte("audio"))
 	w := httptest.NewRecorder()
@@ -351,7 +351,7 @@ func TestSyncHandler_MissingModelField_SingleModel(t *testing.T) {
 	prod := &mockProducer{sub: sub}
 
 	reg := buildRegistry("jobs.whisper-large-v3.sync")
-	h := handler.NewSyncHandler(reg, s3, redis, prod, "", nil)
+	h := handler.NewSyncHandler(reg, s3, redis, prod, "", nil, nil)
 
 	body := &bytes.Buffer{}
 	mw := multipart.NewWriter(body)
@@ -399,7 +399,7 @@ func TestSyncHandler_MissingModelField_MultipleModels(t *testing.T) {
 		},
 	}
 	reg := service.NewRegistry(cfgs)
-	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil)
+	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, nil)
 
 	body := &bytes.Buffer{}
 	mw := multipart.NewWriter(body)
@@ -421,7 +421,7 @@ func TestSyncHandler_MissingModelField_MultipleModels(t *testing.T) {
 // TestSyncHandler_UnknownModel verifies that an unknown model returns 400.
 func TestSyncHandler_UnknownModel(t *testing.T) {
 	reg := buildRegistry("jobs.whisper-large-v3.sync")
-	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil)
+	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, nil)
 
 	req := multipartRequest(t, "/v1/audio/transcriptions", "unknown-model", []byte("audio"))
 	w := httptest.NewRecorder()
@@ -437,7 +437,7 @@ func TestSyncHandler_UnknownModel(t *testing.T) {
 // return 415.
 func TestSyncHandler_UnsupportedContentType(t *testing.T) {
 	reg := buildRegistry("")
-	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil)
+	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions",
 		strings.NewReader("plain text body"))
@@ -448,5 +448,201 @@ func TestSyncHandler_UnsupportedContentType(t *testing.T) {
 
 	if w.Code != http.StatusUnsupportedMediaType {
 		t.Errorf("expected 415, got %d", w.Code)
+	}
+}
+
+// ── Multi-backend tests ────────────────────────────────────────────────────────
+
+func buildMultiBackendRegistry(backends []config.BackendConfig) *service.Registry {
+	cfgs := []config.ServiceConfig{{
+		Type:  "ocr",
+		Model: "llava",
+		Operations: map[string][]string{
+			"chat": {"/v1/chat/completions"},
+		},
+		Backends: backends,
+	}}
+	return service.NewRegistry(cfgs)
+}
+
+func jsonRequest(path string) *http.Request {
+	req := httptest.NewRequest(http.MethodPost, path,
+		strings.NewReader(`{"model":"llava","messages":[]}`))
+	req.Header.Set("Content-Type", "application/json")
+	return req
+}
+
+func TestSyncHandler_MultiBackend_PrimaryFails_FallbackUsed(t *testing.T) {
+	fallbackCalled := false
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer primary.Close()
+	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fallbackCalled = true
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	defer fallback.Close()
+
+	reg := buildMultiBackendRegistry([]config.BackendConfig{
+		{URL: primary.URL, Weight: 100},
+		{URL: fallback.URL, Weight: 10},
+	})
+	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, nil)
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, jsonRequest("/v1/chat/completions"))
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 from fallback, got %d", w.Code)
+	}
+	if !fallbackCalled {
+		t.Error("fallback backend was not called")
+	}
+}
+
+func TestSyncHandler_MultiBackend_NetworkError_FallbackUsed(t *testing.T) {
+	fallbackCalled := false
+	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fallbackCalled = true
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	defer fallback.Close()
+
+	reg := buildMultiBackendRegistry([]config.BackendConfig{
+		{URL: "http://127.0.0.1:1", Weight: 100}, // unreachable
+		{URL: fallback.URL, Weight: 10},
+	})
+	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, nil)
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, jsonRequest("/v1/chat/completions"))
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 from fallback, got %d", w.Code)
+	}
+	if !fallbackCalled {
+		t.Error("fallback backend was not called")
+	}
+}
+
+func TestSyncHandler_MultiBackend_AllFail_Returns502(t *testing.T) {
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer primary.Close()
+	secondary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer secondary.Close()
+
+	reg := buildMultiBackendRegistry([]config.BackendConfig{
+		{URL: primary.URL, Weight: 100},
+		{URL: secondary.URL, Weight: 10},
+	})
+	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, nil)
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, jsonRequest("/v1/chat/completions"))
+
+	if w.Code != http.StatusBadGateway {
+		t.Errorf("expected 502 when all backends fail, got %d", w.Code)
+	}
+}
+
+func TestSyncHandler_MultiBackend_WeightZero_UsedAsFallback(t *testing.T) {
+	fallbackCalled := false
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer primary.Close()
+	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fallbackCalled = true
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	defer fallback.Close()
+
+	reg := buildMultiBackendRegistry([]config.BackendConfig{
+		{URL: primary.URL, Weight: 100},
+		{URL: fallback.URL, Weight: 0}, // fallback-only
+	})
+	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, nil)
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, jsonRequest("/v1/chat/completions"))
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 from weight=0 fallback, got %d", w.Code)
+	}
+	if !fallbackCalled {
+		t.Error("weight=0 fallback backend was not called after primary failure")
+	}
+}
+
+func TestSyncHandler_MultiBackend_4xx_NotRetried(t *testing.T) {
+	callCount := 0
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer primary.Close()
+	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer fallback.Close()
+
+	reg := buildMultiBackendRegistry([]config.BackendConfig{
+		{URL: primary.URL, Weight: 100},
+		{URL: fallback.URL, Weight: 10},
+	})
+	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, nil)
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, jsonRequest("/v1/chat/completions"))
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 forwarded as-is, got %d", w.Code)
+	}
+	if callCount != 1 {
+		t.Errorf("4xx should not trigger retry; backend called %d time(s)", callCount)
+	}
+}
+
+func TestSyncHandler_BackwardCompat_SingleInferenceURL(t *testing.T) {
+	called := false
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	defer upstream.Close()
+
+	cfgs := []config.ServiceConfig{{
+		Type:  "ocr",
+		Model: "llava",
+		Operations: map[string][]string{
+			"chat": {"/v1/chat/completions"},
+		},
+		InferenceURL: upstream.URL, // legacy single-URL config
+	}}
+	reg := service.NewRegistry(cfgs)
+	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, nil)
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, jsonRequest("/v1/chat/completions"))
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 with legacy inference_url, got %d", w.Code)
+	}
+	if !called {
+		t.Error("upstream was not called")
 	}
 }

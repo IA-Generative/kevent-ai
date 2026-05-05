@@ -14,8 +14,7 @@ type openAIProvider struct{}
 
 func (p *openAIProvider) Name() string { return "openai" }
 
-func (p *openAIProvider) BuildRequest(ctx context.Context, def *service.Def, body []byte, urlPath string) (*http.Request, error) {
-	baseURL := def.InferenceURL
+func (p *openAIProvider) BuildRequest(ctx context.Context, def *service.Def, body []byte, urlPath string, baseURL string) (*http.Request, error) {
 	if baseURL == "" {
 		baseURL = "https://api.openai.com"
 	}

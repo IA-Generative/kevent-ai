@@ -19,6 +19,11 @@ server:
   #   - kevent_jobs_by_consumer_total metric is emitted per consumer
   # Leave empty in deployments without upstream authentication.
   consumer_header: "${CONSUMER_HEADER:-}"
+  # user_type_header: HTTP header injected by OPA to identify the user type for
+  # rate limiting (e.g. "X-User-Type"). Values are matched against rate_limits
+  # entries; "*" is the fallback when the header is absent or unlisted.
+  # Leave empty to apply only the "*" fallback (no per-type differentiation).
+  user_type_header: "${USER_TYPE_HEADER:-}"
 
 kafka:
   brokers:
@@ -47,6 +52,25 @@ redis:
   password: "${REDIS_PASSWORD:-}"
   db: 0
   job_ttl_hours: 72  # keep job records for 3 days
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Metrics — consumer tracking
+# Ces options activent un suivi fin de la consommation LLM par consumer.
+# Les deux mécanismes sont indépendants et peuvent être activés simultanément.
+# ─────────────────────────────────────────────────────────────────────────────
+metrics:
+  # top_consumers: expose les N meilleurs consommateurs LLM dans Prometheus via
+  # kevent_llm_consumer_tokens_top{consumer, user_type, type="prompt|completion"}.
+  # Stocké dans un sorted set Redis (ZINCRBY), rafraîchi toutes les 60s.
+  # Nécessite que server.consumer_header soit configuré.
+  # 0 = désactivé (défaut).
+  top_consumers: ${METRICS_TOP_CONSUMERS:-0}
+  # consumer_labels: émet des labels Prometheus directs par consumer
+  # (kevent_llm_tokens_total{consumer=...}).
+  # Réservé aux déploiements avec un nombre borné de consumers (< 50).
+  # Pour des deployments avec des consumers dynamiques, préférer top_consumers.
+  # false = désactivé (défaut).
+  consumer_labels: false
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Service registry
@@ -86,6 +110,12 @@ services:
     priority_topic: jobs.whisper-large-v3.input.priority
     accepted_exts: [".mp3", ".wav", ".m4a", ".ogg", ".flac"]
     max_file_size_mb: 500
+
+  # ── Example: add a second model variant for the same service type ──────────
+  # - type: audio
+  #   model: "whisper-large-v3-turbo"
+  #   ...
+  # Both models share the same rate_limits["audio"] counter per consumer.
 
   - type: ocr
     # Sync / OpenAI-compatible
@@ -163,3 +193,59 @@ services:
   #   inference_url: "http://vllm.default.svc.cluster.local:8000"
   #   inference_headers:
   #     Authorization: "Bearer ${VLLM_TOKEN}"
+  #
+  # ── Multi-backend : blue/green, canary, fallback ──────────────────────────
+  # Replace inference_url with a backends list. Mutually exclusive: backends
+  # takes precedence when both are set.
+  #
+  # weight > 0 — eligible for primary selection (weighted random).
+  # weight = 0 — fallback-only: tried only if all weight>0 backends fail.
+  #
+  # Blue/green  — weight: 100/0 ; flip to 0/100 to cut over.
+  # Canary      — weight: 90/10 ; ramp up the new backend gradually.
+  # Fallback    — weight: 100 primary + weight: 0 last-resort.
+  #
+  # - type: llm
+  #   model: "gpt-4o"
+  #   provider: openai
+  #   operations:
+  #     chat:
+  #       - "/v1/chat/completions"
+  #   # Canary: 90 % on stable, 10 % on canary endpoint.
+  #   backends:
+  #     - url: "http://vllm-stable.default.svc.cluster.local:8000"
+  #       weight: 90
+  #       model: "llama-3.1-8b"            # optional: real model name sent to this backend (overrides backend_model)
+  #       headers:                          # optional: per-backend headers (override inference_headers)
+  #         Authorization: "Bearer ${STABLE_API_KEY}"
+  #     - url: "http://vllm-canary.default.svc.cluster.local:8000"
+  #       weight: 10
+  #       model: "llama-3.2-8b"            # canary: different model version
+  #       headers:
+  #         Authorization: "Bearer ${CANARY_API_KEY}"
+  #     - url: "http://vllm-fallback.default.svc.cluster.local:8000"
+  #       weight: 0    # only used if both stable and canary return 5xx
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Rate limiting
+# Per-consumer, per-service-type limits keyed by user type (server.user_type_header).
+# Applies to both async (POST /jobs/{type}) and sync (POST /v1/*) endpoints.
+# "*" is the fallback when the header is absent or the type has no specific entry.
+# Multiple models for the same service type share the same counter.
+# Leave this section empty (or omit it) to disable rate limiting.
+# ─────────────────────────────────────────────────────────────────────────────
+# rate_limits:
+#   audio:
+#     premium:
+#       rate: 100
+#       period: 1m
+#     standard:
+#       rate: 20
+#       period: 1m
+#     "*":
+#       rate: 10
+#       period: 1m
+#   ocr:
+#     "*":
+#       rate: 5
+#       period: 1m

@@ -44,6 +44,10 @@ func (r *RedisClient) Close() error {
 	return r.client.Close()
 }
 
+// Client returns the underlying *redis.Client for callers that need direct access
+// (e.g. rate limiting via Lua scripts).
+func (r *RedisClient) Client() *redis.Client { return r.client }
+
 // Raw exposes the underlying go-redis client for subsystems that need
 // generic Redis access (e.g. the LLM response cache).
 func (r *RedisClient) Raw() *redis.Client { return r.client }

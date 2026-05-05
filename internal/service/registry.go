@@ -22,7 +22,8 @@ type Def struct {
 	MaxFileSizeMB int64
 
 	// Sync / OpenAI-compatible mode (optional).
-	InferenceURL     string              // full URL of the backend endpoint (direct proxy fallback)
+	InferenceURL     string              // primary backend URL (derived from Backends; kept for compatibility)
+	Backends         []Backend           // ordered list of backends; always non-empty when InferenceURL != ""
 	Operations       map[string][]string // operation name → URL paths (all indexed; first used for async)
 	SyncTopic        string              // Kafka topic for priority sync-over-Kafka jobs (overrides direct proxy)
 	PriorityTopic    string              // Kafka topic for high-priority async jobs (SA accounts)
@@ -151,6 +152,17 @@ func NewRegistry(cfgs []config.ServiceConfig) *Registry {
 		for _, ext := range cfg.AcceptedExts {
 			exts[strings.ToLower(ext)] = struct{}{}
 		}
+		backends := normalizeBackends(cfg.Backends, cfg.InferenceURL)
+		primaryURL := cfg.InferenceURL
+		for _, b := range backends {
+			if b.Weight > 0 {
+				primaryURL = b.URL
+				break
+			}
+		}
+		if primaryURL == "" && len(backends) > 0 {
+			primaryURL = backends[0].URL
+		}
 		def := &Def{
 			Type:             cfg.Type,
 			Model:            cfg.Model,
@@ -158,7 +170,8 @@ func NewRegistry(cfgs []config.ServiceConfig) *Registry {
 			ResultTopic:      cfg.ResultTopic,
 			AcceptedExts:     exts,
 			MaxFileSizeMB:    cfg.MaxFileSizeMB,
-			InferenceURL:     cfg.InferenceURL,
+			InferenceURL:     primaryURL,
+			Backends:         backends,
 			Operations:       cfg.Operations,
 			SyncTopic:        cfg.SyncTopic,
 			PriorityTopic:    cfg.PriorityTopic,
@@ -178,8 +191,9 @@ func NewRegistry(cfgs []config.ServiceConfig) *Registry {
 		}
 
 		// Build the sync routing index — one entry per configured path across all operations.
-		// Index when either a direct proxy URL or a sync Kafka topic is configured.
-		if cfg.Model != "" && (cfg.InferenceURL != "" || cfg.SyncTopic != "") {
+		// Index when either a direct proxy backend or a sync Kafka topic is configured.
+		hasBackend := cfg.InferenceURL != "" || len(cfg.Backends) > 0
+		if cfg.Model != "" && (hasBackend || cfg.SyncTopic != "") {
 			for _, paths := range cfg.Operations {
 				for _, path := range paths {
 					if path == "" {
@@ -206,6 +220,22 @@ func NewRegistry(cfgs []config.ServiceConfig) *Registry {
 		}
 	}
 	return r
+}
+
+// normalizeBackends converts the config backends list to the runtime Backend slice.
+// When cfgBackends is empty but legacyURL is set, a single weight=1 backend is synthesized.
+func normalizeBackends(cfgBackends []config.BackendConfig, legacyURL string) []Backend {
+	if len(cfgBackends) > 0 {
+		out := make([]Backend, len(cfgBackends))
+		for i, b := range cfgBackends {
+			out[i] = Backend{URL: b.URL, Weight: b.Weight, Headers: b.Headers, Model: b.Model}
+		}
+		return out
+	}
+	if legacyURL != "" {
+		return []Backend{{URL: legacyURL, Weight: 1}}
+	}
+	return nil
 }
 
 // indexPattern adds def to the pattern index, merging into an existing pattern

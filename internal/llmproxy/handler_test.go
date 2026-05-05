@@ -62,8 +62,14 @@ func llmDef(provider, backendModel string, cacheTTL time.Duration) *service.Def 
 		Provider:         provider,
 		BackendModel:     backendModel,
 		ResponseCacheTTL: cacheTTL,
-		InferenceURL:     "", // set per-test via httptest
+		InferenceURL:     "", // set per-test via setBackend
 	}
+}
+
+// setBackend points def at a single httptest backend URL.
+func setBackend(def *service.Def, url string) {
+	def.InferenceURL = url
+	def.Backends = []service.Backend{{URL: url, Weight: 1}}
 }
 
 func doServeJSON(h *Handler, def *service.Def, body string, extraHeaders ...func(*http.Request)) *httptest.ResponseRecorder {
@@ -102,7 +108,7 @@ func TestServeJSON_CacheMiss_ThenHit(t *testing.T) {
 	h := New(mc, reg, &http.Client{Timeout: 5 * time.Second}, "", metrics.NoopTracker{})
 
 	def := llmDef("passthrough", "", 60*time.Second)
-	def.InferenceURL = backend.URL
+	setBackend(def, backend.URL)
 
 	// First call: cache miss.
 	rr := doServeJSON(h, def, chatBody)
@@ -148,7 +154,7 @@ func TestServeJSON_NoCacheHeader_BypassesCache(t *testing.T) {
 	h := New(mc, reg, &http.Client{Timeout: 5 * time.Second}, "", metrics.NoopTracker{})
 
 	def := llmDef("passthrough", "", 60*time.Second)
-	def.InferenceURL = backend.URL
+	setBackend(def, backend.URL)
 
 	setNoCache := func(r *http.Request) { r.Header.Set("Cache-Control", "no-cache") }
 
@@ -174,7 +180,7 @@ func TestServeJSON_Non200NotCached(t *testing.T) {
 	h := New(mc, reg, &http.Client{Timeout: 5 * time.Second}, "", metrics.NoopTracker{})
 
 	def := llmDef("passthrough", "", 60*time.Second)
-	def.InferenceURL = backend.URL
+	setBackend(def, backend.URL)
 
 	doServeJSON(h, def, chatBody)
 	doServeJSON(h, def, chatBody)
@@ -199,7 +205,7 @@ func TestServeJSON_CacheDisabled_WhenTTLZero(t *testing.T) {
 	h := New(mc, reg, &http.Client{Timeout: 5 * time.Second}, "", metrics.NoopTracker{})
 
 	def := llmDef("passthrough", "", 0) // TTL=0 → no cache
-	def.InferenceURL = backend.URL
+	setBackend(def, backend.URL)
 
 	doServeJSON(h, def, chatBody)
 	doServeJSON(h, def, chatBody)
@@ -226,7 +232,7 @@ func TestServeJSON_BackendModel_RewrittenInRequest(t *testing.T) {
 	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second}, "", metrics.NoopTracker{})
 
 	def := llmDef("passthrough", "meta-llama/Meta-Llama-3-8B-Instruct", 0)
-	def.InferenceURL = backend.URL
+	setBackend(def, backend.URL)
 
 	// Client sends alias "my-alias".
 	doServeJSON(h, def, chatBody)
@@ -253,7 +259,7 @@ func TestServeJSON_BackendModel_NotRewritten_WhenEmpty(t *testing.T) {
 	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second}, "", metrics.NoopTracker{})
 
 	def := llmDef("passthrough", "", 0) // no backend_model
-	def.InferenceURL = backend.URL
+	setBackend(def, backend.URL)
 
 	doServeJSON(h, def, chatBody)
 
@@ -382,7 +388,7 @@ func TestServeJSON_ConsumerMetrics_EmittedOnBackendResponse(t *testing.T) {
 	h := New(newMemCache(), reg, &http.Client{Timeout: 5 * time.Second}, "", tracker)
 
 	def := llmDef("passthrough", "", 0)
-	def.InferenceURL = backend.URL
+	setBackend(def, backend.URL)
 
 	doServeJSONAs(h, def, chatBody, "alice")
 
@@ -413,6 +419,100 @@ func TestServeJSON_ConsumerMetrics_EmittedOnCacheHit(t *testing.T) {
 	}
 }
 
+// ── streaming ────────────────────────────────────────────────────────────────
+
+const streamBody = `{"model":"my-alias","messages":[{"role":"user","content":"Hello"}],"stream":true}`
+
+func TestServeJSON_Streaming_PipedToClient(t *testing.T) {
+	sseChunks := "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\ndata: [DONE]\n\n"
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		io.WriteString(w, sseChunks)
+	}))
+	defer backend.Close()
+
+	reg := provider.NewRegistry()
+	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second}, "", &noopTracker{})
+
+	def := llmDef("passthrough", "", 60*time.Second)
+	setBackend(def, backend.URL)
+
+	rr := doServeJSON(h, def, streamBody)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if rr.Header().Get("X-Accel-Buffering") != "no" {
+		t.Errorf("expected X-Accel-Buffering=no, got %q", rr.Header().Get("X-Accel-Buffering"))
+	}
+	if rr.Header().Get("Cache-Control") != "no-cache" {
+		t.Errorf("expected Cache-Control=no-cache, got %q", rr.Header().Get("Cache-Control"))
+	}
+	if rr.Body.String() != sseChunks {
+		t.Errorf("body mismatch: got %q", rr.Body.String())
+	}
+}
+
+func TestServeJSON_Streaming_SkipsCache(t *testing.T) {
+	callCount := 0
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer backend.Close()
+
+	mc := newMemCache()
+	reg := provider.NewRegistry()
+	h := New(mc, reg, &http.Client{Timeout: 5 * time.Second}, "", &noopTracker{})
+
+	def := llmDef("passthrough", "", 60*time.Second)
+	setBackend(def, backend.URL)
+
+	doServeJSON(h, def, streamBody)
+	doServeJSON(h, def, streamBody)
+
+	if callCount != 2 {
+		t.Errorf("streaming should bypass cache: backend called %d times (want 2)", callCount)
+	}
+	// Cache should not have been written.
+	if len(mc.data) != 0 {
+		t.Errorf("streaming should not populate cache, got %d entries", len(mc.data))
+	}
+}
+
+func TestServeJSON_Streaming_BackendModel_Rewritten(t *testing.T) {
+	var receivedModel string
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]any
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &req)
+		receivedModel, _ = req["model"].(string)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer backend.Close()
+
+	reg := provider.NewRegistry()
+	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second}, "", &noopTracker{})
+
+	def := llmDef("passthrough", "real-model-id", 0)
+	setBackend(def, backend.URL)
+
+	doServeJSON(h, def, streamBody)
+
+	if receivedModel != "real-model-id" {
+		t.Errorf("expected backend to receive real-model-id, got %q", receivedModel)
+	}
+}
+
+type noopTracker struct{}
+
+func (n *noopTracker) Track(_ context.Context, _, _, _ string, _ int) {}
+
 func TestServeJSON_ConsumerMetrics_SkippedWhenNoConsumer(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -426,7 +526,7 @@ func TestServeJSON_ConsumerMetrics_SkippedWhenNoConsumer(t *testing.T) {
 	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second}, "", tracker)
 
 	def := llmDef("passthrough", "", 0)
-	def.InferenceURL = backend.URL
+	setBackend(def, backend.URL)
 
 	rr := doServeJSONAs(h, def, chatBody, "")
 	if rr.Code != http.StatusOK {

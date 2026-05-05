@@ -82,6 +82,31 @@ var (
 		Help: "Total number of jobs submitted per consumer.",
 	}, []string{"mode", "service_type", "model", "consumer"})
 
+	// RateLimitRequestsTotal counts rate-limit evaluations, labelled by
+	// service_type, user_type (from the configurable user_type_header), and result
+	// ("allowed" or "rejected"). Consumer name is intentionally omitted to keep
+	// cardinality low; use RateLimitConsumerHitsTotal for per-consumer analysis.
+	// Only populated when rate_limits is configured.
+	RateLimitRequestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "kevent_ratelimit_requests_total",
+		Help: "Total number of requests evaluated by the rate limiter, by outcome.",
+	}, []string{"service_type", "user_type", "result"})
+
+	// RateLimitConsumerHitsTotal counts rate-limit evaluations per consumer,
+	// enabling `count by (user_type) (group by (...) (...))` in PromQL to get
+	// the number of distinct consumers per user_type.
+	// Only populated when both rate_limits and consumer_header are configured.
+	RateLimitConsumerHitsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "kevent_ratelimit_consumer_hits_total",
+		Help: "Total rate-limit evaluations per consumer (enables distinct consumer count per user_type via PromQL group).",
+	}, []string{"service_type", "user_type", "consumer"})
+
+	// RateLimitErrorsTotal counts Redis errors during rate-limit evaluation (fail-open).
+	RateLimitErrorsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "kevent_ratelimit_errors_total",
+		Help: "Total number of Redis errors during rate-limit checks (requests are allowed on error).",
+	}, []string{"service_type"})
+
 	// LLM proxy + cache metrics
 	CacheHitsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "kevent_cache_hits_total",
@@ -102,18 +127,18 @@ var (
 	LLMTokensTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "kevent_llm_tokens_total",
 		Help: "Tokens served by LLM requests (prompt+completion, includes cache hits).",
-	}, []string{"service_type", "model", "user_type", "type"})
+	}, []string{"service_type", "model", "backend_model", "user_type", "type"})
 
 	LLMRequestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "kevent_llm_requests_total",
 		Help: "Total LLM requests by provider, user_type, and HTTP status.",
-	}, []string{"service_type", "model", "provider", "user_type", "status"})
+	}, []string{"service_type", "model", "backend_model", "provider", "user_type", "status"})
 
 	LLMRequestDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "kevent_llm_request_duration_seconds",
 		Help:    "End-to-end LLM request latency.",
 		Buckets: []float64{.05, .1, .25, .5, 1, 2, 5, 10, 30, 60, 120},
-	}, []string{"service_type", "model", "provider", "user_type"})
+	}, []string{"service_type", "model", "backend_model", "provider", "user_type"})
 
 	// LLMTokensPerRequest is a histogram of tokens per request, enabling p50/p95/p99
 	// analysis by user_type. Useful to detect large contexts and capacity planning.
@@ -121,7 +146,7 @@ var (
 		Name:    "kevent_llm_tokens_per_request",
 		Help:    "Distribution of total tokens (prompt+completion) per LLM request.",
 		Buckets: []float64{50, 100, 250, 500, 1000, 2000, 5000, 10000, 32000, 100000},
-	}, []string{"service_type", "model", "user_type"})
+	}, []string{"service_type", "model", "backend_model", "user_type"})
 
 	// LLMConsumerTokensTop exposes the top-N consumers by token usage, refreshed
 	// periodically from a Redis sorted set. Only populated when metrics.top_consumers > 0.

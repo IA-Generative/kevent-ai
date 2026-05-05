@@ -122,7 +122,7 @@ func submitReq(t *testing.T, serviceType, modelName, operation, filename string,
 }
 
 func newAsyncHandler(reg *service.Registry, s3 *mockJobS3, store *mockAsyncStore, prod *mockProducer) *handler.JobHandler {
-	return handler.NewJobHandler(reg, s3, store, prod, "", "")
+	return handler.NewJobHandler(reg, s3, store, prod, "", "", nil)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

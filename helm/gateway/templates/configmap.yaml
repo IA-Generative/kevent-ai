@@ -45,6 +45,10 @@ data:
       db:           0
       job_ttl_hours: 72
 
+    metrics:
+      top_consumers: {{ .Values.metricsConfig.topConsumers | default 0 }}
+      consumer_labels: {{ .Values.metricsConfig.consumerLabels | default false }}
+
     services:
     {{- range .Values.services }}
       - type:              {{ .type }}
@@ -62,6 +66,22 @@ data:
         {{- end }}
         {{- if .inferenceURL }}
         inference_url:     {{ .inferenceURL | quote }}
+        {{- end }}
+        {{- if .backends }}
+        backends:
+          {{- range .backends }}
+          - url:    {{ .url | quote }}
+            weight: {{ .weight }}
+            {{- if .model }}
+            model:  {{ .model | quote }}
+            {{- end }}
+            {{- if .headers }}
+            headers:
+              {{- range $k, $v := .headers }}
+              {{ $k }}: {{ $v | quote }}
+              {{- end }}
+            {{- end }}
+          {{- end }}
         {{- end }}
         {{- if .inputTopic }}
         input_topic:       {{ .inputTopic }}

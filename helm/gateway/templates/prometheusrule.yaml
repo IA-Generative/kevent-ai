@@ -77,6 +77,30 @@ spec:
             description: "More than {{ .Values.alerting.prometheusRule.thresholds.syncJobsInFlight }} sync-over-Kafka connections are open simultaneously."
             runbook_url: "{{ $runbookBase }}/KeventGatewaySyncJobsInFlightHigh"
 
+        - alert: KeventGatewayRateLimitHighRejectionRate
+          expr: |
+            (
+              sum by (service_type) (rate(kevent_ratelimit_requests_total{result="rejected"}[5m])) /
+              sum by (service_type) (rate(kevent_ratelimit_requests_total[5m]))
+            ) > {{ .Values.alerting.prometheusRule.thresholds.rateLimitRejectionRateWarning }}
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High rate-limit rejection rate on {{ "{{" }} $labels.service_type {{ "}}" }} ({{ "{{" }} $value | humanizePercentage {{ "}}" }})"
+            description: "More than {{ mulf .Values.alerting.prometheusRule.thresholds.rateLimitRejectionRateWarning 100 }}% of requests are being rate-limited for service_type={{ "{{" }} $labels.service_type {{ "}}" }}. Check quota configuration or consumer activity."
+            runbook_url: "{{ $runbookBase }}/KeventGatewayRateLimitHighRejectionRate"
+
+        - alert: KeventGatewayRateLimitErrors
+          expr: sum(increase(kevent_ratelimit_errors_total[5m])) > 0
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Rate limiter Redis errors (fail-open)"
+            description: "The rate limiter encountered Redis errors — requests are being allowed through (fail-open). Check Redis connectivity."
+            runbook_url: "{{ $runbookBase }}/KeventGatewayRateLimitErrors"
+
     - name: kevent-relay
       rules:
         {{- $runbookBase := .Values.alerting.prometheusRule.runbookBaseURL }}

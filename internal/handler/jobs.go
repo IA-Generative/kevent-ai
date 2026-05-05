@@ -15,6 +15,7 @@ import (
 
 	"kevent/gateway/internal/metrics"
 	"kevent/gateway/internal/model"
+	"kevent/gateway/internal/ratelimit"
 	"kevent/gateway/internal/service"
 )
 
@@ -41,6 +42,7 @@ type JobHandler struct {
 	producer       eventProducer // reuses the interface defined in sync.go
 	priorityHeader string        // HTTP header that triggers high-priority routing (e.g. "X-Priority")
 	consumerHeader string        // HTTP header identifying the API consumer (e.g. "X-Consumer-Username")
+	rateLimiter    ratelimit.Checker // nil = no rate limiting
 }
 
 func NewJobHandler(
@@ -50,8 +52,9 @@ func NewJobHandler(
 	producer eventProducer,
 	priorityHeader string,
 	consumerHeader string,
+	rateLimiter ratelimit.Checker,
 ) *JobHandler {
-	return &JobHandler{registry, store, redis, producer, priorityHeader, consumerHeader}
+	return &JobHandler{registry, store, redis, producer, priorityHeader, consumerHeader, rateLimiter}
 }
 
 // submitResponse is the 202 body returned after a successful job submission.
@@ -113,6 +116,19 @@ func (h *JobHandler) Submit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
+
+	if h.rateLimiter != nil {
+		allowed, retryAfter, err := h.rateLimiter.Check(r.Context(), r, serviceType)
+		if err != nil {
+			slog.ErrorContext(r.Context(), "rate limit check failed", "error", err)
+			// fail open — don't block requests on rate limiter errors
+		} else if !allowed {
+			w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter.Seconds())))
+			writeError(w, http.StatusTooManyRequests, "rate limit exceeded")
+			return
+		}
+	}
+
 	r.Body = http.MaxBytesReader(w, r.Body, maxSize<<20)
 
 	// Buffer up to 32 MB in memory; the rest spills to a temp file on disk.

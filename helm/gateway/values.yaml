@@ -2,7 +2,7 @@ replicaCount: 1
 
 image:
   repository: ghcr.io/ia-generative/kevent-ai/gateway
-  tag: "v0.7.0"
+  tag: "v0.8.0"
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
@@ -121,6 +121,37 @@ services:
     acceptedExts: [".pdf", ".jpg", ".jpeg", ".png", ".tiff", ".bmp"]
     maxFileSizeMB: 50
 
+  # ── Multi-backend : blue/green, canary, fallback ─────────────────────────
+  # Remplace inferenceURL par une liste backends. Mutuellement exclusif avec
+  # inferenceURL (backends a la priorité si les deux sont renseignés).
+  #
+  # weight > 0 : éligible en sélection primaire (pondération relative).
+  # weight = 0 : fallback-only (jamais sélectionné en primaire ; essayé
+  #              uniquement si tous les backends weight>0 échouent).
+  #
+  # Blue/green  → weight: 100/0 ; promotion = swap des weights
+  # Canary      → weight: 90/10
+  # Fallback    → weight: 100 + weight: 0
+  #
+  # - type: llm
+  #   model: "gpt-4o"
+  #   operations:
+  #     chat:
+  #       - "/v1/chat/completions"
+  #   backends:
+  #     - url: "http://backend-v1.svc"
+  #       weight: 90
+  #       model: "llama-3.1-8b"            # optionnel : nom de modèle réel envoyé à ce backend (override backend_model)
+  #       headers:                          # optionnel : headers spécifiques à ce backend (override inference_headers)
+  #         Authorization: "Bearer ${STABLE_API_KEY}"
+  #     - url: "http://backend-v2.svc"
+  #       weight: 10
+  #       model: "llama-3.2-8b"            # canary : version différente du modèle
+  #       headers:
+  #         Authorization: "Bearer ${CANARY_API_KEY}"
+  #     - url: "http://backend-fallback.svc"
+  #       weight: 0    # last resort
+
   # Exemple de service sync-direct uniquement (sans Kafka).
   # Les requêtes POST /v1/* sont proxifiées directement vers inferenceURL.
   # POST /jobs/{service_type} retourne 405.
@@ -150,6 +181,17 @@ redis-ha:
   redis:
     masterGroupName: "mymaster"
   replicas: 3
+
+# ── Consumer token tracking ───────────────────────────────────────────────────
+# Suivi de la consommation LLM par consumer (kevent_llm_consumer_tokens_top).
+# Nécessite server.consumerHeader configuré. Indépendant du ServiceMonitor ci-dessous.
+metricsConfig:
+  # Nombre de top consumers à exposer dans Prometheus (Redis sorted set, refresh 60s).
+  # 0 = désactivé. Recommandé : 20–50.
+  topConsumers: 0
+  # Labels Prometheus directs par consumer. Uniquement pour < 50 consumers connus.
+  # Pour des consumers dynamiques, utiliser topConsumers à la place.
+  consumerLabels: false
 
 # ── Monitoring (Prometheus Operator) ─────────────────────────────────────
 metrics:
@@ -191,6 +233,8 @@ alerting:
       relayJobFailureRateCritical: 0.30
       # Durée d'inférence p95 en secondes avant alerte slow
       relayInferenceP95Seconds: 120
+      # Taux de rejet rate limit (0.20 = 20% des requêtes rejetées sur un service)
+      rateLimitRejectionRateWarning: 0.20
     # Règles supplémentaires ajoutées au groupe kevent-relay.
     extraRules: []
     # Exemple :
