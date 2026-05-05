@@ -13,14 +13,20 @@ Client  POST /v1/chat/completions  {"model": "my-alias", ...}
 Gateway — LLM proxy
   ├── Cache lookup (Redis, SHA-256 key)     ─── HIT → return cached response
   │                                                    X-Cache: HIT
-  ├── MISS → rewrite model alias → backend_model
-  ├── Build provider request (translate if anthropic)
-  ├── Forward to inference_url
+  ├── MISS → for each backend (weighted-random order):
+  │     ├── Rewrite model alias → backend.model (or service-level backend_model)
+  │     ├── Inject backend.headers (override service-level inference_headers)
+  │     ├── Build provider request (translate if anthropic)
+  │     ├── Forward to backend URL
+  │     ├── On network error or 5xx → try next backend
+  │     └── On 2xx / 4xx → stop retry loop
   ├── Translate response back to OpenAI format
   ├── Emit metrics + track consumer tokens
   ├── Write response to client              X-Cache: MISS
   └── Async cache-fill (5 s timeout, goroutine)
 ```
+
+Streaming requests (`"stream": true`) bypass cache and response translation. The SSE stream is piped directly to the client with per-chunk flushing. Backend retry is possible before `WriteHeader`; once the SSE stream starts, switching backends is no longer possible.
 
 ## Providers
 
@@ -44,17 +50,50 @@ Tool-use fields (`tools`, `tool_choice`) are forwarded as-is on the request side
 
 ## Model aliases
 
-The `model` field in the service config acts as the client-facing alias. Set `backend_model` to rewrite the `model` field in the request body before forwarding:
+The `model` field in the service config acts as the client-facing alias. Set `backend_model` (service-level) or `backends[].model` (per-backend) to rewrite the `model` field in the request body before forwarding:
 
 ```yaml
 - type: llm
   model: "llama3"            # clients send this
   provider: passthrough
-  backend_model: "meta-llama/Meta-Llama-3-8B-Instruct"   # backend receives this
-  inference_url: "http://vllm.default.svc.cluster.local:8000"
+  backend_model: "meta-llama/Meta-Llama-3-8B-Instruct"   # default for all backends
+  backends:
+    - url: "http://vllm-v1.default.svc.cluster.local:8000"
+      weight: 90
+    - url: "http://vllm-v2.default.svc.cluster.local:8000"
+      weight: 10
+      model: "meta-llama/Meta-Llama-3.1-8B-Instruct"   # overrides backend_model for this backend
 ```
 
-Cache lookup uses the alias, so cache keys are stable even if `backend_model` changes.
+Cache lookup uses the alias (`model`), so cache keys are stable regardless of which backend served the request or which `backend_model` was sent.
+
+## Multi-backend routing
+
+Services can declare multiple backends with weighted-random primary selection and automatic fallback:
+
+```yaml
+- type: llm
+  model: "chat"
+  provider: passthrough
+  backends:
+    - url: "http://vllm-primary.default.svc.cluster.local:8000"
+      weight: 100          # weight > 0 → eligible for primary selection
+      model: "meta-llama/Meta-Llama-3-8B-Instruct"
+      headers:
+        Authorization: "Bearer ${PRIMARY_TOKEN}"
+    - url: "http://vllm-fallback.default.svc.cluster.local:8000"
+      weight: 0            # weight = 0 → tried only if all weight>0 backends fail
+      model: "meta-llama/Meta-Llama-3-8B-Instruct"
+      headers:
+        Authorization: "Bearer ${FALLBACK_TOKEN}"
+```
+
+**Routing rules:**
+- One backend is selected by weighted-random among `weight > 0` backends.
+- On network error or 5xx response, the next backend is tried (remaining `weight > 0` backends sorted by descending weight, then `weight = 0` backends).
+- On 4xx, the loop stops immediately — client errors are not retried.
+- `backend.headers` are applied after `inference_headers`, acting as per-backend overrides.
+- `backend.model` overrides the service-level `backend_model` for that specific backend.
 
 ## Response caching
 
@@ -121,10 +160,10 @@ redis-cli ZREVRANGEBYSCORE llm:consumer:tokens:sa:prompt +inf -inf WITHSCORES
 
 | Metric | Labels | Description |
 |---|---|---|
-| `kevent_llm_requests_total` | `service_type, model, provider, user_type, status` | Request count |
-| `kevent_llm_request_duration_seconds` | `service_type, model, provider, user_type` | Latency histogram |
-| `kevent_llm_tokens_total` | `service_type, model, user_type, type` | Token counter (`prompt` / `completion`) |
-| `kevent_llm_tokens_per_request` | `service_type, model, user_type` | Token distribution histogram |
+| `kevent_llm_requests_total` | `service_type, model, backend_model, provider, user_type, status` | Request count |
+| `kevent_llm_request_duration_seconds` | `service_type, model, backend_model, provider, user_type` | Latency histogram |
+| `kevent_llm_tokens_total` | `service_type, model, backend_model, user_type, type` | Token counter (`prompt` / `completion`) |
+| `kevent_llm_tokens_per_request` | `service_type, model, backend_model, user_type` | Token distribution histogram |
 | `kevent_llm_consumer_tokens_top` | `consumer, user_type, type` | Top-N consumer token gauge |
 | `kevent_cache_hits_total` | `service_type, model` | Cache hit counter |
 | `kevent_cache_misses_total` | `service_type, model` | Cache miss counter |

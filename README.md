@@ -88,12 +88,18 @@ Client  POST /v1/chat/completions  {"model": "my-alias", ...}
 Gateway — LLM proxy
   ├── Vérification cache Redis (clé SHA-256 du body canonique)  ── HIT → réponse + X-Cache: HIT
   │                                                                            ↑
-  ├── MISS → réécriture model alias → backend_model                    (async goroutine, 5s)
-  ├── Traduction requête (si anthropic : OpenAI → Messages API)
-  ├── Forwarding vers inference_url
+  ├── MISS → pour chaque backend (ordre weighted-random) :         (async goroutine, 5s)
+  │     ├── Réécriture model alias → backend.model (ou backend_model)
+  │     ├── Injection backend.headers (override inference_headers)
+  │     ├── Traduction requête (si anthropic : OpenAI → Messages API)
+  │     ├── Forwarding vers backend URL
+  │     └── Erreur réseau / 5xx → backend suivant ; 4xx → stop
   ├── Traduction réponse → format OpenAI
   ├── Métriques tokens + tracking consumer (Redis sorted set)
   └── Réponse client  X-Cache: MISS  +  cache-fill async
+
+  Streaming (`"stream": true`) : SSE pipé directement, pas de cache ni de traduction.
+  Retry possible avant WriteHeader ; impossible une fois le stream démarré.
 ```
 
 ### Composants externes requis
@@ -253,16 +259,28 @@ services:
   # LLM proxy — openai, anthropic, ollama ou passthrough (vLLM…)
   # Les requêtes JSON POST /v1/* passent par le proxy LLM (cache, métriques, traduction).
   - type: llm
-    model: "gpt-4o"                    # alias client-facing
-    provider: openai                   # openai | anthropic | ollama | passthrough
-    backend_model: ""                  # vide = alias transmis tel quel
+    model: "chat-smart"                # alias client-facing
+    provider: passthrough              # openai | anthropic | ollama | passthrough
+    backend_model: "meta-llama/Meta-Llama-3-8B-Instruct"  # vide = alias transmis tel quel
     response_cache_ttl: 3600           # secondes; 0 = désactivé
     operations:
       chat:
         - "/v1/*"                      # wildcard : toutes les paths OpenAI-compatibles
-    inference_url: ""                  # vide → défaut provider (ex: https://api.openai.com)
-    inference_headers:
-      Authorization: "Bearer ${OPENAI_API_KEY}"
+    # Multi-backend : blue/green, canary, fallback
+    # weight > 0 = sélection weighted-random ; weight = 0 = fallback uniquement
+    backends:
+      - url: "http://vllm-primary.default.svc.cluster.local:8000"
+        weight: 90
+        model: "meta-llama/Meta-Llama-3-8B-Instruct"
+        headers:
+          Authorization: "Bearer ${VLLM_PRIMARY_TOKEN}"
+      - url: "http://vllm-canary.default.svc.cluster.local:8000"
+        weight: 10
+        model: "meta-llama/Meta-Llama-3.1-8B-Instruct"
+        headers:
+          Authorization: "Bearer ${VLLM_CANARY_TOKEN}"
+    # inference_url: "" (legacy — un seul backend, remplacé par backends[])
+    # inference_headers s'applique à tous les backends ; backends[].headers les surcharge
 ```
 
 #### Champs `services[]`
@@ -280,11 +298,22 @@ services:
 | `priority_topic` | Topic Kafka pour les jobs prioritaires (SA/comptes de service). Optionnel — si absent, le routing prioritaire est désactivé pour ce service. |
 | `accepted_exts` | Extensions acceptées. Vide ou absent = toutes les extensions acceptées. |
 | `max_file_size_mb` | Taille max du fichier. Absent ou 0 = 100 MB par défaut. |
-| `inference_headers` | Headers HTTP injectés sur chaque requête vers le backend (sync-direct et LLM proxy). Supporte `${VAR}`. |
+| `inference_url` | URL de base du backend (un seul backend, legacy). Ignoré si `backends` est défini. |
+| `backends` | Liste de backends avec routing pondéré. Prend le pas sur `inference_url`. Voir ci-dessous. |
+| `inference_headers` | Headers HTTP injectés sur chaque requête vers le backend (sync-direct et LLM proxy). Supporte `${VAR}`. Surchargés par `backends[].headers`. |
 | `provider` | Active le LLM proxy : `openai`, `anthropic`, `ollama`, `passthrough`. Absent = proxy direct classique. |
-| `backend_model` | Nom du modèle transmis au backend — le gateway réécrit le champ `model` du body. |
+| `backend_model` | Nom du modèle transmis au backend (défaut pour tous les backends). Surchargé par `backends[].model`. |
 | `response_cache_ttl` | TTL du cache Redis en secondes. `0` = désactivé. |
-| `swagger_url` | URL vers le spec OpenAPI JSON du service (ex: URL raw GitHub). Optionnel — si absent, le service n'apparaît pas dans le dropdown `/docs`. |
+| `swagger_url` | URL vers le spec OpenAPI JSON du service. Optionnel — si absent, le service n'apparaît pas dans le dropdown `/docs`. |
+
+#### Champs `backends[]`
+
+| Champ | Description |
+|---|---|
+| `url` | URL du backend (**requis**) |
+| `weight` | Poids de routage. `0` = fallback uniquement (jamais sélectionné en primaire). |
+| `model` | Surcharge `backend_model` pour ce backend uniquement — utile pour les déploiements canary. |
+| `headers` | Headers HTTP injectés sur les requêtes vers ce backend. Surchargent `inference_headers`. |
 
 ### Relay sidecar (`relay/config.yaml`)
 
@@ -766,10 +795,10 @@ Les deux composants exposent des métriques Prometheus sur `GET /metrics`.
 | `kevent_redis_operation_duration_seconds` | histogram | `operation` (save_job/get_job/delete_job/update_job_result) | Latence des opérations Redis |
 | `kevent_redis_errors_total` | counter | `operation` | Erreurs Redis |
 | `kevent_jobs_by_consumer_total` | counter | `mode`, `service_type`, `model`, `consumer` | Jobs soumis par consumer (uniquement si `consumer_header` configuré) |
-| `kevent_llm_requests_total` | counter | `service_type`, `model`, `provider`, `user_type`, `status` | Requêtes LLM proxy |
-| `kevent_llm_request_duration_seconds` | histogram | `service_type`, `model`, `provider`, `user_type` | Latence LLM proxy |
-| `kevent_llm_tokens_total` | counter | `service_type`, `model`, `user_type`, `type` | Tokens consommés (`prompt`/`completion`) |
-| `kevent_llm_tokens_per_request` | histogram | `service_type`, `model`, `user_type` | Distribution des tokens par requête |
+| `kevent_llm_requests_total` | counter | `service_type`, `model`, `backend_model`, `provider`, `user_type`, `status` | Requêtes LLM proxy |
+| `kevent_llm_request_duration_seconds` | histogram | `service_type`, `model`, `backend_model`, `provider`, `user_type` | Latence LLM proxy |
+| `kevent_llm_tokens_total` | counter | `service_type`, `model`, `backend_model`, `user_type`, `type` | Tokens consommés (`prompt`/`completion`) |
+| `kevent_llm_tokens_per_request` | histogram | `service_type`, `model`, `backend_model`, `user_type` | Distribution des tokens par requête |
 | `kevent_llm_consumer_tokens_top` | gauge | `consumer`, `user_type`, `type` | Top-N consumers par tokens (Redis, si `metrics.top_consumers > 0`) |
 | `kevent_cache_hits_total` | counter | `service_type`, `model` | Cache hits LLM |
 | `kevent_cache_misses_total` | counter | `service_type`, `model` | Cache misses LLM |

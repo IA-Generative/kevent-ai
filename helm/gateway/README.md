@@ -150,14 +150,82 @@ services:
 | `model` | Model identifier — matched against the `model` field in the request. |
 | `default` | `true` → used as fallback when `model` is omitted and multiple models are registered for the type. |
 | `operations` | Map of `operationName → [url-paths]`. All paths are indexed for sync routing. The first path of the selected operation is forwarded in async InputEvents. |
-| `inferenceURL` | Base URL of the Knative InferenceService predictor (cluster-local). The original request path is appended at runtime. |
+| `inferenceURL` | Base URL of the Knative InferenceService predictor (cluster-local). The original request path is appended at runtime. Single-backend legacy — use `backends` for multi-backend. |
+| `backends` | List of backends with weighted routing. Takes precedence over `inferenceURL`. See below. |
 | `inputTopic` | Kafka topic for async input events. Absent = no async support for this service. |
 | `resultTopic` | Kafka topic for result events. Must be set if `inputTopic` is set (and vice versa). |
 | `syncTopic` | Priority Kafka topic for sync-over-Kafka (`POST /v1/*` multipart). Optional. |
 | `acceptedExts` | Allowed file extensions (e.g. `[".mp3", ".wav"]`). Empty or absent = all extensions accepted. |
 | `maxFileSizeMB` | Maximum upload size in MB. `0` or absent = 100 MB default. |
-| `swaggerURL` | Optional URL to an OpenAPI JSON spec for this service (e.g. raw GitHub URL). Fetched once at startup; served at `GET /swagger/{type}/{model}` and shown in the `/docs` dropdown. Failures are logged and skipped — startup is never blocked. |
-| `swaggerHeaders` | Optional map of HTTP headers sent when fetching `swaggerURL`. Values support `${VAR}` env expansion. Useful for private GitHub release assets: `Accept: application/octet-stream` + `Authorization: Bearer ${GITHUB_TOKEN}`. |
+| `inferenceHeaders` | HTTP headers injected on every request to the backend (sync-direct and LLM proxy). Values support `${VAR}` env expansion. |
+| `provider` | Activates LLM proxy mode: `openai`, `anthropic`, `ollama`, `passthrough`. Absent = legacy direct proxy. |
+| `backendModel` | Default model name sent to the backend (rewrites the `model` field in the request body). Overridden by `backends[].model`. |
+| `responseCacheTTL` | Redis response cache TTL in seconds. `0` = disabled. LLM proxy only. |
+| `swaggerURL` | Optional URL to an OpenAPI JSON spec for this service. Fetched once at startup; served at `GET /swagger/{type}/{model}`. Failures are logged and skipped. |
+| `swaggerHeaders` | Optional map of HTTP headers sent when fetching `swaggerURL`. Values support `${VAR}` env expansion. |
+
+#### `backends[]` fields
+
+| Field | Description |
+|---|---|
+| `url` | Backend URL (required) |
+| `weight` | Routing weight. `0` = fallback-only (never primary-selected via weighted-random). |
+| `model` | Overrides `backendModel` for this specific backend — useful for canary deployments. |
+| `headers` | HTTP headers injected on requests to this backend. Override `inferenceHeaders`. Values support `${VAR}` env expansion. |
+
+**Example — canary routing (90/10 split with per-backend auth):**
+
+```yaml
+services:
+  - type: llm
+    model: "chat"
+    provider: passthrough
+    responseCacheTTL: 300
+    operations:
+      chat:
+        - "/v1/chat/completions"
+    backends:
+      - url: "http://vllm-stable.default.svc.cluster.local:8000"
+        weight: 90
+        model: "meta-llama/Meta-Llama-3-8B-Instruct"
+        headers:
+          Authorization: "Bearer ${VLLM_STABLE_TOKEN}"
+      - url: "http://vllm-canary.default.svc.cluster.local:8000"
+        weight: 10
+        model: "meta-llama/Meta-Llama-3.1-8B-Instruct"
+        headers:
+          Authorization: "Bearer ${VLLM_CANARY_TOKEN}"
+```
+
+Don't forget to inject the token env vars via `extraEnvVars`.
+
+### Metrics configuration
+
+| Parameter | Description | Default |
+|---|---|---|
+| `metricsConfig.topConsumers` | Expose top-N LLM consumers in Prometheus via Redis sorted sets; `0` = disabled | `0` |
+| `metricsConfig.consumerLabels` | Direct per-consumer Prometheus labels — only for deployments with < 50 consumers | `false` |
+
+### Rate limits
+
+Per-consumer, per-service fixed-window rate limiting backed by Redis. Configure in `config.existingConfigMap` or directly in the service config:
+
+```yaml
+# In config.yaml (via existingConfigMap or direct config):
+rate_limits:
+  llm:
+    sa:           # user_type from server.user_type_header
+      rate: 100
+      period: 1m
+    user:
+      rate: 20
+      period: 1m
+    "*":           # fallback when user_type is absent or not listed
+      rate: 10
+      period: 1m
+```
+
+Returns `429 Too Many Requests` with `Retry-After` when exceeded.
 
 ### Extra environment variables
 
@@ -287,6 +355,20 @@ metrics:
 | `kevent_s3_errors_total` | counter | `operation` |
 | `kevent_kafka_publish_duration_seconds` | histogram | `topic` |
 | `kevent_kafka_publish_errors_total` | counter | `topic` |
+| `kevent_redis_operation_duration_seconds` | histogram | `operation` |
+| `kevent_redis_errors_total` | counter | `operation` |
+| `kevent_jobs_by_consumer_total` | counter | `mode`, `service_type`, `model`, `consumer` |
+| `kevent_llm_requests_total` | counter | `service_type`, `model`, `backend_model`, `provider`, `user_type`, `status` |
+| `kevent_llm_request_duration_seconds` | histogram | `service_type`, `model`, `backend_model`, `provider`, `user_type` |
+| `kevent_llm_tokens_total` | counter | `service_type`, `model`, `backend_model`, `user_type`, `type` |
+| `kevent_llm_tokens_per_request` | histogram | `service_type`, `model`, `backend_model`, `user_type` |
+| `kevent_llm_consumer_tokens_top` | gauge | `consumer`, `user_type`, `type` |
+| `kevent_cache_hits_total` | counter | `service_type`, `model` |
+| `kevent_cache_misses_total` | counter | `service_type`, `model` |
+| `kevent_cache_errors_total` | counter | `service_type`, `model`, `operation` |
+| `kevent_ratelimit_requests_total` | counter | `service_type`, `user_type`, `result` |
+| `kevent_ratelimit_consumer_hits_total` | counter | `service_type`, `user_type`, `consumer` |
+| `kevent_ratelimit_errors_total` | counter | `service_type` |
 
 ### Relay sidecar metrics
 
@@ -356,3 +438,21 @@ The generated secret (`kevent-gateway` in `infra-kafka`) must be copied to the g
 - `extraEnvVars` added — inject arbitrary env vars (e.g. secrets) into the gateway container
 - `configReloader` section added — optional `configmap-reload` sidecar for automatic hot reload on ConfigMap update
 - `POST /-/reload` endpoint: reloads services, Swagger specs, OpenAPI spec, and Kafka consumers at runtime
+
+### 0.5.15 → 0.7.0
+
+- **LLM proxy** added — `provider`, `backendModel`, `responseCacheTTL` fields per service
+- **Response caching** — Redis-backed, keyed on canonical SHA-256 of request body
+- **Per-consumer rate limiting** — fixed-window Redis rate limiting via `rate_limits` in config
+- **Consumer metrics** — `metricsConfig.topConsumers` exposes top-N LLM consumers via Redis sorted sets
+- **SSE streaming** support for LLM proxy (`"stream": true` requests)
+- `inferenceHeaders` field added per service — inject auth headers on backend requests
+
+### 0.7.0 → 0.8.0
+
+**Breaking change:** LLM metrics now include a `backend_model` label. Existing PromQL queries and dashboard panels targeting `kevent_llm_requests_total`, `kevent_llm_request_duration_seconds`, `kevent_llm_tokens_total`, or `kevent_llm_tokens_per_request` must be updated to include `backend_model` in `by`/`without` clauses, or use `{backend_model=~".*"}` as a wildcard.
+
+- **Multi-backend routing** — `backends[]` list per service with weighted-random primary selection, automatic fallback on 5xx/network error, and `weight: 0` for last-resort backends
+- **Per-backend `model` override** — `backends[].model` overrides `backendModel` for a specific backend; enables canary deployments with different model versions
+- **Per-backend `headers` override** — `backends[].headers` overrides `inferenceHeaders` for a specific backend; enables per-backend authentication tokens
+- **`backend_model` label** on all 4 LLM metrics — identifies which backend model version served each request

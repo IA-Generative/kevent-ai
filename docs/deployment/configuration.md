@@ -173,9 +173,24 @@ services:
       Authorization: "Bearer ${RERANKER_API_KEY}"
       X-Api-Key: "${BACKEND_KEY}"
 
+    # Multi-backend routing (optional — replaces inference_url when set)
+    # weight > 0 = eligible for weighted-random primary selection
+    # weight = 0 = fallback-only (tried after all weight>0 backends fail)
+    backends:
+      - url: "http://backend-primary:8000"
+        weight: 90
+        model: "meta-llama/Meta-Llama-3-8B-Instruct"   # per-backend model override
+        headers:
+          Authorization: "Bearer ${PRIMARY_TOKEN}"       # per-backend header override
+      - url: "http://backend-canary:8000"
+        weight: 10
+        model: "meta-llama/Meta-Llama-3.1-8B-Instruct"
+        headers:
+          Authorization: "Bearer ${CANARY_TOKEN}"
+
     # LLM proxy (optional — activates when provider is set)
     provider: passthrough          # openai | anthropic | ollama | passthrough
-    backend_model: "meta-llama/Meta-Llama-3-8B-Instruct"  # rewrites model field sent to backend
+    backend_model: "meta-llama/Meta-Llama-3-8B-Instruct"  # default model rewrite; overridden by backends[].model
     response_cache_ttl: 3600       # seconds; 0 = disabled
 
     # Swagger spec (optional)
@@ -193,7 +208,8 @@ services:
 | `model` | no | `""` | OpenAI model field value for routing |
 | `default` | no | `false` | Fallback model when request omits `model` |
 | `operations` | no | `{}` | Map of operation name → URL paths |
-| `inference_url` | no | `""` | Backend base URL for direct proxy |
+| `inference_url` | no | `""` | Backend base URL for direct proxy (single backend, legacy — use `backends` for multi-backend) |
+| `backends` | no | `[]` | List of backends with weighted routing. Takes precedence over `inference_url` when set. |
 | `sync_topic` | no | `""` | Priority Kafka topic for sync-over-Kafka |
 | `input_topic` | no | `""` | Kafka input topic for async jobs |
 | `result_topic` | no | `""` | Kafka result topic for async jobs |
@@ -207,19 +223,49 @@ services:
 | `swagger_url` | no | `""` | URL to fetch an OpenAPI spec from |
 | `swagger_headers` | no | `{}` | HTTP headers for `swagger_url` fetch |
 
-### `inference_headers`
+### `backends`
 
-Arbitrary HTTP headers injected on every request forwarded to the inference backend. Only applies to the **sync-direct proxy** flow (JSON requests and multipart without `sync_topic`). Has no effect on async or sync-over-Kafka jobs.
-
-- Header values support `${VAR}` / `${VAR:-default}` env expansion — store credentials in environment variables, not in plain config.
-- Config headers **override** any header with the same name sent by the client.
+Multi-backend list for blue/green, canary, or fallback routing. When set, takes precedence over `inference_url`.
 
 ```yaml
-# Typical use cases:
+backends:
+  - url: "http://backend-a:8000"
+    weight: 90       # weighted-random primary selection
+    model: "model-v1"   # overrides service-level backend_model for this backend
+    headers:            # overrides service-level inference_headers for this backend
+      Authorization: "Bearer ${TOKEN_A}"
+  - url: "http://backend-b:8000"
+    weight: 10
+    model: "model-v2"
+    headers:
+      Authorization: "Bearer ${TOKEN_B}"
+  - url: "http://backend-fallback:8000"
+    weight: 0          # fallback-only: tried after all weight>0 backends fail
+```
+
+**Per-backend fields:**
+
+| Field | Description |
+|---|---|
+| `url` | Backend URL (required) |
+| `weight` | Routing weight. `0` = fallback-only (never primary-selected). |
+| `model` | Overrides service-level `backend_model` for this backend only. |
+| `headers` | HTTP headers injected on requests to this backend. Override `inference_headers`. |
+
+On network error or 5xx, the next backend is tried. On 4xx (including 401), the retry loop stops — client errors are not retried.
+
+### `inference_headers`
+
+Arbitrary HTTP headers injected on every request forwarded to the inference backend. Only applies to the **sync-direct proxy** and **LLM proxy** flows. Has no effect on async or sync-over-Kafka jobs.
+
+- Header values support `${VAR}` / `${VAR:-default}` env expansion.
+- Config headers **override** any header with the same name sent by the client.
+- `backends[].headers` takes further precedence over `inference_headers` for a specific backend.
+
+```yaml
 inference_headers:
-  Authorization: "Bearer ${RERANKER_API_KEY}"   # Bearer token
-  X-Api-Key: "${BACKEND_KEY}"                   # custom API key header
-  apikey: "${BACKEND_KEY}"                      # APISIX-style key
+  Authorization: "Bearer ${BACKEND_API_KEY}"
+  X-Api-Key: "${BACKEND_KEY}"
 ```
 
 ## Hot reload
