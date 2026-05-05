@@ -138,6 +138,9 @@ func (h *Handler) ServeJSON(w http.ResponseWriter, r *http.Request, def *service
 			writeError(w, http.StatusInternalServerError, "failed to build upstream request: "+reqErr.Error())
 			return
 		}
+		for k, v := range backend.Headers {
+			upstreamReq.Header.Set(k, v)
+		}
 		var doErr error
 		resp, doErr = h.httpClient.Do(upstreamReq)
 		if doErr != nil {
@@ -312,6 +315,9 @@ func (h *Handler) serveStream(w http.ResponseWriter, r *http.Request, def *servi
 		if reqErr != nil {
 			writeError(w, http.StatusInternalServerError, "failed to build upstream request: "+reqErr.Error())
 			return
+		}
+		for k, v := range backend.Headers {
+			upstreamReq.Header.Set(k, v)
 		}
 		var doErr error
 		resp, doErr = h.httpClient.Do(upstreamReq)
