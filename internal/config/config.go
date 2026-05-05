@@ -187,6 +187,11 @@ type ServiceConfig struct {
 	// ResponseCacheTTL is the TTL in seconds for caching LLM responses in Redis.
 	// 0 = caching disabled. Only applied when Provider is set.
 	ResponseCacheTTL int `yaml:"response_cache_ttl"`
+	// Retries is the number of additional full backend-cycle attempts when all
+	// backends return a network error or a 5xx response. 0 = no retry (default).
+	// Only applies to the sync-direct proxy path (not Kafka-based flows).
+	// A 500ms exponential backoff is applied between each cycle.
+	Retries int `yaml:"retries"`
 }
 
 // Load reads and validates the YAML config file at path.
