@@ -70,6 +70,7 @@ type SyncHandler struct {
 	consumerHeader string            // HTTP header identifying the API consumer (e.g. "X-Consumer-Username")
 	rateLimiter    ratelimit.Checker // nil = no rate limiting
 	llm            *llmproxy.Handler // nil when no LLM services are configured
+	retryBackoff   time.Duration     // initial backoff between retry cycles; default 500ms
 }
 
 func NewSyncHandler(
@@ -91,8 +92,16 @@ func NewSyncHandler(
 		llm:            llm,
 		// Generous timeout for direct-proxy path; Knative timeoutSeconds is the
 		// real ceiling for the sync-over-Kafka path (controlled by context).
-		httpClient: &http.Client{Timeout: 15 * time.Minute},
+		httpClient:   &http.Client{Timeout: 15 * time.Minute},
+		retryBackoff: 500 * time.Millisecond,
 	}
+}
+
+// WithRetryBackoff overrides the initial backoff between retry cycles.
+// Intended for tests to avoid sleeping the full 500ms.
+func (h *SyncHandler) WithRetryBackoff(d time.Duration) *SyncHandler {
+	h.retryBackoff = d
+	return h
 }
 
 func (h *SyncHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -419,7 +428,7 @@ func (h *SyncHandler) proxyToInference(w http.ResponseWriter, r *http.Request, d
 
 	auth := r.Header.Get("Authorization")
 	maxAttempts := 1 + def.Retries
-	backoff := 500 * time.Millisecond
+	backoff := h.retryBackoff
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if attempt > 0 {
