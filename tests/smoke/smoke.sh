@@ -215,7 +215,7 @@ else
       "Reranker evaluation uses metrics like NDCG, MRR, and precision@k.",
       "Semantic search finds documents based on meaning rather than keyword matching."
     ]' \
-    '{query: $q, model: $m, documents: $docs, top_n: 3, return_documents: true}')
+    '{query: $q, model: $m, texts: $docs, top_n: 3, return_documents: true}')
 
   RERANK_HTTP_STATUS=""
   RERANK_BODY=$(curl_rerank \
