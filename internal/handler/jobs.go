@@ -26,6 +26,7 @@ type asyncJobStore interface {
 	DeleteJob(ctx context.Context, id string) error
 	UpdateJobResult(ctx context.Context, jobID string, status model.JobStatus, resultRef, errMsg string) error
 	ListJobsByConsumer(ctx context.Context, consumer string, limit, offset int64) ([]*model.Job, int64, error)
+	GetQueuePosition(ctx context.Context, jobID, model string) (int64, bool, error)
 }
 
 // reservedJobFields are multipart form fields consumed by the gateway
@@ -68,14 +69,15 @@ type submitResponse struct {
 // statusResponse is the body returned on GET /jobs/{service_type}/{id}.
 // CallbackURL and ConsumerName are intentionally excluded from the response.
 type statusResponse struct {
-	JobID       string          `json:"job_id"`
-	ServiceType string          `json:"service_type"`
-	Model       string          `json:"model"`
-	Status      model.JobStatus `json:"status"`
-	Result      json.RawMessage `json:"result,omitempty"` // inline result payload when completed
-	Error       string          `json:"error,omitempty"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
+	JobID         string          `json:"job_id"`
+	ServiceType   string          `json:"service_type"`
+	Model         string          `json:"model"`
+	Status        model.JobStatus `json:"status"`
+	QueuePosition *int64          `json:"queue_position,omitempty"`
+	Result        json.RawMessage `json:"result,omitempty"` // inline result payload when completed
+	Error         string          `json:"error,omitempty"`
+	CreatedAt     time.Time       `json:"created_at"`
+	UpdatedAt     time.Time       `json:"updated_at"`
 }
 
 // listJobsResponse is the body returned on GET /jobs.
@@ -88,13 +90,14 @@ type listJobsResponse struct {
 }
 
 type jobSummary struct {
-	JobID       string          `json:"job_id"`
-	ServiceType string          `json:"service_type"`
-	Model       string          `json:"model"`
-	Status      model.JobStatus `json:"status"`
-	Error       string          `json:"error,omitempty"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
+	JobID         string          `json:"job_id"`
+	ServiceType   string          `json:"service_type"`
+	Model         string          `json:"model"`
+	Status        model.JobStatus `json:"status"`
+	QueuePosition *int64          `json:"queue_position,omitempty"`
+	Error         string          `json:"error,omitempty"`
+	CreatedAt     time.Time       `json:"created_at"`
+	UpdatedAt     time.Time       `json:"updated_at"`
 }
 
 // Submit handles POST /jobs/{service_type}.
@@ -328,6 +331,14 @@ func (h *JobHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 		UpdatedAt:   job.UpdatedAt,
 	}
 
+	if job.Status == model.JobStatusPending {
+		if pos, ok, err := h.redis.GetQueuePosition(r.Context(), job.ID, job.Model); err != nil {
+			slog.WarnContext(r.Context(), "failed to get queue position", "job_id", id, "error", err)
+		} else if ok {
+			resp.QueuePosition = &pos
+		}
+	}
+
 	// Fetch and inline the result payload when the job is completed.
 	if job.Status == model.JobStatusCompleted && job.ResultRef != "" {
 		data, err := h.store.GetObject(r.Context(), job.ResultRef)
@@ -405,13 +416,14 @@ func (h *JobHandler) ListJobs(w http.ResponseWriter, r *http.Request) {
 	summaries := make([]*jobSummary, len(jobs))
 	for i, j := range jobs {
 		summaries[i] = &jobSummary{
-			JobID:       j.ID,
-			ServiceType: j.ServiceType,
-			Model:       j.Model,
-			Status:      j.Status,
-			Error:       j.Error,
-			CreatedAt:   j.CreatedAt,
-			UpdatedAt:   j.UpdatedAt,
+			JobID:         j.ID,
+			ServiceType:   j.ServiceType,
+			Model:         j.Model,
+			Status:        j.Status,
+			QueuePosition: j.QueuePosition,
+			Error:         j.Error,
+			CreatedAt:     j.CreatedAt,
+			UpdatedAt:     j.UpdatedAt,
 		}
 	}
 
