@@ -15,7 +15,7 @@
 #   RERANK_API_KEY    API key for rerank endpoint  (sent as 'apikey' header)
 #   WHISPER_MODEL     Model name for Whisper (default: whisper-large-v3)
 #   RERANK_MODEL      Model name for the reranker (default: bge-reranker-v2-m3)
-#   RERANK_ENDPOINT   Rerank path (default: /v1/rerank)
+#   RERANK_ENDPOINT   Rerank path (default: /rerank)
 #   POLL_TIMEOUT      Max seconds to wait for an async job (default: 300)
 #   POLL_INTERVAL     Seconds between async polls (default: 5)
 #   SYNC_TIMEOUT      Max seconds for the synchronous transcription request (default: 300)
@@ -194,7 +194,7 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 4 / 4  Rerank — sync-direct (POST /v1/rerank)
+# 4 / 4  Rerank — sync-direct (POST /rerank)
 # ══════════════════════════════════════════════════════════════════════════════
 log ""
 log "=== 4/4  Rerank sync-direct (POST ${RERANK_ENDPOINT}) ==="

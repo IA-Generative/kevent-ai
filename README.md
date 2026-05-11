@@ -252,7 +252,7 @@ services:
     model: "bge-reranker-v2-m3"
     operations:
       rerank:
-        - "/v1/rerank"
+        - "/rerank"
     inference_url: "http://kevent-reranker-predictor.default.svc.cluster.local"
     # Pas de input_topic / result_topic → sync-direct uniquement
 
@@ -501,10 +501,10 @@ services:
     model: "bge-reranker-v2-m3"
     operations:
       rerank:
-        - "/v1/rerank"
+        - "/rerank"
     inference_url: "http://kevent-reranker-predictor.default.svc.cluster.local"
     # Pas de input_topic / result_topic → sync-direct uniquement
-    # POST /jobs/reranker → 405  |  POST /v1/rerank → proxy direct
+    # POST /jobs/reranker → 405  |  POST /rerank → proxy direct
 ```
 
 **Relay sidecar** (env vars dans le manifest KServe) :

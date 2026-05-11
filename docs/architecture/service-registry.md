@@ -98,7 +98,7 @@ For sync-direct services whose backend requires authentication, add `inference_h
   model: "bge-reranker-v2-m3"
   operations:
     rerank:
-      - "/v1/rerank"
+      - "/rerank"
   inference_url: "http://kevent-reranker-predictor.svc.cluster.local"
   inference_headers:
     Authorization: "Bearer ${RERANKER_API_KEY}"
