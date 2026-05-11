@@ -70,6 +70,7 @@ type SyncHandler struct {
 	consumerHeader string            // HTTP header identifying the API consumer (e.g. "X-Consumer-Username")
 	rateLimiter    ratelimit.Checker // nil = no rate limiting
 	llm            *llmproxy.Handler // nil when no LLM services are configured
+	retryBackoff   time.Duration     // initial backoff between retry cycles; default 500ms
 }
 
 func NewSyncHandler(
@@ -91,8 +92,16 @@ func NewSyncHandler(
 		llm:            llm,
 		// Generous timeout for direct-proxy path; Knative timeoutSeconds is the
 		// real ceiling for the sync-over-Kafka path (controlled by context).
-		httpClient: &http.Client{Timeout: 15 * time.Minute},
+		httpClient:   &http.Client{Timeout: 15 * time.Minute},
+		retryBackoff: 500 * time.Millisecond,
 	}
+}
+
+// WithRetryBackoff overrides the initial backoff between retry cycles.
+// Intended for tests to avoid sleeping the full 500ms.
+func (h *SyncHandler) WithRetryBackoff(d time.Duration) *SyncHandler {
+	h.retryBackoff = d
+	return h
 }
 
 func (h *SyncHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -403,83 +412,114 @@ waitLoop:
 }
 
 // proxyToInference forwards the request body directly to the inference backend.
+// When def.Retries > 0, the full backend cycle is repeated up to that many
+// additional times (with 500ms exponential backoff) before giving up.
 func (h *SyncHandler) proxyToInference(w http.ResponseWriter, r *http.Request, def *service.Def, body []byte, contentType string) {
 	start := time.Now()
 	defer func() {
 		metrics.RequestDuration.WithLabelValues("sync-direct", def.Type, def.Model).Observe(time.Since(start).Seconds())
 	}()
 
-	backends := service.OrderedBackends(def.Backends)
-	if len(backends) == 0 {
+	if len(def.Backends) == 0 {
 		metrics.RequestsTotal.WithLabelValues("sync-direct", def.Type, def.Model, "500").Inc()
 		writeError(w, http.StatusInternalServerError, "no backends configured")
 		return
 	}
 
 	auth := r.Header.Get("Authorization")
-	var lastErr string
+	maxAttempts := 1 + def.Retries
+	backoff := h.retryBackoff
 
-	for i, backend := range backends {
-		target, err := url.Parse(backend.URL)
-		if err != nil {
-			slog.WarnContext(r.Context(), "invalid backend url, skipping",
-				"backend_index", i, "url", backend.URL, "error", err)
-			lastErr = "invalid backend url: " + err.Error()
-			continue
-		}
-		target.Path = r.URL.Path
-		target.RawQuery = r.URL.RawQuery
-
-		upstreamReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, target.String(), bytes.NewReader(body))
-		if err != nil {
-			lastErr = "failed to build upstream request: " + err.Error()
-			continue
-		}
-		upstreamReq.Header.Set("Content-Type", contentType)
-		if auth != "" {
-			upstreamReq.Header.Set("Authorization", auth)
-		}
-		for k, v := range def.InferenceHeaders {
-			upstreamReq.Header.Set(k, v)
-		}
-		for k, v := range backend.Headers {
-			upstreamReq.Header.Set(k, v)
-		}
-
-		resp, err := h.httpClient.Do(upstreamReq)
-		if err != nil {
-			slog.WarnContext(r.Context(), "backend network error, trying next",
-				"backend_index", i, "url", backend.URL, "error", err)
-			metrics.RequestsTotal.WithLabelValues("sync-direct", def.Type, def.Model, "502").Inc()
-			lastErr = "upstream error: " + err.Error()
-			continue
-		}
-
-		if resp.StatusCode >= 500 {
-			slog.WarnContext(r.Context(), "backend returned 5xx, trying next",
-				"backend_index", i, "url", backend.URL, "status", resp.StatusCode)
-			metrics.RequestsTotal.WithLabelValues("sync-direct", def.Type, def.Model, strconv.Itoa(resp.StatusCode)).Inc()
-			lastErr = fmt.Sprintf("backend returned %d", resp.StatusCode)
-			_, _ = io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
-			continue
-		}
-
-		// Success or 4xx: forward immediately, do not retry.
-		defer resp.Body.Close()
-		metrics.RequestsTotal.WithLabelValues("sync-direct", def.Type, def.Model, strconv.Itoa(resp.StatusCode)).Inc()
-		for key, values := range resp.Header {
-			for _, v := range values {
-				w.Header().Add(key, v)
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-r.Context().Done():
+				metrics.RequestsTotal.WithLabelValues("sync-direct", def.Type, def.Model, "502").Inc()
+				writeError(w, http.StatusBadGateway, "request cancelled during retry")
+				return
+			case <-time.After(backoff):
+				backoff *= 2
 			}
+			slog.InfoContext(r.Context(), "retrying backend cycle",
+				"attempt", attempt+1,
+				"max_attempts", maxAttempts,
+				"service", def.Type,
+				"model", def.Model,
+			)
 		}
-		w.WriteHeader(resp.StatusCode)
-		_, _ = io.Copy(w, resp.Body)
-		return
-	}
 
-	metrics.RequestsTotal.WithLabelValues("sync-direct", def.Type, def.Model, "502").Inc()
-	writeError(w, http.StatusBadGateway, "all backends failed: "+lastErr)
+		var lastErr string
+		for i, backend := range service.OrderedBackends(def.Backends) {
+			target, err := url.Parse(backend.URL)
+			if err != nil {
+				slog.WarnContext(r.Context(), "invalid backend url, skipping",
+					"backend_index", i, "url", backend.URL, "error", err)
+				lastErr = "invalid backend url: " + err.Error()
+				continue
+			}
+			target.Path = r.URL.Path
+			target.RawQuery = r.URL.RawQuery
+
+			upstreamReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, target.String(), bytes.NewReader(body))
+			if err != nil {
+				lastErr = "failed to build upstream request: " + err.Error()
+				continue
+			}
+			upstreamReq.Header.Set("Content-Type", contentType)
+			if auth != "" {
+				upstreamReq.Header.Set("Authorization", auth)
+			}
+			for k, v := range def.InferenceHeaders {
+				upstreamReq.Header.Set(k, v)
+			}
+			for k, v := range backend.Headers {
+				upstreamReq.Header.Set(k, v)
+			}
+
+			resp, err := h.httpClient.Do(upstreamReq)
+			if err != nil {
+				slog.WarnContext(r.Context(), "backend network error, trying next",
+					"backend_index", i, "url", backend.URL, "error", err)
+				metrics.RequestsTotal.WithLabelValues("sync-direct", def.Type, def.Model, "502").Inc()
+				lastErr = "upstream error: " + err.Error()
+				continue
+			}
+
+			if resp.StatusCode >= 500 {
+				slog.WarnContext(r.Context(), "backend returned 5xx, trying next",
+					"backend_index", i, "url", backend.URL, "status", resp.StatusCode)
+				metrics.RequestsTotal.WithLabelValues("sync-direct", def.Type, def.Model, strconv.Itoa(resp.StatusCode)).Inc()
+				lastErr = fmt.Sprintf("backend returned %d", resp.StatusCode)
+				_, _ = io.Copy(io.Discard, resp.Body)
+				resp.Body.Close()
+				continue
+			}
+
+			// Success or 4xx: forward immediately, do not retry.
+			defer resp.Body.Close()
+			metrics.RequestsTotal.WithLabelValues("sync-direct", def.Type, def.Model, strconv.Itoa(resp.StatusCode)).Inc()
+			for key, values := range resp.Header {
+				for _, v := range values {
+					w.Header().Add(key, v)
+				}
+			}
+			w.WriteHeader(resp.StatusCode)
+			_, _ = io.Copy(w, resp.Body)
+			return
+		}
+
+		if attempt < maxAttempts-1 {
+			slog.WarnContext(r.Context(), "all backends failed, will retry",
+				"attempt", attempt+1,
+				"error", lastErr,
+				"service", def.Type,
+				"model", def.Model,
+			)
+		} else {
+			metrics.RequestsTotal.WithLabelValues("sync-direct", def.Type, def.Model, "502").Inc()
+			writeError(w, http.StatusBadGateway, "all backends failed: "+lastErr)
+		}
+	}
 }
 
 // statusWriter wraps http.ResponseWriter to capture the written status code.

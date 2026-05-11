@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -644,5 +645,98 @@ func TestSyncHandler_BackwardCompat_SingleInferenceURL(t *testing.T) {
 	}
 	if !called {
 		t.Error("upstream was not called")
+	}
+}
+
+func buildRetryRegistry(inferenceURL string, retries int) *service.Registry {
+	cfgs := []config.ServiceConfig{{
+		Type:  "ocr",
+		Model: "llava",
+		Operations: map[string][]string{
+			"chat": {"/v1/chat/completions"},
+		},
+		InferenceURL: inferenceURL,
+		Retries:      retries,
+	}}
+	return service.NewRegistry(cfgs)
+}
+
+// TestSyncHandler_Retry_SucceedsAfterFailure verifies that the handler retries on 5xx
+// and succeeds once the backend recovers.
+func TestSyncHandler_Retry_SucceedsAfterFailure(t *testing.T) {
+	var callCount atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := callCount.Add(1)
+		if n < 3 { // first 2 calls fail
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	defer upstream.Close()
+
+	reg := buildRetryRegistry(upstream.URL, 2) // 2 retries = 3 total attempts
+	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, nil).
+		WithRetryBackoff(5 * time.Millisecond)
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, jsonRequest("/v1/chat/completions"))
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 after retry, got %d", w.Code)
+	}
+	if n := callCount.Load(); n != 3 {
+		t.Errorf("expected 3 upstream calls (1 initial + 2 retries), got %d", n)
+	}
+}
+
+// TestSyncHandler_Retry_ExhaustsAllAttempts verifies that 502 is returned after all
+// retry cycles fail.
+func TestSyncHandler_Retry_ExhaustsAllAttempts(t *testing.T) {
+	var callCount atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer upstream.Close()
+
+	reg := buildRetryRegistry(upstream.URL, 1) // 1 retry = 2 total attempts
+	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, nil).
+		WithRetryBackoff(5 * time.Millisecond)
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, jsonRequest("/v1/chat/completions"))
+
+	if w.Code != http.StatusBadGateway {
+		t.Errorf("expected 502 after all retries exhausted, got %d", w.Code)
+	}
+	if n := callCount.Load(); n != 2 {
+		t.Errorf("expected 2 upstream calls (1 initial + 1 retry), got %d", n)
+	}
+}
+
+// TestSyncHandler_Retry_NoRetryOn4xx verifies that 4xx responses are not retried.
+func TestSyncHandler_Retry_NoRetryOn4xx(t *testing.T) {
+	var callCount atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount.Add(1)
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer upstream.Close()
+
+	reg := buildRetryRegistry(upstream.URL, 3)
+	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, nil).
+		WithRetryBackoff(5 * time.Millisecond)
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, jsonRequest("/v1/chat/completions"))
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 forwarded as-is, got %d", w.Code)
+	}
+	if n := callCount.Load(); n != 1 {
+		t.Errorf("4xx must not trigger retry; backend called %d time(s)", n)
 	}
 }
