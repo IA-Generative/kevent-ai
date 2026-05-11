@@ -13,7 +13,7 @@ name: Smoke tests — dev
 #     GATEWAY_READY_TIMEOUT  seconds to wait for the gateway after a deploy (default: 120)
 #     WHISPER_MODEL          whisper-large-v3     (optional, this is the default)
 #     RERANK_MODEL           bge-reranker-v2-m3   (optional, this is the default)
-#     RERANK_ENDPOINT        /v1/rerank           (optional, this is the default)
+#     RERANK_ENDPOINT        /rerank           (optional, this is the default)
 #
 #   Secrets    (Settings → Environments → dev → Secrets)
 #     GATEWAY_URL            https://api.kevent-dev.example.com
@@ -135,7 +135,7 @@ jobs:
           RERANK_API_KEY:   ${{ secrets.RERANK_API_KEY }}
           WHISPER_MODEL:    ${{ vars.WHISPER_MODEL   || 'whisper-large-v3' }}
           RERANK_MODEL:     ${{ vars.RERANK_MODEL    || 'bge-reranker-v2-m3' }}
-          RERANK_ENDPOINT:  ${{ vars.RERANK_ENDPOINT || '/v1/rerank' }}
+          RERANK_ENDPOINT:  ${{ vars.RERANK_ENDPOINT || '/rerank' }}
           POLL_TIMEOUT:     ${{ inputs.poll_timeout  || '300' }}
           SYNC_TIMEOUT:     "300"
           SKIP_WHISPER:     ${{ inputs.skip_whisper  || '0' }}

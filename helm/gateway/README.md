@@ -35,7 +35,7 @@ helm upgrade --install kevent-gateway ./helm/gateway -f values.yaml
 Client
   │  POST /jobs/{service_type}        (async — Kafka)
   │  POST /v1/audio/transcriptions    (sync-over-Kafka or direct proxy)
-  │  POST /v1/rerank                  (sync direct proxy — no Kafka)
+  │  POST /rerank                  (sync direct proxy — no Kafka)
   ▼
 Gateway (:8080)
   ├── S3 — upload/download
@@ -137,7 +137,7 @@ services:
     model: "bge-reranker-v2-m3"
     operations:
       rerank:
-        - "/v1/rerank"
+        - "/rerank"
     inferenceURL: "http://kevent-reranker-predictor.default.svc.cluster.local"
     # No inputTopic / resultTopic → sync-direct mode only
 ```

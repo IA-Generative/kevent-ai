@@ -33,7 +33,7 @@ func TestReservedGatewayPath(t *testing.T) {
 		{"/v1/audio/transcriptions", false},
 		{"/v1/audio/translations", false},
 		{"/v1/chat/completions", false},
-		{"/v1/rerank", false},
+		{"/rerank", false},
 		{"/v2/models/{model}/infer", false},
 		{"/ocr", false},
 		// Paths that share a prefix but are not reserved
