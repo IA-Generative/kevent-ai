@@ -15,17 +15,19 @@ const (
 // (never exposed in API responses) but persisted so the consumer can
 // trigger the webhook when the result arrives minutes or hours later.
 type Job struct {
-	ID           string    `json:"id"`
-	ServiceType  string    `json:"service_type"`
-	Model        string    `json:"model"`
-	Status       JobStatus `json:"status"`
-	InputRef     string    `json:"input_ref"`
-	ResultRef    string    `json:"result_ref,omitempty"`
-	CallbackURL  string    `json:"callback_url,omitempty"`
-	ConsumerName string    `json:"consumer_name,omitempty"` // set from configurable HTTP header (e.g. X-Consumer-Username)
-	Error        string    `json:"error,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID            string    `json:"id"`
+	ServiceType   string    `json:"service_type"`
+	Model         string    `json:"model"`
+	Status        JobStatus `json:"status"`
+	InputRef      string    `json:"input_ref"`
+	ResultRef     string    `json:"result_ref,omitempty"`
+	CallbackURL   string    `json:"callback_url,omitempty"`
+	ConsumerName  string    `json:"consumer_name,omitempty"` // set from configurable HTTP header (e.g. X-Consumer-Username)
+	Error         string    `json:"error,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+	// QueuePosition is not persisted — populated transiently by the storage layer for pending jobs.
+	QueuePosition *int64 `json:"queue_position,omitempty"`
 }
 
 // InputEvent is published to the model-specific input Kafka topic.

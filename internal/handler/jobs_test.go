@@ -3,6 +3,7 @@ package handler_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -42,9 +43,15 @@ func (m *mockJobS3) DeleteObject(_ context.Context, key string) error {
 }
 
 type mockAsyncStore struct {
-	saveErr      error
-	saved        bool
-	updateCalled bool
+	saveErr       error
+	saved         bool
+	updateCalled  bool
+	job           *model.Job   // returned by GetJob
+	getJobErr     error
+	jobs          []*model.Job // returned by ListJobsByConsumer
+	jobsTotal     int64
+	queuePos      int64
+	queuePosFound bool
 }
 
 func (m *mockAsyncStore) SaveJob(_ context.Context, _ *model.Job) error {
@@ -52,7 +59,7 @@ func (m *mockAsyncStore) SaveJob(_ context.Context, _ *model.Job) error {
 	return m.saveErr
 }
 func (m *mockAsyncStore) GetJob(_ context.Context, _ string) (*model.Job, error) {
-	return nil, nil
+	return m.job, m.getJobErr
 }
 func (m *mockAsyncStore) DeleteJob(_ context.Context, _ string) error { return nil }
 func (m *mockAsyncStore) UpdateJobResult(_ context.Context, _ string, _ model.JobStatus, _, _ string) error {
@@ -60,7 +67,10 @@ func (m *mockAsyncStore) UpdateJobResult(_ context.Context, _ string, _ model.Jo
 	return nil
 }
 func (m *mockAsyncStore) ListJobsByConsumer(_ context.Context, _ string, _, _ int64) ([]*model.Job, int64, error) {
-	return nil, 0, nil
+	return m.jobs, m.jobsTotal, nil
+}
+func (m *mockAsyncStore) GetQueuePosition(_ context.Context, _, _ string) (int64, bool, error) {
+	return m.queuePos, m.queuePosFound, nil
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -300,7 +310,182 @@ func TestSubmit_S3Failure(t *testing.T) {
 	}
 }
 
-// TestSubmit_KafkaFailure verifies that a Kafka publish error returns 500,
+// statusReq builds a GET /jobs/{serviceType}/{id} request with chi route context.
+func statusReq(t *testing.T, serviceType, id string) *http.Request {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/jobs/"+serviceType+"/"+id, nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("service_type", serviceType)
+	rctx.URLParams.Add("id", id)
+	return req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+}
+
+// listReq builds a GET /jobs request with the given consumer header.
+func listReq(t *testing.T, consumer string) *http.Request {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/jobs", nil)
+	req.Header.Set("X-Consumer-Username", consumer)
+	return req
+}
+
+func newHandlerWithConsumer(reg *service.Registry, s3 *mockJobS3, store *mockAsyncStore, prod *mockProducer) *handler.JobHandler {
+	return handler.NewJobHandler(reg, s3, store, prod, "", "X-Consumer-Username", nil)
+}
+
+// ── GetStatus tests ───────────────────────────────────────────────────────────
+
+// TestGetStatus_Pending_HasQueuePosition verifies that a pending job response
+// includes queue_position when the store returns one.
+func TestGetStatus_Pending_HasQueuePosition(t *testing.T) {
+	now := time.Now().UTC()
+	store := &mockAsyncStore{
+		job: &model.Job{
+			ID:          "abc",
+			ServiceType: "transcription",
+			Model:       "faster-whisper",
+			Status:      model.JobStatusPending,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		},
+		queuePos:      3,
+		queuePosFound: true,
+	}
+
+	w := httptest.NewRecorder()
+	newHandlerWithConsumer(singleOpRegistry(), &mockJobS3{}, store, &mockProducer{}).
+		GetStatus(w, statusReq(t, "transcription", "abc"))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	pos, ok := resp["queue_position"]
+	if !ok {
+		t.Fatal("queue_position missing from pending job response")
+	}
+	if pos.(float64) != 3 {
+		t.Errorf("expected queue_position=3, got %v", pos)
+	}
+}
+
+// TestGetStatus_Completed_NoQueuePosition verifies that a completed job response
+// does not include queue_position.
+func TestGetStatus_Completed_NoQueuePosition(t *testing.T) {
+	now := time.Now().UTC()
+	store := &mockAsyncStore{
+		job: &model.Job{
+			ID:          "abc",
+			ServiceType: "transcription",
+			Model:       "faster-whisper",
+			Status:      model.JobStatusCompleted,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		},
+	}
+
+	w := httptest.NewRecorder()
+	newHandlerWithConsumer(singleOpRegistry(), &mockJobS3{}, store, &mockProducer{}).
+		GetStatus(w, statusReq(t, "transcription", "abc"))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if _, ok := resp["queue_position"]; ok {
+		t.Error("queue_position must not be present for a completed job")
+	}
+}
+
+// TestGetStatus_NotFound verifies that an unknown job ID returns 404.
+func TestGetStatus_NotFound(t *testing.T) {
+	store := &mockAsyncStore{getJobErr: fmt.Errorf("job not found")}
+
+	w := httptest.NewRecorder()
+	newHandlerWithConsumer(singleOpRegistry(), &mockJobS3{}, store, &mockProducer{}).
+		GetStatus(w, statusReq(t, "transcription", "unknown"))
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", w.Code)
+	}
+}
+
+// ── ListJobs tests ────────────────────────────────────────────────────────────
+
+// TestListJobs_PendingJobsHaveQueuePosition verifies that pending jobs in the
+// list response carry queue_position when pre-populated by the store.
+func TestListJobs_PendingJobsHaveQueuePosition(t *testing.T) {
+	now := time.Now().UTC()
+	pos := int64(2)
+	store := &mockAsyncStore{
+		jobs: []*model.Job{
+			{
+				ID: "j1", ServiceType: "transcription", Model: "faster-whisper",
+				Status: model.JobStatusPending, QueuePosition: &pos,
+				CreatedAt: now, UpdatedAt: now,
+			},
+			{
+				ID: "j2", ServiceType: "transcription", Model: "faster-whisper",
+				Status: model.JobStatusCompleted,
+				CreatedAt: now, UpdatedAt: now,
+			},
+		},
+		jobsTotal: 2,
+	}
+
+	w := httptest.NewRecorder()
+	newHandlerWithConsumer(singleOpRegistry(), &mockJobS3{}, store, &mockProducer{}).
+		ListJobs(w, listReq(t, "consumer-a"))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Jobs []map[string]any `json:"jobs"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Jobs) != 2 {
+		t.Fatalf("expected 2 jobs, got %d", len(resp.Jobs))
+	}
+
+	// Pending job must have queue_position.
+	if _, ok := resp.Jobs[0]["queue_position"]; !ok {
+		t.Error("queue_position missing from pending job in list")
+	}
+	if resp.Jobs[0]["queue_position"].(float64) != 2 {
+		t.Errorf("expected queue_position=2, got %v", resp.Jobs[0]["queue_position"])
+	}
+
+	// Completed job must NOT have queue_position.
+	if _, ok := resp.Jobs[1]["queue_position"]; ok {
+		t.Error("queue_position must not be present for a completed job in list")
+	}
+}
+
+// TestListJobs_MissingConsumerHeader verifies that a missing consumer header
+// returns 400.
+func TestListJobs_MissingConsumerHeader(t *testing.T) {
+	store := &mockAsyncStore{}
+	req := httptest.NewRequest(http.MethodGet, "/jobs", nil)
+
+	w := httptest.NewRecorder()
+	newHandlerWithConsumer(singleOpRegistry(), &mockJobS3{}, store, &mockProducer{}).
+		ListJobs(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+// TestGetStatus_KafkaFailure verifies that a Kafka publish error returns 500,
 // marks the job as failed in Redis, and cleans up the orphaned S3 input file.
 func TestSubmit_KafkaFailure(t *testing.T) {
 	s3 := &mockJobS3{}
