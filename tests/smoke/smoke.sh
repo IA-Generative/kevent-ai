@@ -228,9 +228,9 @@ else
   RERANK_HTTP_STATUS=$(echo "$RERANK_BODY" | grep -o '__HTTP_STATUS__:[0-9]*' | cut -d: -f2 || true)
   RERANK_BODY=$(echo "$RERANK_BODY" | sed 's/__HTTP_STATUS__:[0-9]*//')
 
-  # Accept {"results":[...]}, {"data":[...]} or a bare array (all three seen in the wild)
+  # Accept bare array, {"results":[...]}, or {"data":[...]}
   RESULTS_COUNT=$(echo "$RERANK_BODY" | \
-    jq '(.results // .data // (if type=="array" then . else null end)) | if . then length else 0 end' \
+    jq 'if type == "array" then length else (.results // .data // [] | length) end' \
     2>/dev/null || echo "0")
 
   if [[ "$RESULTS_COUNT" -gt 0 ]]; then
