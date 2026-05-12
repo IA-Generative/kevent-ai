@@ -30,23 +30,36 @@ go test ./...
 Images are hosted on **ghcr.io** and released via GitHub Actions. To release:
 
 ```bash
-# Tag and push — CI builds multi-arch image + binary + GitHub Release automatically
-git tag gateway/vX.Y.Z    && git push origin gateway/vX.Y.Z
-git tag relay/vX.Y.Z && git push origin relay/vX.Y.Z
+# 1. Create a release branch from develop
+git checkout develop && git pull
+git checkout -b release/vX.Y.Z
+
+# 2. Bump versions and update changelog
+#    - helm/gateway/values.yaml  → image.tag
+#    - helm/gateway/Chart.yaml   → version + appVersion
+#    - CHANGELOG.md              → new section
+#    - k8s/inference-transcription.yaml → relay image tag (relay releases only)
+
+# 3. Commit, push and open a PR → main
+git add ... && git commit -m "chore(release): gateway vX.Y.Z"
+git push -u origin release/vX.Y.Z
+gh pr create --base main --title "release: gateway vX.Y.Z"
+
+# 4. After the PR is merged, tag on main and push
+git checkout main && git pull
+git tag gateway/vX.Y.Z && git push origin gateway/vX.Y.Z
+# relay: git tag relay/vX.Y.Z && git push origin relay/vX.Y.Z
+
+# 5. Merge main back into develop to keep them in sync
+git checkout develop && git merge --no-ff main
+git push origin develop
 ```
 
 Images:
 - Gateway:    `ghcr.io/ia-generative/kevent-ai/gateway:vX.Y.Z`
 - Relay: `ghcr.io/ia-generative/kevent-ai/relay:vX.Y.Z`
 
-Current tags: gateway `v0.8.0`, relay `v0.4.5`.
-
-After tagging, also update:
-1. `helm/gateway/values.yaml` → `image.tag`
-2. `k8s/inference-transcription.yaml` → relay image tag
-3. Bump `helm/gateway/Chart.yaml` version if chart files changed
-4. Update `CHANGELOG.md`
-5. Commit to main
+Current tags: gateway `v0.9.0`, relay `v0.5.1`.
 
 ## Architecture
 
