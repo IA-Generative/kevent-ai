@@ -15,7 +15,7 @@
 #   RERANK_API_KEY    API key for rerank endpoint  (sent as 'apikey' header)
 #   WHISPER_MODEL     Model name for Whisper (default: whisper-large-v3)
 #   RERANK_MODEL      Model name for the reranker (default: bge-reranker-v2-m3)
-#   RERANK_ENDPOINT   Rerank path (default: /v1/rerank)
+#   RERANK_ENDPOINT   Rerank path (default: /rerank)
 #   POLL_TIMEOUT      Max seconds to wait for an async job (default: 300)
 #   POLL_INTERVAL     Seconds between async polls (default: 5)
 #   SYNC_TIMEOUT      Max seconds for the synchronous transcription request (default: 300)
@@ -31,7 +31,7 @@ WHISPER_API_KEY="${WHISPER_API_KEY:-}"
 RERANK_API_KEY="${RERANK_API_KEY:-}"
 WHISPER_MODEL="${WHISPER_MODEL:-whisper-large-v3}"
 RERANK_MODEL="${RERANK_MODEL:-bge-reranker-v2-m3}"
-RERANK_ENDPOINT="${RERANK_ENDPOINT:-/v1/rerank}"
+RERANK_ENDPOINT="${RERANK_ENDPOINT:-/rerank}"
 POLL_TIMEOUT="${POLL_TIMEOUT:-300}"
 POLL_INTERVAL="${POLL_INTERVAL:-5}"
 SYNC_TIMEOUT="${SYNC_TIMEOUT:-300}"
@@ -194,7 +194,7 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 4 / 4  Rerank — sync-direct (POST /v1/rerank)
+# 4 / 4  Rerank — sync-direct (POST /rerank)
 # ══════════════════════════════════════════════════════════════════════════════
 log ""
 log "=== 4/4  Rerank sync-direct (POST ${RERANK_ENDPOINT}) ==="
@@ -215,7 +215,7 @@ else
       "Reranker evaluation uses metrics like NDCG, MRR, and precision@k.",
       "Semantic search finds documents based on meaning rather than keyword matching."
     ]' \
-    '{query: $q, model: $m, documents: $docs, top_n: 3, return_documents: true}')
+    '{query: $q, model: $m, texts: $docs, top_n: 3, return_documents: true}')
 
   RERANK_HTTP_STATUS=""
   RERANK_BODY=$(curl_rerank \
@@ -228,9 +228,9 @@ else
   RERANK_HTTP_STATUS=$(echo "$RERANK_BODY" | grep -o '__HTTP_STATUS__:[0-9]*' | cut -d: -f2 || true)
   RERANK_BODY=$(echo "$RERANK_BODY" | sed 's/__HTTP_STATUS__:[0-9]*//')
 
-  # Accept {"results":[...]}, {"data":[...]} or a bare array (all three seen in the wild)
+  # Accept bare array, {"results":[...]}, or {"data":[...]}
   RESULTS_COUNT=$(echo "$RERANK_BODY" | \
-    jq '(.results // .data // (if type=="array" then . else null end)) | if . then length else 0 end' \
+    jq 'if type == "array" then length else (.results // .data // [] | length) end' \
     2>/dev/null || echo "0")
 
   if [[ "$RESULTS_COUNT" -gt 0 ]]; then

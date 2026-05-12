@@ -6,6 +6,8 @@
 //
 //	rate_limits:
 //	  audio:
+//	    unlimited:
+//	      rate: 0        # sentinel: no limit applied
 //	    premium:
 //	      rate: 100
 //	      period: 1m
@@ -109,6 +111,12 @@ func (l *Limiter) Check(ctx context.Context, r *http.Request, serviceType string
 		if !ok {
 			return true, 0, nil
 		}
+	}
+
+	// rate: 0 is the sentinel for "no limit" — allow without touching Redis.
+	if rlCfg.Rate == 0 {
+		metrics.RateLimitRequestsTotal.WithLabelValues(serviceType, userType, "allowed").Inc()
+		return true, 0, nil
 	}
 
 	period, err := time.ParseDuration(rlCfg.Period)

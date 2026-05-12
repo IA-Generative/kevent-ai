@@ -2,7 +2,7 @@ replicaCount: 1
 
 image:
   repository: ghcr.io/ia-generative/kevent-ai/gateway
-  tag: "v0.8.0"
+  tag: "v0.9.0"
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
@@ -159,7 +159,7 @@ services:
   #   model: "bge-reranker-v2-m3"
   #   operations:
   #     rerank:
-  #       - "/v1/rerank"
+  #       - "/rerank"
   #   inferenceURL: "http://kevent-reranker-predictor.default.svc.cluster.local"
   #   # Pas de inputTopic / resultTopic → sync-direct uniquement
   #

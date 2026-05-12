@@ -16,6 +16,23 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Gateway
 
+### [v0.9.0] — 2026-05-12
+
+#### Added
+
+**Queue position** (`internal/storage/`, `internal/handler/`)
+- `GET /jobs/{service_type}/{id}` and `GET /jobs` now include `queue_position` (1-indexed) for pending jobs
+- Position is tracked via Redis sorted set `queue:{model}` (ZADD on submit, ZREM on complete/delete)
+- Atomic cleanup in existing Lua scripts (`updateJobScript`, `deleteJobScript`) — no extra round-trips
+- `GET /jobs` batches all ZRANK calls in a single pipeline
+
+**Unlimited rate limit** (`internal/ratelimit/`)
+- `rate: 0` in config bypasses Redis entirely and always allows the request — no counter incremented
+- Allows per-user-type "no limit" alongside normal fixed-window limits for other types
+- Example: `unlimited: {rate: 0}` with `"*": {rate: 10, period: 1h}`
+
+---
+
 ### [v0.8.0] — 2026-05-04
 
 #### Added

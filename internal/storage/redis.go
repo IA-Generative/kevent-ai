@@ -54,6 +54,7 @@ func (r *RedisClient) Raw() *redis.Client { return r.client }
 
 func jobKey(id string) string        { return "job:" + id }
 func consumerKey(name string) string { return "consumer:" + name + ":jobs" }
+func queueKey(model string) string   { return "queue:" + model }
 
 // SaveJob persists the full job struct as a JSON blob with the configured TTL.
 // If the job has a ConsumerName, the job ID is also added to the consumer's
@@ -65,20 +66,22 @@ func (r *RedisClient) SaveJob(ctx context.Context, job *model.Job) error {
 		return fmt.Errorf("marshaling job %q: %w", job.ID, err)
 	}
 
-	var pipeErr error
-	if job.ConsumerName != "" {
-		_, pipeErr = r.client.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-			pipe.Set(ctx, jobKey(job.ID), data, r.jobTTL)
+	_, pipeErr := r.client.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+		pipe.Set(ctx, jobKey(job.ID), data, r.jobTTL)
+		pipe.ZAdd(ctx, queueKey(job.Model), redis.Z{
+			Score:  float64(job.CreatedAt.Unix()),
+			Member: job.ID,
+		})
+		pipe.Expire(ctx, queueKey(job.Model), r.jobTTL)
+		if job.ConsumerName != "" {
 			pipe.ZAdd(ctx, consumerKey(job.ConsumerName), redis.Z{
 				Score:  float64(job.CreatedAt.Unix()),
 				Member: job.ID,
 			})
 			pipe.Expire(ctx, consumerKey(job.ConsumerName), r.jobTTL)
-			return nil
-		})
-	} else {
-		pipeErr = r.client.Set(ctx, jobKey(job.ID), data, r.jobTTL).Err()
-	}
+		}
+		return nil
+	})
 
 	metrics.RedisOperationDuration.WithLabelValues("save_job").Observe(time.Since(start).Seconds())
 	if pipeErr != nil {
@@ -115,8 +118,13 @@ var deleteJobScript = redis.NewScript(`
 local data = redis.call('GET', KEYS[1])
 if data then
     local ok, job = pcall(cjson.decode, data)
-    if ok and job['consumer_name'] and job['consumer_name'] ~= '' then
-        redis.call('ZREM', 'consumer:' .. job['consumer_name'] .. ':jobs', ARGV[1])
+    if ok then
+        if job['consumer_name'] and job['consumer_name'] ~= '' then
+            redis.call('ZREM', 'consumer:' .. job['consumer_name'] .. ':jobs', ARGV[1])
+        end
+        if job['model'] and job['model'] ~= '' then
+            redis.call('ZREM', 'queue:' .. job['model'], ARGV[1])
+        end
     end
 end
 return redis.call('DEL', KEYS[1])
@@ -190,6 +198,29 @@ func (r *RedisClient) ListJobsByConsumer(ctx context.Context, consumer string, l
 		}
 		jobs = append(jobs, &job)
 	}
+
+	// Pipeline ZRANK for pending jobs to populate QueuePosition in one round-trip.
+	rankPipe := r.client.Pipeline()
+	rankCmds := make([]*redis.IntCmd, len(jobs))
+	for i, job := range jobs {
+		if job.Status == model.JobStatusPending {
+			rankCmds[i] = rankPipe.ZRank(ctx, queueKey(job.Model), job.ID)
+		}
+	}
+	if _, err := rankPipe.Exec(ctx); err != nil && err != redis.Nil {
+		slog.Warn("queue position pipeline failed", "consumer", consumer, "error", err)
+	} else {
+		for i, job := range jobs {
+			if rankCmds[i] == nil {
+				continue
+			}
+			if rank, err := rankCmds[i].Result(); err == nil {
+				pos := rank + 1
+				job.QueuePosition = &pos
+			}
+		}
+	}
+
 	return jobs, total, nil
 }
 
@@ -206,8 +237,24 @@ job['result_ref'] = ARGV[2]
 job['error']      = ARGV[3]
 job['updated_at'] = ARGV[4]
 redis.call('SET', KEYS[1], cjson.encode(job), 'EX', tonumber(ARGV[5]))
+if job['model'] and job['model'] ~= '' then
+    redis.call('ZREM', 'queue:' .. job['model'], string.sub(KEYS[1], 5))
+end
 return redis.status_reply('OK')
 `)
+
+// GetQueuePosition returns the 1-indexed position of a pending job in the model queue.
+// Returns (0, false, nil) when the job is no longer in the queue (already processing or done).
+func (r *RedisClient) GetQueuePosition(ctx context.Context, jobID, model string) (int64, bool, error) {
+	rank, err := r.client.ZRank(ctx, queueKey(model), jobID).Result()
+	if err == redis.Nil {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("getting queue position for job %q: %w", jobID, err)
+	}
+	return rank + 1, true, nil
+}
 
 // UpdateJobResult atomically updates a job's status, result reference, and error
 // message after the inference worker publishes its result event.
