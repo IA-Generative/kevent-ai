@@ -52,7 +52,7 @@ Gateway (:8080)
 | Parameter | Description | Default |
 |---|---|---|
 | `image.repository` | Gateway image | `ghcr.io/ia-generative/kevent-ai/gateway` |
-| `image.tag` | Image tag | `v0.5.2` |
+| `image.tag` | Image tag | `v0.9.0` |
 | `image.pullPolicy` | Pull policy | `IfNotPresent` |
 
 ### Config

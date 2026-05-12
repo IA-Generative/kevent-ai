@@ -42,10 +42,28 @@ rate_limits:
       period: 1m
 ```
 
+### Unlimited user types
+
+Set `rate: 0` to bypass Redis entirely for a specific user type. The `period` field is ignored when `rate` is `0`.
+
+```yaml
+rate_limits:
+  audio:
+    unlimited:
+      rate: 0        # no limit — Redis is never touched for this user type
+    sa:
+      rate: 100
+      period: 1m
+    "*":
+      rate: 10
+      period: 1m
+```
+
 ### Key concepts
 
 - **`service_type`** — matches `services[].type` (e.g. `audio`, `ocr`, `llm`); all models of the same type share the counter.
 - **`user_type`** — value from `server.user_type_header`; use `"*"` as a catch-all fallback.
+- **`rate: 0`** — sentinel for "no limit"; the request is always allowed without incrementing any counter.
 - **`period`** — accepts Go duration strings: `30s`, `1m`, `1h`, `24h`.
 - **Absent consumer** — requests without a consumer header bypass rate limiting entirely (typically internal traffic).
 - **Absent rate_limits entry** — no limit is applied for that `(service_type, user_type)` pair.

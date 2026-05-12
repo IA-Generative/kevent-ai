@@ -206,6 +206,8 @@ metrics:
 # Rate limiting par consumer, service type et user type (Redis fixed-window)
 rate_limits:
   audio:
+    unlimited:           # rate: 0 = aucune limite (Redis non consulté)
+      rate: 0
     sa:                  # header user_type_header = "sa"
       rate: 100
       period: 1m
@@ -440,7 +442,7 @@ helm upgrade --install kevent-gateway ./helm/gateway \
 ```yaml
 image:
   repository: ghcr.io/ia-generative/kevent-ai/gateway
-  tag: v0.4.11
+  tag: v0.9.0
 
 kafka:
   brokers: "default-kafka-bootstrap.infra-kafka.svc.cluster.local:9093"
@@ -644,9 +646,24 @@ curl -X POST http://localhost:8080/jobs/audio \
 }
 ```
 
+Exemple pour un job en attente :
+
+```json
+{
+  "job_id": "550e8400-e29b-41d4-a716-446655440000",
+  "service_type": "audio",
+  "model": "whisper-large-v3",
+  "status": "pending",
+  "queue_position": 3,
+  "created_at": "2026-03-05T10:00:00Z",
+  "updated_at": "2026-03-05T10:00:00Z"
+}
+```
+
 | Champ | Description |
 |---|---|
 | `status` | `pending` \| `processing` \| `completed` \| `failed` |
+| `queue_position` | Position 1-indexée dans la file d'attente du modèle (présent uniquement si `pending`) |
 | `result` | Payload JSON du résultat d'inférence (présent uniquement si `completed`) |
 | `error` | Message d'erreur (présent uniquement si `failed`) |
 
