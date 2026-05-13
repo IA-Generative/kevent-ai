@@ -218,6 +218,16 @@ func (h *SyncHandler) handleJSON(w http.ResponseWriter, r *http.Request) {
 	if h.llm != nil && def.IsLLM() {
 		if def.GuardrailsPII && h.piiChecker != nil {
 			if violations := h.piiChecker.Check(raw); len(violations) > 0 {
+				consumer := ""
+				if h.consumerHeader != "" {
+					consumer = r.Header.Get(h.consumerHeader)
+				}
+				slog.WarnContext(r.Context(), "llm request blocked: PII detected",
+					"service_type", def.Type,
+					"model", def.Model,
+					"consumer", consumer,
+					"violations", violations,
+				)
 				writeError(w, http.StatusBadRequest, "PII detected: "+strings.Join(violations, ", "))
 				return
 			}
