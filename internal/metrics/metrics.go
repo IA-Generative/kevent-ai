@@ -154,4 +154,11 @@ var (
 		Name: "kevent_llm_consumer_tokens_top",
 		Help: "Token usage for top consumers (refreshed from Redis sorted set).",
 	}, []string{"consumer", "user_type", "type"})
+
+	// GuardrailsPiiBlockedTotal counts requests rejected by the PII guardrail,
+	// before they reach the LLM backend.
+	GuardrailsPiiBlockedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "kevent_guardrails_pii_blocked_total",
+		Help: "Total requests blocked by the PII guardrail.",
+	}, []string{"service_type", "model"})
 )
