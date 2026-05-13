@@ -67,7 +67,11 @@ func (a *multipartAdapter) Call(ctx context.Context, input CallInput) ([]byte, e
 		pw.CloseWithError(err)
 	}()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, pr)
+	// Detach from the Knative request context: Knative cancels ctx when its
+	// timeoutSeconds fires, which would abort the inference call even when the
+	// relay's own configured timeout has not yet elapsed. Using WithoutCancel
+	// ensures that only http.Client.Timeout governs the inference deadline.
+	req, err := http.NewRequestWithContext(context.WithoutCancel(ctx), http.MethodPost, url, pr)
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
