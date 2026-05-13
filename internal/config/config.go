@@ -202,7 +202,16 @@ type ServiceConfig struct {
 	// backends return a network error or a 5xx response. 0 = no retry (default).
 	// Only applies to the sync-direct proxy path (not Kafka-based flows).
 	// A 500ms exponential backoff is applied between each cycle.
-	Retries int `yaml:"retries"`
+	Retries    int              `yaml:"retries"`
+	Guardrails GuardrailsConfig `yaml:"guardrails"`
+}
+
+// GuardrailsConfig controls PII detection for a service's LLM requests.
+type GuardrailsConfig struct {
+	// PII enables scanning of message content for personally identifiable
+	// information (email, French phone numbers, IBAN, credit cards, SIREN/SIRET).
+	// Requests with detected PII are rejected with HTTP 400.
+	PII bool `yaml:"pii"`
 }
 
 // Load reads and validates the YAML config file at path.
