@@ -121,14 +121,17 @@ func (h *JobHandler) Submit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.rateLimiter != nil {
-		allowed, retryAfter, err := h.rateLimiter.Check(r.Context(), r, serviceType)
+		rl, err := h.rateLimiter.Check(r.Context(), r, serviceType)
 		if err != nil {
 			slog.ErrorContext(r.Context(), "rate limit check failed", "error", err)
 			// fail open — don't block requests on rate limiter errors
-		} else if !allowed {
-			w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter.Seconds())))
-			writeError(w, http.StatusTooManyRequests, "rate limit exceeded")
-			return
+		} else {
+			setRateLimitHeaders(w, rl)
+			if !rl.Allowed {
+				w.Header().Set("Retry-After", strconv.Itoa(int(rl.ResetAfter.Seconds())))
+				writeError(w, http.StatusTooManyRequests, "rate limit exceeded")
+				return
+			}
 		}
 	}
 
@@ -445,4 +448,15 @@ func writeError(w http.ResponseWriter, code int, msg string) {
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
 	_ = enc.Encode(map[string]string{"error": msg})
+}
+
+// setRateLimitHeaders adds X-RateLimit-* headers to the response.
+// When Limit is 0 (unlimited plan) no headers are set.
+func setRateLimitHeaders(w http.ResponseWriter, r ratelimit.CheckResult) {
+	if r.Limit <= 0 {
+		return
+	}
+	w.Header().Set("X-RateLimit-Limit", strconv.Itoa(r.Limit))
+	w.Header().Set("X-RateLimit-Remaining", strconv.Itoa(r.Remaining))
+	w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(r.ResetAfter).Unix(), 10))
 }

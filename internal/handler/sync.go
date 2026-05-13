@@ -142,13 +142,16 @@ func (h *SyncHandler) handleMultipart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.rateLimiter != nil {
-		allowed, retryAfter, err := h.rateLimiter.Check(r.Context(), r, def.Type)
+		rl, err := h.rateLimiter.Check(r.Context(), r, def.Type)
 		if err != nil {
 			slog.ErrorContext(r.Context(), "rate limit check failed", "error", err)
-		} else if !allowed {
-			w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter.Seconds())))
-			writeError(w, http.StatusTooManyRequests, "rate limit exceeded")
-			return
+		} else {
+			setRateLimitHeaders(w, rl)
+			if !rl.Allowed {
+				w.Header().Set("Retry-After", strconv.Itoa(int(rl.ResetAfter.Seconds())))
+				writeError(w, http.StatusTooManyRequests, "rate limit exceeded")
+				return
+			}
 		}
 	}
 
@@ -195,13 +198,16 @@ func (h *SyncHandler) handleJSON(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.rateLimiter != nil {
-		allowed, retryAfter, err := h.rateLimiter.Check(r.Context(), r, def.Type)
+		rl, err := h.rateLimiter.Check(r.Context(), r, def.Type)
 		if err != nil {
 			slog.ErrorContext(r.Context(), "rate limit check failed", "error", err)
-		} else if !allowed {
-			w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter.Seconds())))
-			writeError(w, http.StatusTooManyRequests, "rate limit exceeded")
-			return
+		} else {
+			setRateLimitHeaders(w, rl)
+			if !rl.Allowed {
+				w.Header().Set("Retry-After", strconv.Itoa(int(rl.ResetAfter.Seconds())))
+				writeError(w, http.StatusTooManyRequests, "rate limit exceeded")
+				return
+			}
 		}
 	}
 
