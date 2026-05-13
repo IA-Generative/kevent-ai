@@ -228,6 +228,7 @@ func (h *SyncHandler) handleJSON(w http.ResponseWriter, r *http.Request) {
 					"consumer", consumer,
 					"violations", violations,
 				)
+				metrics.GuardrailsPiiBlockedTotal.WithLabelValues(def.Type, def.Model).Inc()
 				writeError(w, http.StatusBadRequest, "PII detected: "+strings.Join(violations, ", "))
 				return
 			}
