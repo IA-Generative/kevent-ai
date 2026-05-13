@@ -8,6 +8,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -22,6 +23,7 @@ import (
 	"kevent/gateway/internal/llmproxy/provider"
 	"kevent/gateway/internal/metrics"
 	"kevent/gateway/internal/model"
+	"kevent/gateway/internal/ratelimit"
 	"kevent/gateway/internal/service"
 	"kevent/gateway/internal/storage"
 )
@@ -90,6 +92,16 @@ func (m *mockProducer) PublishInputEvent(_ context.Context, _ string, _ *model.I
 		}
 	}
 	return m.publishErr
+}
+
+// mockRateLimiter is a configurable Checker stub for testing.
+type mockRateLimiter struct {
+	result ratelimit.CheckResult
+	err    error
+}
+
+func (m *mockRateLimiter) Check(_ context.Context, _ *http.Request, _ string) (ratelimit.CheckResult, error) {
+	return m.result, m.err
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -751,7 +763,7 @@ func TestSyncHandler_Retry_NoRetryOn4xx(t *testing.T) {
 
 // buildLLMHandler returns a minimal llmproxy.Handler wired to the given backend URL.
 func buildLLMHandler(backendURL string) *llmproxy.Handler {
-	return llmproxy.New(cache.NewNoop(), provider.NewRegistry(), &http.Client{Timeout: 5 * time.Second}, "", metrics.NoopTracker{})
+	return llmproxy.New(cache.NewNoop(), provider.NewRegistry(), &http.Client{Timeout: 5 * time.Second}, "", metrics.NoopTracker{}, llmproxy.AuditConfig{})
 }
 
 // buildLLMRegistry returns a registry with a single openai LLM service,
@@ -889,5 +901,141 @@ func TestSyncHandler_Guardrails_ConsumerHeader_LoggedOnBlock(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+// ── X-RateLimit header tests ──────────────────────────────────────────────────
+
+// TestSyncHandler_RateLimitHeaders_SetOnAllowedRequest verifies that
+// X-RateLimit-{Limit,Remaining,Reset} headers are present on allowed requests.
+func TestSyncHandler_RateLimitHeaders_SetOnAllowedRequest(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"choices":[],"usage":{}}`)
+	}))
+	defer upstream.Close()
+
+	cfgs := []config.ServiceConfig{{
+		Type:  "transcription",
+		Model: "whisper-large-v3",
+		Operations: map[string][]string{
+			"transcription": {"/v1/audio/transcriptions"},
+		},
+		InferenceURL: upstream.URL,
+	}}
+	reg := service.NewRegistry(cfgs)
+
+	rl := &mockRateLimiter{result: ratelimit.CheckResult{
+		Allowed:    true,
+		Limit:      10,
+		Remaining:  9,
+		ResetAfter: 30 * time.Second,
+	}}
+	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", rl, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions",
+		strings.NewReader(`{"model":"whisper-large-v3"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	for _, hdr := range []string{"X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"} {
+		if w.Header().Get(hdr) == "" {
+			t.Errorf("expected header %q to be set, but it was empty", hdr)
+		}
+	}
+	if got := w.Header().Get("X-RateLimit-Limit"); got != "10" {
+		t.Errorf("X-RateLimit-Limit: expected '10', got %q", got)
+	}
+	if got := w.Header().Get("X-RateLimit-Remaining"); got != "9" {
+		t.Errorf("X-RateLimit-Remaining: expected '9', got %q", got)
+	}
+	// Reset must be a unix timestamp in the future.
+	resetStr := w.Header().Get("X-RateLimit-Reset")
+	resetTs, err := strconv.ParseInt(resetStr, 10, 64)
+	if err != nil {
+		t.Fatalf("X-RateLimit-Reset %q is not a valid int64: %v", resetStr, err)
+	}
+	if resetTs <= time.Now().Unix() {
+		t.Errorf("X-RateLimit-Reset %d should be in the future", resetTs)
+	}
+}
+
+// TestSyncHandler_RateLimitHeaders_SetOnRejectedRequest verifies that
+// all three X-RateLimit-* headers plus Retry-After are set on 429 responses.
+func TestSyncHandler_RateLimitHeaders_SetOnRejectedRequest(t *testing.T) {
+	cfgs := []config.ServiceConfig{{
+		Type:  "transcription",
+		Model: "whisper-large-v3",
+		Operations: map[string][]string{
+			"transcription": {"/v1/audio/transcriptions"},
+		},
+		InferenceURL: "http://should-not-be-called.example.com",
+	}}
+	reg := service.NewRegistry(cfgs)
+
+	rl := &mockRateLimiter{result: ratelimit.CheckResult{
+		Allowed:    false,
+		Limit:      5,
+		Remaining:  0,
+		ResetAfter: 45 * time.Second,
+	}}
+	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", rl, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions",
+		strings.NewReader(`{"model":"whisper-large-v3"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusTooManyRequests {
+		t.Errorf("expected 429, got %d", w.Code)
+	}
+	for _, hdr := range []string{"X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset", "Retry-After"} {
+		if w.Header().Get(hdr) == "" {
+			t.Errorf("expected header %q to be set on 429, but it was empty", hdr)
+		}
+	}
+	if got := w.Header().Get("X-RateLimit-Limit"); got != "5" {
+		t.Errorf("X-RateLimit-Limit: expected '5', got %q", got)
+	}
+	if got := w.Header().Get("X-RateLimit-Remaining"); got != "0" {
+		t.Errorf("X-RateLimit-Remaining: expected '0', got %q", got)
+	}
+}
+
+// TestSyncHandler_RateLimitHeaders_AbsentWhenNoLimiter verifies that no
+// X-RateLimit-* headers are set when the rate limiter is not configured.
+func TestSyncHandler_RateLimitHeaders_AbsentWhenNoLimiter(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"choices":[],"usage":{}}`)
+	}))
+	defer upstream.Close()
+
+	cfgs := []config.ServiceConfig{{
+		Type:  "transcription",
+		Model: "whisper-large-v3",
+		Operations: map[string][]string{
+			"transcription": {"/v1/audio/transcriptions"},
+		},
+		InferenceURL: upstream.URL,
+	}}
+	reg := service.NewRegistry(cfgs)
+
+	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, nil) // nil limiter
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions",
+		strings.NewReader(`{"model":"whisper-large-v3"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	for _, hdr := range []string{"X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"} {
+		if v := w.Header().Get(hdr); v != "" {
+			t.Errorf("expected header %q to be absent without limiter, got %q", hdr, v)
+		}
 	}
 }
