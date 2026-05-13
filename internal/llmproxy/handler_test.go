@@ -683,3 +683,66 @@ func TestServeJSON_ConsumerMetrics_SkippedWhenNoConsumer(t *testing.T) {
 		t.Errorf("expected no tracker calls for empty consumer, got %d", len(tracker.calls))
 	}
 }
+
+// TestAuditLog_Streaming_LogsStreamTrue verifies that the streaming path emits
+// an audit log record with stream=true when audit is enabled.
+func TestAuditLog_Streaming_LogsStreamTrue(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "data: {\"choices\":[]}\n\ndata: [DONE]\n\n")
+	}))
+	defer backend.Close()
+
+	cap := &capturingHandler{}
+	old := slog.Default()
+	slog.SetDefault(slog.New(cap))
+	defer slog.SetDefault(old)
+
+	streamBody := `{"model":"my-alias","messages":[{"role":"user","content":"Hello"}],"stream":true}`
+
+	reg := provider.NewRegistry()
+	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second}, "", &noopTracker{}, AuditConfig{Enabled: true})
+	def := llmDef("passthrough", "", 0)
+	setBackend(def, backend.URL)
+	doServeJSON(h, def, streamBody)
+
+	if v, ok := cap.attr("stream"); !ok {
+		t.Error("audit log missing 'stream' field on streaming request")
+	} else if !v.Bool() {
+		t.Errorf("expected stream=true for streaming request, got %v", v)
+	}
+	if _, ok := cap.attr("service_type"); !ok {
+		t.Error("audit log missing 'service_type' field on streaming request")
+	}
+}
+
+// TestAuditLog_Enabled_BackendError_StillLogged verifies that an audit record is
+// emitted even when the backend returns a non-2xx status code.
+func TestAuditLog_Enabled_BackendError_StillLogged(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(w, `{"error":"oops"}`)
+	}))
+	defer backend.Close()
+
+	cap := &capturingHandler{}
+	old := slog.Default()
+	slog.SetDefault(slog.New(cap))
+	defer slog.SetDefault(old)
+
+	reg := provider.NewRegistry()
+	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second}, "", &noopTracker{}, AuditConfig{Enabled: true})
+	def := llmDef("passthrough", "", 0)
+	setBackend(def, backend.URL)
+	doServeJSON(h, def, chatBody)
+
+	v, ok := cap.attr("status")
+	if !ok {
+		t.Fatal("audit log missing 'status' field on backend error")
+	}
+	if v.Int64() != 500 {
+		t.Errorf("expected status=500 in audit log, got %d", v.Int64())
+	}
+}
