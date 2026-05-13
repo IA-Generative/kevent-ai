@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"kevent/gateway/internal/guardrails"
 	"kevent/gateway/internal/llmproxy"
 	"kevent/gateway/internal/metrics"
 	"kevent/gateway/internal/model"
@@ -70,6 +71,7 @@ type SyncHandler struct {
 	consumerHeader string            // HTTP header identifying the API consumer (e.g. "X-Consumer-Username")
 	rateLimiter    ratelimit.Checker // nil = no rate limiting
 	llm            *llmproxy.Handler // nil when no LLM services are configured
+	piiChecker     *guardrails.Checker // nil = PII scanning disabled globally
 	retryBackoff   time.Duration     // initial backoff between retry cycles; default 500ms
 }
 
@@ -90,6 +92,7 @@ func NewSyncHandler(
 		consumerHeader: consumerHeader,
 		rateLimiter:    rateLimiter,
 		llm:            llm,
+		piiChecker:     guardrails.New(),
 		// Generous timeout for direct-proxy path; Knative timeoutSeconds is the
 		// real ceiling for the sync-over-Kafka path (controlled by context).
 		httpClient:   &http.Client{Timeout: 15 * time.Minute},
@@ -207,6 +210,12 @@ func (h *SyncHandler) handleJSON(w http.ResponseWriter, r *http.Request) {
 
 	// JSON requests: route through LLM proxy if configured, else direct proxy.
 	if h.llm != nil && def.IsLLM() {
+		if def.GuardrailsPII && h.piiChecker != nil {
+			if violations := h.piiChecker.Check(raw); len(violations) > 0 {
+				writeError(w, http.StatusBadRequest, "PII detected: "+strings.Join(violations, ", "))
+				return
+			}
+		}
 		start := time.Now()
 		consumer := ""
 		if h.consumerHeader != "" {
