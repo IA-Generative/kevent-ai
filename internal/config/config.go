@@ -116,10 +116,11 @@ type S3Config struct {
 }
 
 type RedisConfig struct {
-	Addr     string `yaml:"addr"`
-	Password string `yaml:"password"`
-	DB       int    `yaml:"db"`
-	JobTTLH  int    `yaml:"job_ttl_hours"`
+	Addr           string `yaml:"addr"`
+	Password       string `yaml:"password"`
+	DB             int    `yaml:"db"`
+	JobTTLH        int    `yaml:"job_ttl_hours"`
+	PendingMaxAgeH int    `yaml:"pending_max_age_hours"` // 0 = GC disabled
 }
 
 // BackendConfig describes one backend in a multi-backend list.
@@ -269,6 +270,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Redis.JobTTLH == 0 {
 		c.Redis.JobTTLH = 72
+	}
+	if c.Redis.PendingMaxAgeH == 0 {
+		c.Redis.PendingMaxAgeH = 2
 	}
 	for i := range c.Services {
 		if c.Services[i].MaxFileSizeMB == 0 {
