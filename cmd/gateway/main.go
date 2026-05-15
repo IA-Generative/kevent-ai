@@ -92,7 +92,9 @@ func buildRouter(
 	r.Get("/jobs", jobHandler.ListJobs)
 	r.Post("/jobs/{service_type}", jobHandler.Submit)
 	r.Get("/jobs/{service_type}/{id}", jobHandler.GetStatus)
+	r.Delete("/jobs/{service_type}/{id}", jobHandler.Cancel)
 	r.Post("/-/reload", handler.NewReloadHandler(reloadFn))
+	r.Post("/-/jobs/purge", jobHandler.AdminPurge)
 
 	if reg.HasSyncServices() {
 		syncHandler := handler.NewSyncHandler(reg, s3Client, redisClient, producer, cfg.Server.ConsumerHeader, rl, llmHandler)
@@ -228,6 +230,29 @@ func main() {
 
 	if consumerManager != nil {
 		consumerManager.Start(ctx, initialRegistry)
+	}
+
+	// ── Stale-job garbage collector ───────────────────────────────────────────
+	if cfg.Redis.PendingMaxAgeH > 0 {
+		maxAge := time.Duration(cfg.Redis.PendingMaxAgeH) * time.Hour
+		go func() {
+			ticker := time.NewTicker(15 * time.Minute)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					n, err := redisClient.SweepStalePendingJobs(ctx, maxAge)
+					if err != nil {
+						slog.Error("stale-job GC failed", "error", err)
+					} else if n > 0 {
+						slog.Info("stale-job GC swept jobs", "count", n, "max_age", maxAge)
+					}
+				}
+			}
+		}()
+		slog.Info("stale-job GC enabled", "max_age_hours", cfg.Redis.PendingMaxAgeH)
 	}
 
 	// ── HTTP server ───────────────────────────────────────────────────────────

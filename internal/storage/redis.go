@@ -278,6 +278,98 @@ func (r *RedisClient) UpdateJobResult(ctx context.Context, jobID string, status 
 	return nil
 }
 
+// SweepStalePendingJobs scans all queue sorted sets and marks pending jobs older
+// than maxAge as failed with error "stale: pending too long". Returns the number
+// of jobs swept. Called by the background GC goroutine.
+func (r *RedisClient) SweepStalePendingJobs(ctx context.Context, maxAge time.Duration) (int, error) {
+	cutoff := fmt.Sprintf("%d", time.Now().Add(-maxAge).Unix())
+
+	var queueKeys []string
+	iter := r.client.Scan(ctx, 0, "queue:*", 0).Iterator()
+	for iter.Next(ctx) {
+		queueKeys = append(queueKeys, iter.Val())
+	}
+	if err := iter.Err(); err != nil {
+		return 0, fmt.Errorf("scanning queue keys: %w", err)
+	}
+
+	count := 0
+	for _, key := range queueKeys {
+		ids, err := r.client.ZRangeByScore(ctx, key, &redis.ZRangeBy{
+			Min: "0",
+			Max: cutoff,
+		}).Result()
+		if err != nil {
+			slog.Warn("failed to query stale jobs", "queue", key, "error", err)
+			continue
+		}
+		for _, id := range ids {
+			if err := r.UpdateJobResult(ctx, id, model.JobStatusFailed, "", "stale: pending too long"); err != nil {
+				slog.Warn("failed to mark job stale", "job_id", id, "error", err)
+				continue
+			}
+			count++
+			slog.Info("marked job stale", "job_id", id)
+		}
+	}
+	return count, nil
+}
+
+// ListStalePendingJobs returns all pending jobs older than olderThan.
+// Used by the admin purge endpoint to retrieve jobs before deletion.
+func (r *RedisClient) ListStalePendingJobs(ctx context.Context, olderThan time.Duration) ([]*model.Job, error) {
+	cutoff := fmt.Sprintf("%d", time.Now().Add(-olderThan).Unix())
+
+	var queueKeys []string
+	iter := r.client.Scan(ctx, 0, "queue:*", 0).Iterator()
+	for iter.Next(ctx) {
+		queueKeys = append(queueKeys, iter.Val())
+	}
+	if err := iter.Err(); err != nil {
+		return nil, fmt.Errorf("scanning queue keys: %w", err)
+	}
+
+	var allIDs []string
+	for _, key := range queueKeys {
+		ids, err := r.client.ZRangeByScore(ctx, key, &redis.ZRangeBy{
+			Min: "0",
+			Max: cutoff,
+		}).Result()
+		if err != nil {
+			slog.Warn("failed to query stale jobs for purge", "queue", key, "error", err)
+			continue
+		}
+		allIDs = append(allIDs, ids...)
+	}
+
+	if len(allIDs) == 0 {
+		return nil, nil
+	}
+
+	keys := make([]string, len(allIDs))
+	for i, id := range allIDs {
+		keys[i] = jobKey(id)
+	}
+	vals, err := r.client.MGet(ctx, keys...).Result()
+	if err != nil {
+		return nil, fmt.Errorf("fetching stale jobs: %w", err)
+	}
+
+	jobs := make([]*model.Job, 0, len(vals))
+	for i, v := range vals {
+		if v == nil {
+			continue
+		}
+		var job model.Job
+		if err := json.Unmarshal([]byte(v.(string)), &job); err != nil {
+			slog.Warn("skipping malformed job record during purge scan", "id", allIDs[i], "error", err)
+			continue
+		}
+		jobs = append(jobs, &job)
+	}
+	return jobs, nil
+}
+
 // JobDoneSubscription is the interface returned by SubscribeJobDone.
 // Callers block on Wait until the job completes, then call Close.
 type JobDoneSubscription interface {

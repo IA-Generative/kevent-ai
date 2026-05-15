@@ -27,6 +27,7 @@ type asyncJobStore interface {
 	UpdateJobResult(ctx context.Context, jobID string, status model.JobStatus, resultRef, errMsg string) error
 	ListJobsByConsumer(ctx context.Context, consumer string, limit, offset int64) ([]*model.Job, int64, error)
 	GetQueuePosition(ctx context.Context, jobID, model string) (int64, bool, error)
+	ListStalePendingJobs(ctx context.Context, olderThan time.Duration) ([]*model.Job, error)
 }
 
 // reservedJobFields are multipart form fields consumed by the gateway
@@ -439,6 +440,114 @@ func (h *JobHandler) ListJobs(w http.ResponseWriter, r *http.Request) {
 		Limit:    limit,
 		Offset:   offset,
 		Jobs:     summaries,
+	})
+}
+
+// Cancel handles DELETE /jobs/{service_type}/{id}.
+// Deletes a pending or processing job and its S3 input file.
+// Applies the same consumer ownership check as GetStatus.
+// Returns 409 for terminal-state jobs (completed/failed).
+func (h *JobHandler) Cancel(w http.ResponseWriter, r *http.Request) {
+	serviceType := chi.URLParam(r, "service_type")
+	id := chi.URLParam(r, "id")
+
+	job, err := h.redis.GetJob(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("job %q not found", id))
+		return
+	}
+
+	if job.ServiceType != serviceType {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("job %q not found", id))
+		return
+	}
+
+	if h.consumerHeader != "" {
+		if requester := r.Header.Get(h.consumerHeader); requester != "" {
+			if job.ConsumerName != requester {
+				writeError(w, http.StatusNotFound, fmt.Sprintf("job %q not found", id))
+				return
+			}
+		}
+	}
+
+	if job.Status == model.JobStatusCompleted || job.Status == model.JobStatusFailed {
+		writeError(w, http.StatusConflict, fmt.Sprintf("job %q is already in terminal state %q", id, job.Status))
+		return
+	}
+
+	if err := h.redis.DeleteJob(r.Context(), id); err != nil {
+		slog.ErrorContext(r.Context(), "cancel: delete job failed", "job_id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to cancel job")
+		return
+	}
+
+	go func(inputRef, jobID string) {
+		if inputRef == "" {
+			return
+		}
+		if err := h.store.DeleteObject(context.Background(), inputRef); err != nil {
+			slog.Error("cancel: failed to delete input file", "job_id", jobID, "input_ref", inputRef, "error", err)
+		}
+	}(job.InputRef, id)
+
+	slog.InfoContext(r.Context(), "job cancelled", "job_id", id, "service_type", serviceType, "prior_status", job.Status)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// AdminPurge handles POST /-/jobs/purge.
+// Deletes stale pending jobs older than `older_than` (e.g. "2h", "30m").
+// Restricted to the /-/ admin namespace; caller is responsible for upstream auth.
+//
+// Query params:
+//
+//	older_than (required) – duration string, e.g. "2h", "30m"
+func (h *JobHandler) AdminPurge(w http.ResponseWriter, r *http.Request) {
+	rawDur := r.URL.Query().Get("older_than")
+	if rawDur == "" {
+		writeError(w, http.StatusBadRequest, "query param 'older_than' is required (e.g. '2h')")
+		return
+	}
+	olderThan, err := time.ParseDuration(rawDur)
+	if err != nil || olderThan <= 0 {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid 'older_than' value %q: use a positive Go duration (e.g. '2h', '30m')", rawDur))
+		return
+	}
+
+	jobs, err := h.redis.ListStalePendingJobs(r.Context(), olderThan)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "admin purge: list stale jobs failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to list stale jobs")
+		return
+	}
+
+	purged := 0
+	for _, job := range jobs {
+		if err := h.redis.DeleteJob(r.Context(), job.ID); err != nil {
+			slog.WarnContext(r.Context(), "admin purge: delete job failed", "job_id", job.ID, "error", err)
+			continue
+		}
+		purged++
+		if job.InputRef != "" {
+			inputRef := job.InputRef
+			jobID := job.ID
+			go func() {
+				if err := h.store.DeleteObject(context.Background(), inputRef); err != nil {
+					slog.Error("admin purge: failed to delete input file", "job_id", jobID, "input_ref", inputRef, "error", err)
+				}
+			}()
+		}
+	}
+
+	slog.InfoContext(r.Context(), "admin purge completed", "older_than", rawDur, "found", len(jobs), "purged", purged)
+
+	w.Header().Set("Content-Type", "application/json")
+	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(map[string]any{
+		"older_than": rawDur,
+		"found":      len(jobs),
+		"purged":     purged,
 	})
 }
 

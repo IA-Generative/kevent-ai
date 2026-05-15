@@ -72,6 +72,9 @@ func (m *mockAsyncStore) ListJobsByConsumer(_ context.Context, _ string, _, _ in
 func (m *mockAsyncStore) GetQueuePosition(_ context.Context, _, _ string) (int64, bool, error) {
 	return m.queuePos, m.queuePosFound, nil
 }
+func (m *mockAsyncStore) ListStalePendingJobs(_ context.Context, _ time.Duration) ([]*model.Job, error) {
+	return nil, nil
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
