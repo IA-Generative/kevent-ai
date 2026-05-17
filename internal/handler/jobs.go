@@ -497,6 +497,8 @@ func (h *JobHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+const defaultPurgeLimit = 500
+
 // AdminPurge handles POST /-/jobs/purge.
 // Deletes stale pending jobs older than `older_than` (e.g. "2h", "30m").
 // Restricted to the /-/ admin namespace; caller is responsible for upstream auth.
@@ -504,6 +506,9 @@ func (h *JobHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 // Query params:
 //
 //	older_than (required) – duration string, e.g. "2h", "30m"
+//	limit      (optional) – max jobs to delete per call (default 500); use to
+//	           avoid hammering Redis/S3 on queues with many stale entries.
+//	           Call repeatedly until truncated=false to drain fully.
 func (h *JobHandler) AdminPurge(w http.ResponseWriter, r *http.Request) {
 	rawDur := r.URL.Query().Get("older_than")
 	if rawDur == "" {
@@ -516,11 +521,26 @@ func (h *JobHandler) AdminPurge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	limit := defaultPurgeLimit
+	if rawLimit := r.URL.Query().Get("limit"); rawLimit != "" {
+		if n, err := strconv.Atoi(rawLimit); err != nil || n <= 0 {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid 'limit' value %q: must be a positive integer", rawLimit))
+			return
+		} else {
+			limit = n
+		}
+	}
+
 	jobs, err := h.redis.ListStalePendingJobs(r.Context(), olderThan)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "admin purge: list stale jobs failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to list stale jobs")
 		return
+	}
+
+	truncated := len(jobs) > limit
+	if truncated {
+		jobs = jobs[:limit]
 	}
 
 	purged := 0
@@ -541,7 +561,7 @@ func (h *JobHandler) AdminPurge(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	slog.InfoContext(r.Context(), "admin purge completed", "older_than", rawDur, "found", len(jobs), "purged", purged)
+	slog.InfoContext(r.Context(), "admin purge completed", "older_than", rawDur, "found", len(jobs), "purged", purged, "truncated", truncated)
 
 	w.Header().Set("Content-Type", "application/json")
 	enc := json.NewEncoder(w)
@@ -550,6 +570,7 @@ func (h *JobHandler) AdminPurge(w http.ResponseWriter, r *http.Request) {
 		"older_than": rawDur,
 		"found":      len(jobs),
 		"purged":     purged,
+		"truncated":  truncated,
 	})
 }
 
