@@ -54,6 +54,9 @@ redis:
   job_ttl_hours: 72  # keep job records for 3 days
   # pending_max_age_hours: mark pending jobs as failed (reason: stale) after N hours with no relay pickup.
   # Set to 0 to disable the garbage collector. Default: 2h.
+  # ⚠ Must be set LOWER than your S3 staging input TTL: the GC marks jobs failed
+  # and deletes their input files before S3 purges them. If the GC runs after S3
+  # purges the input, the relay will pick up the job and fail with "input file not found".
   pending_max_age_hours: ${PENDING_MAX_AGE_HOURS:-2}
 
 # ─────────────────────────────────────────────────────────────────────────────

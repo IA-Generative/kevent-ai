@@ -312,7 +312,7 @@ func purgeJobsPathItem() map[string]any {
 			"tags":        []string{"Jobs"},
 			"summary":     "Admin: purge stale pending jobs",
 			"operationId": "purgeJobs",
-			"description": "Deletes all pending jobs older than `older_than`. Also cleans up their S3 input files. Restricted to the `/-/` admin namespace — protect with upstream auth.\n\n**Example:** `POST /-/jobs/purge?older_than=2h`",
+			"description": "Deletes pending jobs older than `older_than`. Also cleans up their S3 input files. Restricted to the `/-/` admin namespace — protect with upstream auth.\n\nIf `truncated=true` in the response, there are more matching jobs — call again until `truncated=false` to fully drain the queue.\n\n**Example:** `POST /-/jobs/purge?older_than=2h&limit=200`",
 			"parameters": []any{
 				map[string]any{
 					"name":        "older_than",
@@ -320,6 +320,13 @@ func purgeJobsPathItem() map[string]any {
 					"required":    true,
 					"description": "Minimum age of jobs to purge, as a Go duration string (e.g. `2h`, `30m`)",
 					"schema":      map[string]any{"type": "string", "example": "2h"},
+				},
+				map[string]any{
+					"name":        "limit",
+					"in":          "query",
+					"required":    false,
+					"description": "Maximum number of jobs to delete per call (default 500). Call repeatedly until `truncated=false` to fully drain.",
+					"schema":      map[string]any{"type": "integer", "default": 500, "minimum": 1},
 				},
 			},
 			"responses": map[string]any{
@@ -331,8 +338,9 @@ func purgeJobsPathItem() map[string]any {
 								"type": "object",
 								"properties": map[string]any{
 									"older_than": map[string]any{"type": "string", "example": "2h"},
-									"found":      map[string]any{"type": "integer", "description": "Jobs matching the filter"},
+									"found":      map[string]any{"type": "integer", "description": "Jobs matched (capped at limit)"},
 									"purged":     map[string]any{"type": "integer", "description": "Jobs successfully deleted"},
+									"truncated":  map[string]any{"type": "boolean", "description": "True when more matching jobs exist beyond the limit"},
 								},
 							},
 						},
