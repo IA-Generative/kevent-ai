@@ -243,11 +243,23 @@ func main() {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
-					n, err := redisClient.SweepStalePendingJobs(ctx, maxAge)
+					swept, err := redisClient.SweepStalePendingJobs(ctx, maxAge)
 					if err != nil {
 						slog.Error("stale-job GC failed", "error", err)
-					} else if n > 0 {
-						slog.Info("stale-job GC swept jobs", "count", n, "max_age", maxAge)
+					} else if len(swept) > 0 {
+						slog.Info("stale-job GC swept jobs", "count", len(swept), "max_age", maxAge)
+						for _, job := range swept {
+							if job.InputRef == "" {
+								continue
+							}
+							inputRef := job.InputRef
+							jobID := job.ID
+							go func() {
+								if err := s3Client.DeleteObject(context.Background(), inputRef); err != nil {
+									slog.Error("stale-job GC: failed to delete S3 input", "job_id", jobID, "input_ref", inputRef, "error", err)
+								}
+							}()
+						}
 					}
 				}
 			}
