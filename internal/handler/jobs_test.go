@@ -43,15 +43,18 @@ func (m *mockJobS3) DeleteObject(_ context.Context, key string) error {
 }
 
 type mockAsyncStore struct {
-	saveErr       error
-	saved         bool
-	updateCalled  bool
-	job           *model.Job   // returned by GetJob
-	getJobErr     error
-	jobs          []*model.Job // returned by ListJobsByConsumer
-	jobsTotal     int64
-	queuePos      int64
-	queuePosFound bool
+	saveErr         error
+	saved           bool
+	updateCalled    bool
+	deleteJobCalled bool
+	job             *model.Job   // returned by GetJob
+	getJobErr       error
+	jobs            []*model.Job // returned by ListJobsByConsumer
+	jobsTotal       int64
+	queuePos        int64
+	queuePosFound   bool
+	staleJobs       []*model.Job // returned by ListStalePendingJobs
+	staleJobsErr    error
 }
 
 func (m *mockAsyncStore) SaveJob(_ context.Context, _ *model.Job) error {
@@ -61,7 +64,10 @@ func (m *mockAsyncStore) SaveJob(_ context.Context, _ *model.Job) error {
 func (m *mockAsyncStore) GetJob(_ context.Context, _ string) (*model.Job, error) {
 	return m.job, m.getJobErr
 }
-func (m *mockAsyncStore) DeleteJob(_ context.Context, _ string) error { return nil }
+func (m *mockAsyncStore) DeleteJob(_ context.Context, _ string) error {
+	m.deleteJobCalled = true
+	return nil
+}
 func (m *mockAsyncStore) UpdateJobResult(_ context.Context, _ string, _ model.JobStatus, _, _ string) error {
 	m.updateCalled = true
 	return nil
@@ -73,7 +79,7 @@ func (m *mockAsyncStore) GetQueuePosition(_ context.Context, _, _ string) (int64
 	return m.queuePos, m.queuePosFound, nil
 }
 func (m *mockAsyncStore) ListStalePendingJobs(_ context.Context, _ time.Duration) ([]*model.Job, error) {
-	return nil, nil
+	return m.staleJobs, m.staleJobsErr
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -485,6 +491,277 @@ func TestListJobs_MissingConsumerHeader(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+// ── Cancel tests ──────────────────────────────────────────────────────────────
+
+// cancelReq builds a DELETE /jobs/{serviceType}/{id} request with chi route context.
+func cancelReq(t *testing.T, serviceType, id string) *http.Request {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodDelete, "/jobs/"+serviceType+"/"+id, nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("service_type", serviceType)
+	rctx.URLParams.Add("id", id)
+	return req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+}
+
+// TestCancel_Pending_Success verifies that cancelling a pending job returns 204,
+// deletes the job from Redis, and asynchronously removes the S3 input file.
+func TestCancel_Pending_Success(t *testing.T) {
+	s3 := &mockJobS3{}
+	store := &mockAsyncStore{
+		job: &model.Job{
+			ID:          "job-1",
+			ServiceType: "transcription",
+			Model:       "faster-whisper",
+			Status:      model.JobStatusPending,
+			InputRef:    "inputs/job-1.wav",
+		},
+	}
+
+	w := httptest.NewRecorder()
+	newAsyncHandler(singleOpRegistry(), s3, store, &mockProducer{}).
+		Cancel(w, cancelReq(t, "transcription", "job-1"))
+
+	if w.Code != http.StatusNoContent {
+		t.Errorf("expected 204, got %d: %s", w.Code, w.Body.String())
+	}
+	if !store.deleteJobCalled {
+		t.Error("DeleteJob must be called to cancel a pending job")
+	}
+	// S3 deletion runs in a goroutine — give it a moment.
+	time.Sleep(20 * time.Millisecond)
+	s3.mu.Lock()
+	deleted := len(s3.deletedKeys) > 0
+	s3.mu.Unlock()
+	if !deleted {
+		t.Error("S3 input file should be deleted on cancel")
+	}
+}
+
+// TestCancel_Processing_Returns409 verifies that a processing job cannot be cancelled.
+func TestCancel_Processing_Returns409(t *testing.T) {
+	store := &mockAsyncStore{
+		job: &model.Job{
+			ID:          "job-2",
+			ServiceType: "transcription",
+			Model:       "faster-whisper",
+			Status:      model.JobStatusProcessing,
+		},
+	}
+
+	w := httptest.NewRecorder()
+	newAsyncHandler(singleOpRegistry(), &mockJobS3{}, store, &mockProducer{}).
+		Cancel(w, cancelReq(t, "transcription", "job-2"))
+
+	if w.Code != http.StatusConflict {
+		t.Errorf("expected 409 for processing job, got %d: %s", w.Code, w.Body.String())
+	}
+	if store.deleteJobCalled {
+		t.Error("DeleteJob must not be called when job is in processing state")
+	}
+}
+
+// TestCancel_Completed_Returns409 verifies that a completed job cannot be cancelled.
+func TestCancel_Completed_Returns409(t *testing.T) {
+	store := &mockAsyncStore{
+		job: &model.Job{
+			ID:          "job-3",
+			ServiceType: "transcription",
+			Model:       "faster-whisper",
+			Status:      model.JobStatusCompleted,
+		},
+	}
+
+	w := httptest.NewRecorder()
+	newAsyncHandler(singleOpRegistry(), &mockJobS3{}, store, &mockProducer{}).
+		Cancel(w, cancelReq(t, "transcription", "job-3"))
+
+	if w.Code != http.StatusConflict {
+		t.Errorf("expected 409 for completed job, got %d: %s", w.Code, w.Body.String())
+	}
+	if store.deleteJobCalled {
+		t.Error("DeleteJob must not be called when job is already completed")
+	}
+}
+
+// TestCancel_Failed_Returns409 verifies that a failed job cannot be cancelled.
+func TestCancel_Failed_Returns409(t *testing.T) {
+	store := &mockAsyncStore{
+		job: &model.Job{
+			ID:          "job-4",
+			ServiceType: "transcription",
+			Model:       "faster-whisper",
+			Status:      model.JobStatusFailed,
+		},
+	}
+
+	w := httptest.NewRecorder()
+	newAsyncHandler(singleOpRegistry(), &mockJobS3{}, store, &mockProducer{}).
+		Cancel(w, cancelReq(t, "transcription", "job-4"))
+
+	if w.Code != http.StatusConflict {
+		t.Errorf("expected 409 for failed job, got %d: %s", w.Code, w.Body.String())
+	}
+	if store.deleteJobCalled {
+		t.Error("DeleteJob must not be called when job is already failed")
+	}
+}
+
+// TestCancel_NotFound_Returns404 verifies that cancelling a missing job returns 404.
+func TestCancel_NotFound_Returns404(t *testing.T) {
+	store := &mockAsyncStore{getJobErr: fmt.Errorf("not found")}
+
+	w := httptest.NewRecorder()
+	newAsyncHandler(singleOpRegistry(), &mockJobS3{}, store, &mockProducer{}).
+		Cancel(w, cancelReq(t, "transcription", "missing-id"))
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected 404 for missing job, got %d", w.Code)
+	}
+}
+
+// ── AdminPurge tests ──────────────────────────────────────────────────────────
+
+// purgeReq builds a POST /-/jobs/purge request with the given query params.
+func purgeReq(t *testing.T, olderThan, limit string) *http.Request {
+	t.Helper()
+	url := "/-/jobs/purge"
+	sep := "?"
+	if olderThan != "" {
+		url += sep + "older_than=" + olderThan
+		sep = "&"
+	}
+	if limit != "" {
+		url += sep + "limit=" + limit
+	}
+	return httptest.NewRequest(http.MethodPost, url, nil)
+}
+
+// TestAdminPurge_MissingOlderThan_Returns400 verifies that omitting older_than returns 400.
+func TestAdminPurge_MissingOlderThan_Returns400(t *testing.T) {
+	w := httptest.NewRecorder()
+	newAsyncHandler(singleOpRegistry(), &mockJobS3{}, &mockAsyncStore{}, &mockProducer{}).
+		AdminPurge(w, purgeReq(t, "", ""))
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for missing older_than, got %d", w.Code)
+	}
+}
+
+// TestAdminPurge_InvalidDuration_Returns400 verifies that a malformed duration returns 400.
+func TestAdminPurge_InvalidDuration_Returns400(t *testing.T) {
+	w := httptest.NewRecorder()
+	newAsyncHandler(singleOpRegistry(), &mockJobS3{}, &mockAsyncStore{}, &mockProducer{}).
+		AdminPurge(w, purgeReq(t, "not-a-duration", ""))
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for invalid duration, got %d", w.Code)
+	}
+}
+
+// TestAdminPurge_InvalidLimit_Returns400 verifies that a non-integer limit returns 400.
+func TestAdminPurge_InvalidLimit_Returns400(t *testing.T) {
+	w := httptest.NewRecorder()
+	newAsyncHandler(singleOpRegistry(), &mockJobS3{}, &mockAsyncStore{}, &mockProducer{}).
+		AdminPurge(w, purgeReq(t, "2h", "abc"))
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for invalid limit, got %d", w.Code)
+	}
+}
+
+// TestAdminPurge_Empty_NoJobs verifies that an empty stale-job list returns 200
+// with purged=0 and truncated=false.
+func TestAdminPurge_Empty_NoJobs(t *testing.T) {
+	store := &mockAsyncStore{staleJobs: nil}
+	w := httptest.NewRecorder()
+	newAsyncHandler(singleOpRegistry(), &mockJobS3{}, store, &mockProducer{}).
+		AdminPurge(w, purgeReq(t, "2h", ""))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["purged"].(float64) != 0 {
+		t.Errorf("expected purged=0, got %v", resp["purged"])
+	}
+	if resp["truncated"].(bool) {
+		t.Error("expected truncated=false when no jobs found")
+	}
+}
+
+// TestAdminPurge_WithJobs_PurgesAndCleansS3 verifies that stale jobs are deleted
+// from Redis and their S3 input files are removed asynchronously.
+func TestAdminPurge_WithJobs_PurgesAndCleansS3(t *testing.T) {
+	s3 := &mockJobS3{}
+	now := time.Now().UTC()
+	store := &mockAsyncStore{
+		staleJobs: []*model.Job{
+			{ID: "s1", Model: "faster-whisper", InputRef: "inputs/s1.wav", CreatedAt: now, UpdatedAt: now},
+			{ID: "s2", Model: "faster-whisper", InputRef: "inputs/s2.wav", CreatedAt: now, UpdatedAt: now},
+		},
+	}
+
+	w := httptest.NewRecorder()
+	newAsyncHandler(singleOpRegistry(), s3, store, &mockProducer{}).
+		AdminPurge(w, purgeReq(t, "2h", ""))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["purged"].(float64) != 2 {
+		t.Errorf("expected purged=2, got %v", resp["purged"])
+	}
+	if resp["truncated"].(bool) {
+		t.Error("expected truncated=false")
+	}
+	// S3 deletes run in goroutines — give them a moment.
+	time.Sleep(30 * time.Millisecond)
+	s3.mu.Lock()
+	deletedCount := len(s3.deletedKeys)
+	s3.mu.Unlock()
+	if deletedCount != 2 {
+		t.Errorf("expected 2 S3 deletes, got %d", deletedCount)
+	}
+}
+
+// TestAdminPurge_Truncated_LimitRespected verifies that when stale jobs exceed
+// the limit, only limit jobs are purged and truncated=true is returned.
+func TestAdminPurge_Truncated_LimitRespected(t *testing.T) {
+	now := time.Now().UTC()
+	store := &mockAsyncStore{
+		staleJobs: []*model.Job{
+			{ID: "t1", Model: "faster-whisper", CreatedAt: now, UpdatedAt: now},
+			{ID: "t2", Model: "faster-whisper", CreatedAt: now, UpdatedAt: now},
+			{ID: "t3", Model: "faster-whisper", CreatedAt: now, UpdatedAt: now},
+		},
+	}
+
+	w := httptest.NewRecorder()
+	newAsyncHandler(singleOpRegistry(), &mockJobS3{}, store, &mockProducer{}).
+		AdminPurge(w, purgeReq(t, "1h", "2"))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["purged"].(float64) != 2 {
+		t.Errorf("expected purged=2 (limit), got %v", resp["purged"])
+	}
+	if !resp["truncated"].(bool) {
+		t.Error("expected truncated=true when result exceeds limit")
 	}
 }
 

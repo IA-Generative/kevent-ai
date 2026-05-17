@@ -273,6 +273,7 @@ func (h *JobHandler) Submit(w http.ResponseWriter, r *http.Request) {
 
 	metrics.RequestsTotal.WithLabelValues(mode, serviceType, def.Model, "202").Inc()
 	metrics.RequestDuration.WithLabelValues(mode, serviceType, def.Model).Observe(time.Since(start).Seconds())
+	metrics.AsyncJobsSubmittedTotal.WithLabelValues(serviceType, def.Model).Inc()
 	if consumerName != "" {
 		metrics.JobsByConsumerTotal.WithLabelValues(mode, serviceType, def.Model, consumerName).Inc()
 	}
@@ -493,6 +494,7 @@ func (h *JobHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 		}
 	}(job.InputRef, id)
 
+	metrics.AsyncJobsCancelledTotal.WithLabelValues(serviceType, job.Model).Inc()
 	slog.InfoContext(r.Context(), "job cancelled", "job_id", id, "service_type", serviceType, "prior_status", job.Status)
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -550,6 +552,7 @@ func (h *JobHandler) AdminPurge(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		purged++
+		metrics.AsyncJobsPurgedTotal.WithLabelValues(job.Model).Inc()
 		if job.InputRef != "" {
 			inputRef := job.InputRef
 			jobID := job.ID
