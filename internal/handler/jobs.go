@@ -444,9 +444,11 @@ func (h *JobHandler) ListJobs(w http.ResponseWriter, r *http.Request) {
 }
 
 // Cancel handles DELETE /jobs/{service_type}/{id}.
-// Deletes a pending or processing job and its S3 input file.
+// Deletes a pending job and its S3 input file.
 // Applies the same consumer ownership check as GetStatus.
-// Returns 409 for terminal-state jobs (completed/failed).
+// Returns 409 if the job is already processing or in a terminal state
+// (completed/failed): once the relay has started inference, cancellation
+// would leak the S3 result file and leave the relay with a missing job record.
 func (h *JobHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 	serviceType := chi.URLParam(r, "service_type")
 	id := chi.URLParam(r, "id")
@@ -471,8 +473,8 @@ func (h *JobHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if job.Status == model.JobStatusCompleted || job.Status == model.JobStatusFailed {
-		writeError(w, http.StatusConflict, fmt.Sprintf("job %q is already in terminal state %q", id, job.Status))
+	if job.Status != model.JobStatusPending {
+		writeError(w, http.StatusConflict, fmt.Sprintf("job %q cannot be cancelled in state %q: only pending jobs can be cancelled", id, job.Status))
 		return
 	}
 

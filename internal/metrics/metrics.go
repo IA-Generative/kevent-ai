@@ -161,4 +161,9 @@ var (
 		Name: "kevent_guardrails_pii_blocked_total",
 		Help: "Total requests blocked by the PII guardrail.",
 	}, []string{"service_type", "model"})
+
+	AsyncStaleJobsSweptTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "kevent_async_stale_jobs_swept_total",
+		Help: "Total number of pending jobs marked failed and cleaned up by the stale-job GC.",
+	}, []string{"model"})
 )

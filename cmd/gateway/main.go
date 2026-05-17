@@ -249,6 +249,7 @@ func main() {
 					} else if len(swept) > 0 {
 						slog.Info("stale-job GC swept jobs", "count", len(swept), "max_age", maxAge)
 						for _, job := range swept {
+							gmetrics.AsyncStaleJobsSweptTotal.WithLabelValues(job.Model).Inc()
 							if job.InputRef == "" {
 								continue
 							}
