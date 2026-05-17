@@ -166,4 +166,19 @@ var (
 		Name: "kevent_async_stale_jobs_swept_total",
 		Help: "Total number of pending jobs marked failed and cleaned up by the stale-job GC.",
 	}, []string{"model"})
+
+	AsyncJobsSubmittedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "kevent_async_jobs_submitted_total",
+		Help: "Total async jobs accepted (202) by service type and model.",
+	}, []string{"service_type", "model"})
+
+	AsyncJobsCancelledTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "kevent_async_jobs_cancelled_total",
+		Help: "Total async jobs cancelled by the client (DELETE /jobs/{type}/{id}).",
+	}, []string{"service_type", "model"})
+
+	AsyncJobsPurgedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "kevent_async_jobs_purged_total",
+		Help: "Total async jobs deleted by the admin purge endpoint.",
+	}, []string{"model"})
 )
