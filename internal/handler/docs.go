@@ -290,13 +290,13 @@ func jobByIDPathItem(serviceTypes []string) map[string]any {
 			"tags":        []string{"Jobs"},
 			"summary":     "Cancel a job",
 			"operationId": "cancelJob",
-			"description": "Cancels a pending or processing job and deletes its input file from S3. Returns 409 if the job is already in a terminal state (completed or failed).\n\nApplies the same consumer ownership check as GET: if `consumer_header` is configured and present, only the owning consumer can cancel.",
+			"description": "Cancels a pending job and deletes its input file from S3. Returns 409 if the job is not in `pending` state: once the relay has started inference (`processing`, `completed`, or `failed`), cancellation is not allowed.\n\nApplies the same consumer ownership check as GET: if `consumer_header` is configured and present, only the owning consumer can cancel.",
 			"parameters":  pathParams,
 			"responses": map[string]any{
 				"204": map[string]any{"description": "Job cancelled"},
 				"404": map[string]any{"$ref": "#/components/responses/NotFound"},
 				"409": map[string]any{
-					"description": "Job already in terminal state",
+					"description": "Job is not cancellable in its current state",
 					"content": map[string]any{
 						"application/json": map[string]any{"schema": map[string]any{"$ref": "#/components/schemas/Error"}},
 					},
