@@ -328,6 +328,9 @@ func (r *RedisClient) scanStaleJobs(ctx context.Context, cutoff string) ([]*mode
 			slog.Warn("skipping malformed job record during stale scan", "id", allIDs[i], "error", err)
 			continue
 		}
+		if job.Status != model.JobStatusPending {
+			continue
+		}
 		jobs = append(jobs, &job)
 	}
 	return jobs, nil
