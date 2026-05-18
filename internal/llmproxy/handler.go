@@ -25,6 +25,13 @@ type providerLookup interface {
 	Get(name string) (provider.Provider, error)
 }
 
+// AuditConfig controls structured per-request audit logging.
+// Mirrors config.AuditLogConfig but kept local to avoid importing the config package.
+type AuditConfig struct {
+	Enabled bool // emit a structured slog record for every LLM request
+	Prompt  bool // include the raw request body (opt-in — may contain PII)
+}
+
 // Handler orchestrates LLM requests: cache → provider → translate → cache-fill.
 type Handler struct {
 	cache          cache.Cache
@@ -32,18 +39,21 @@ type Handler struct {
 	httpClient     *http.Client
 	userTypeHeader string // HTTP header carrying consumer type (e.g. "X-User-Type")
 	tracker        metrics.ConsumerTracker
+	audit          AuditConfig
 }
 
 // New creates a Handler. httpClient should have a generous timeout (e.g. 15 min).
 // userTypeHeader is the request header name for the consumer type (e.g. "X-User-Type");
 // empty disables user_type labelling. tracker records per-consumer token usage.
-func New(c cache.Cache, p *provider.Registry, hc *http.Client, userTypeHeader string, tracker metrics.ConsumerTracker) *Handler {
+// audit controls structured audit logging (disabled when audit.Enabled == false).
+func New(c cache.Cache, p *provider.Registry, hc *http.Client, userTypeHeader string, tracker metrics.ConsumerTracker, audit AuditConfig) *Handler {
 	return &Handler{
 		cache:          c,
 		providers:      p,
 		httpClient:     hc,
 		userTypeHeader: userTypeHeader,
 		tracker:        tracker,
+		audit:          audit,
 	}
 }
 
@@ -65,7 +75,7 @@ func (h *Handler) ServeJSON(w http.ResponseWriter, r *http.Request, def *service
 	// Streaming requests bypass cache and response translation entirely.
 	// The SSE stream is piped directly to the client with per-chunk flushing.
 	if isStreamingRequest(body) {
-		h.serveStream(w, r, def, body, prov, userType, start)
+		h.serveStream(w, r, def, body, prov, consumer, userType, start)
 		return
 	}
 
@@ -118,7 +128,7 @@ func (h *Handler) ServeJSON(w http.ResponseWriter, r *http.Request, def *service
 	var resp *http.Response
 	var respBody []byte
 	var lastBackendErr string
-	var winningBackendModel string
+	var winningBackendModel, winningBackendURL string
 	for i, backend := range backends {
 		effectiveModel := backend.Model
 		if effectiveModel == "" {
@@ -163,6 +173,7 @@ func (h *Handler) ServeJSON(w http.ResponseWriter, r *http.Request, def *service
 			continue
 		}
 		winningBackendModel = effectiveModel
+		winningBackendURL = backend.URL
 		break // success or 4xx — do not retry
 	}
 	if resp == nil {
@@ -216,6 +227,9 @@ func (h *Handler) ServeJSON(w http.ResponseWriter, r *http.Request, def *service
 	w.Header().Set("X-Cache", "MISS")
 	w.WriteHeader(finalStatus)
 	_, _ = w.Write(finalBody)
+
+	h.auditLog(r.Context(), def, consumer, userType, winningBackendURL, winningBackendModel,
+		finalStatus, time.Since(start).Milliseconds(), false, body, usage)
 
 	// ── Cache-fill async (only 200 responses, non-streaming) ─────────────────
 	if cacheable && cacheKey != "" && finalStatus == http.StatusOK {
@@ -292,11 +306,11 @@ func isStreamingRequest(body []byte) bool {
 // not parsed to avoid buffering the stream.
 // Backend retry is possible before w.WriteHeader; once the SSE stream starts,
 // switching backends is no longer possible.
-func (h *Handler) serveStream(w http.ResponseWriter, r *http.Request, def *service.Def, body []byte, prov provider.Provider, userType string, start time.Time) {
+func (h *Handler) serveStream(w http.ResponseWriter, r *http.Request, def *service.Def, body []byte, prov provider.Provider, consumer, userType string, start time.Time) {
 	backends := service.OrderedBackends(def.Backends)
 	var resp *http.Response
 	var lastErr string
-	var winningBackendModel string
+	var winningBackendModel, winningBackendURL string
 	for i, backend := range backends {
 		effectiveModel := backend.Model
 		if effectiveModel == "" {
@@ -341,6 +355,7 @@ func (h *Handler) serveStream(w http.ResponseWriter, r *http.Request, def *servi
 			continue
 		}
 		winningBackendModel = effectiveModel
+		winningBackendURL = backend.URL
 		break
 	}
 	if resp == nil {
@@ -383,6 +398,39 @@ func (h *Handler) serveStream(w http.ResponseWriter, r *http.Request, def *servi
 			break
 		}
 	}
+
+	h.auditLog(r.Context(), def, consumer, userType, winningBackendURL, winningBackendModel,
+		resp.StatusCode, time.Since(start).Milliseconds(), true, body, nil)
+}
+
+// auditLog emits a structured slog record for the LLM request when audit is enabled.
+// usage may be nil (e.g. for streaming responses where tokens are not parsed).
+func (h *Handler) auditLog(ctx context.Context, def *service.Def, consumer, userType, backendURL, backendModel string, status int, durationMs int64, stream bool, reqBody []byte, usage *provider.Usage) {
+	if !h.audit.Enabled {
+		return
+	}
+	args := []any{
+		"service_type",  def.Type,
+		"model",         def.Model,
+		"backend_model", backendModel,
+		"provider",      def.Provider,
+		"consumer",      consumer,
+		"user_type",     userType,
+		"status",        status,
+		"duration_ms",   durationMs,
+		"backend_url",   backendURL,
+		"stream",        stream,
+	}
+	if usage != nil {
+		args = append(args,
+			"prompt_tokens", usage.PromptTokens,
+			"completion_tokens", usage.CompletionTokens,
+		)
+	}
+	if h.audit.Prompt && len(reqBody) > 0 {
+		args = append(args, "prompt", string(reqBody))
+	}
+	slog.InfoContext(ctx, "llm request", args...)
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {

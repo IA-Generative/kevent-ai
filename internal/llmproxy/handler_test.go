@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -105,7 +106,7 @@ func TestServeJSON_CacheMiss_ThenHit(t *testing.T) {
 
 	mc, filled := newMemCacheWithNotify()
 	reg := provider.NewRegistry()
-	h := New(mc, reg, &http.Client{Timeout: 5 * time.Second}, "", metrics.NoopTracker{})
+	h := New(mc, reg, &http.Client{Timeout: 5 * time.Second}, "", metrics.NoopTracker{}, AuditConfig{})
 
 	def := llmDef("passthrough", "", 60*time.Second)
 	setBackend(def, backend.URL)
@@ -151,7 +152,7 @@ func TestServeJSON_NoCacheHeader_BypassesCache(t *testing.T) {
 
 	mc := newMemCache()
 	reg := provider.NewRegistry()
-	h := New(mc, reg, &http.Client{Timeout: 5 * time.Second}, "", metrics.NoopTracker{})
+	h := New(mc, reg, &http.Client{Timeout: 5 * time.Second}, "", metrics.NoopTracker{}, AuditConfig{})
 
 	def := llmDef("passthrough", "", 60*time.Second)
 	setBackend(def, backend.URL)
@@ -177,7 +178,7 @@ func TestServeJSON_Non200NotCached(t *testing.T) {
 
 	mc := newMemCache()
 	reg := provider.NewRegistry()
-	h := New(mc, reg, &http.Client{Timeout: 5 * time.Second}, "", metrics.NoopTracker{})
+	h := New(mc, reg, &http.Client{Timeout: 5 * time.Second}, "", metrics.NoopTracker{}, AuditConfig{})
 
 	def := llmDef("passthrough", "", 60*time.Second)
 	setBackend(def, backend.URL)
@@ -202,7 +203,7 @@ func TestServeJSON_CacheDisabled_WhenTTLZero(t *testing.T) {
 
 	mc := newMemCache()
 	reg := provider.NewRegistry()
-	h := New(mc, reg, &http.Client{Timeout: 5 * time.Second}, "", metrics.NoopTracker{})
+	h := New(mc, reg, &http.Client{Timeout: 5 * time.Second}, "", metrics.NoopTracker{}, AuditConfig{})
 
 	def := llmDef("passthrough", "", 0) // TTL=0 → no cache
 	setBackend(def, backend.URL)
@@ -229,7 +230,7 @@ func TestServeJSON_BackendModel_RewrittenInRequest(t *testing.T) {
 	defer backend.Close()
 
 	reg := provider.NewRegistry()
-	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second}, "", metrics.NoopTracker{})
+	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second}, "", metrics.NoopTracker{}, AuditConfig{})
 
 	def := llmDef("passthrough", "meta-llama/Meta-Llama-3-8B-Instruct", 0)
 	setBackend(def, backend.URL)
@@ -256,7 +257,7 @@ func TestServeJSON_BackendModel_NotRewritten_WhenEmpty(t *testing.T) {
 	defer backend.Close()
 
 	reg := provider.NewRegistry()
-	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second}, "", metrics.NoopTracker{})
+	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second}, "", metrics.NoopTracker{}, AuditConfig{})
 
 	def := llmDef("passthrough", "", 0) // no backend_model
 	setBackend(def, backend.URL)
@@ -284,7 +285,7 @@ func TestServeJSON_CacheHit_ReturnsCachedBody(t *testing.T) {
 	}, 60*time.Second)
 
 	reg := provider.NewRegistry()
-	h := New(mc, reg, &http.Client{Timeout: 5 * time.Second}, "", metrics.NoopTracker{})
+	h := New(mc, reg, &http.Client{Timeout: 5 * time.Second}, "", metrics.NoopTracker{}, AuditConfig{})
 
 	def := llmDef("passthrough", "", 60*time.Second)
 
@@ -302,7 +303,7 @@ func TestServeJSON_CacheHit_ReturnsCachedBody(t *testing.T) {
 
 func TestServeJSON_UnknownProvider_Returns500(t *testing.T) {
 	reg := provider.NewRegistry()
-	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second}, "", metrics.NoopTracker{})
+	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second}, "", metrics.NoopTracker{}, AuditConfig{})
 
 	def := &service.Def{
 		Type:     "llm",
@@ -385,7 +386,7 @@ func TestServeJSON_ConsumerMetrics_EmittedOnBackendResponse(t *testing.T) {
 
 	tracker := &testTracker{}
 	reg := provider.NewRegistry()
-	h := New(newMemCache(), reg, &http.Client{Timeout: 5 * time.Second}, "", tracker)
+	h := New(newMemCache(), reg, &http.Client{Timeout: 5 * time.Second}, "", tracker, AuditConfig{})
 
 	def := llmDef("passthrough", "", 0)
 	setBackend(def, backend.URL)
@@ -408,7 +409,7 @@ func TestServeJSON_ConsumerMetrics_EmittedOnCacheHit(t *testing.T) {
 
 	tracker := &testTracker{}
 	reg := provider.NewRegistry()
-	h := New(mc, reg, &http.Client{Timeout: 5 * time.Second}, "", tracker)
+	h := New(mc, reg, &http.Client{Timeout: 5 * time.Second}, "", tracker, AuditConfig{})
 
 	def := llmDef("passthrough", "", 60*time.Second)
 
@@ -433,7 +434,7 @@ func TestServeJSON_Streaming_PipedToClient(t *testing.T) {
 	defer backend.Close()
 
 	reg := provider.NewRegistry()
-	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second}, "", &noopTracker{})
+	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second}, "", &noopTracker{}, AuditConfig{})
 
 	def := llmDef("passthrough", "", 60*time.Second)
 	setBackend(def, backend.URL)
@@ -466,7 +467,7 @@ func TestServeJSON_Streaming_SkipsCache(t *testing.T) {
 
 	mc := newMemCache()
 	reg := provider.NewRegistry()
-	h := New(mc, reg, &http.Client{Timeout: 5 * time.Second}, "", &noopTracker{})
+	h := New(mc, reg, &http.Client{Timeout: 5 * time.Second}, "", &noopTracker{}, AuditConfig{})
 
 	def := llmDef("passthrough", "", 60*time.Second)
 	setBackend(def, backend.URL)
@@ -497,7 +498,7 @@ func TestServeJSON_Streaming_BackendModel_Rewritten(t *testing.T) {
 	defer backend.Close()
 
 	reg := provider.NewRegistry()
-	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second}, "", &noopTracker{})
+	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second}, "", &noopTracker{}, AuditConfig{})
 
 	def := llmDef("passthrough", "real-model-id", 0)
 	setBackend(def, backend.URL)
@@ -513,6 +514,152 @@ type noopTracker struct{}
 
 func (n *noopTracker) Track(_ context.Context, _, _, _ string, _ int) {}
 
+// ── audit log ────────────────────────────────────────────────────────────────
+
+// capturingHandler captures slog records for assertion in tests.
+type capturingHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *capturingHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
+func (h *capturingHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, r)
+	return nil
+}
+func (h *capturingHandler) WithAttrs(attrs []slog.Attr) slog.Handler { return h }
+func (h *capturingHandler) WithGroup(name string) slog.Handler       { return h }
+
+func (h *capturingHandler) attr(key string) (slog.Value, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, r := range h.records {
+		var found slog.Value
+		var ok bool
+		r.Attrs(func(a slog.Attr) bool {
+			if a.Key == key {
+				found = a.Value
+				ok = true
+				return false
+			}
+			return true
+		})
+		if ok {
+			return found, true
+		}
+	}
+	return slog.Value{}, false
+}
+
+func TestAuditLog_Disabled_NoLog(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		io.WriteString(w, fakeResponse)
+	}))
+	defer backend.Close()
+
+	cap := &capturingHandler{}
+	old := slog.Default()
+	slog.SetDefault(slog.New(cap))
+	defer slog.SetDefault(old)
+
+	reg := provider.NewRegistry()
+	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second}, "", &noopTracker{}, AuditConfig{Enabled: false})
+	def := llmDef("passthrough", "", 0)
+	setBackend(def, backend.URL)
+	doServeJSON(h, def, chatBody)
+
+	cap.mu.Lock()
+	n := len(cap.records)
+	cap.mu.Unlock()
+	if n != 0 {
+		t.Errorf("expected no audit log records when disabled, got %d", n)
+	}
+}
+
+func TestAuditLog_Enabled_LogsFields(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		io.WriteString(w, fakeResponse)
+	}))
+	defer backend.Close()
+
+	cap := &capturingHandler{}
+	old := slog.Default()
+	slog.SetDefault(slog.New(cap))
+	defer slog.SetDefault(old)
+
+	reg := provider.NewRegistry()
+	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second}, "", &noopTracker{}, AuditConfig{Enabled: true})
+	def := llmDef("passthrough", "", 0)
+	setBackend(def, backend.URL)
+	doServeJSONAs(h, def, chatBody, "alice")
+
+	for _, key := range []string{"service_type", "model", "consumer", "status", "duration_ms", "backend_url"} {
+		if _, ok := cap.attr(key); !ok {
+			t.Errorf("audit log missing field %q", key)
+		}
+	}
+	if v, ok := cap.attr("consumer"); !ok || v.String() != "alice" {
+		t.Errorf("expected consumer=alice, got %q ok=%v", v, ok)
+	}
+	if v, ok := cap.attr("stream"); !ok || v.Bool() {
+		t.Errorf("expected stream=false for non-streaming request, got %v ok=%v", v, ok)
+	}
+}
+
+func TestAuditLog_Prompt_IncludesBody(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		io.WriteString(w, fakeResponse)
+	}))
+	defer backend.Close()
+
+	cap := &capturingHandler{}
+	old := slog.Default()
+	slog.SetDefault(slog.New(cap))
+	defer slog.SetDefault(old)
+
+	reg := provider.NewRegistry()
+	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second}, "", &noopTracker{}, AuditConfig{Enabled: true, Prompt: true})
+	def := llmDef("passthrough", "", 0)
+	setBackend(def, backend.URL)
+	doServeJSON(h, def, chatBody)
+
+	if _, ok := cap.attr("prompt"); !ok {
+		t.Error("expected prompt field in audit log when Prompt=true")
+	}
+}
+
+func TestAuditLog_NoPrompt_BodyOmitted(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		io.WriteString(w, fakeResponse)
+	}))
+	defer backend.Close()
+
+	cap := &capturingHandler{}
+	old := slog.Default()
+	slog.SetDefault(slog.New(cap))
+	defer slog.SetDefault(old)
+
+	reg := provider.NewRegistry()
+	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second}, "", &noopTracker{}, AuditConfig{Enabled: true, Prompt: false})
+	def := llmDef("passthrough", "", 0)
+	setBackend(def, backend.URL)
+	doServeJSON(h, def, chatBody)
+
+	if _, ok := cap.attr("prompt"); ok {
+		t.Error("prompt field should be absent when Prompt=false")
+	}
+}
+
 func TestServeJSON_ConsumerMetrics_SkippedWhenNoConsumer(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -523,7 +670,7 @@ func TestServeJSON_ConsumerMetrics_SkippedWhenNoConsumer(t *testing.T) {
 
 	tracker := &testTracker{}
 	reg := provider.NewRegistry()
-	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second}, "", tracker)
+	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second}, "", tracker, AuditConfig{})
 
 	def := llmDef("passthrough", "", 0)
 	setBackend(def, backend.URL)
@@ -534,5 +681,68 @@ func TestServeJSON_ConsumerMetrics_SkippedWhenNoConsumer(t *testing.T) {
 	}
 	if len(tracker.calls) != 0 {
 		t.Errorf("expected no tracker calls for empty consumer, got %d", len(tracker.calls))
+	}
+}
+
+// TestAuditLog_Streaming_LogsStreamTrue verifies that the streaming path emits
+// an audit log record with stream=true when audit is enabled.
+func TestAuditLog_Streaming_LogsStreamTrue(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "data: {\"choices\":[]}\n\ndata: [DONE]\n\n")
+	}))
+	defer backend.Close()
+
+	cap := &capturingHandler{}
+	old := slog.Default()
+	slog.SetDefault(slog.New(cap))
+	defer slog.SetDefault(old)
+
+	streamBody := `{"model":"my-alias","messages":[{"role":"user","content":"Hello"}],"stream":true}`
+
+	reg := provider.NewRegistry()
+	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second}, "", &noopTracker{}, AuditConfig{Enabled: true})
+	def := llmDef("passthrough", "", 0)
+	setBackend(def, backend.URL)
+	doServeJSON(h, def, streamBody)
+
+	if v, ok := cap.attr("stream"); !ok {
+		t.Error("audit log missing 'stream' field on streaming request")
+	} else if !v.Bool() {
+		t.Errorf("expected stream=true for streaming request, got %v", v)
+	}
+	if _, ok := cap.attr("service_type"); !ok {
+		t.Error("audit log missing 'service_type' field on streaming request")
+	}
+}
+
+// TestAuditLog_Enabled_BackendError_StillLogged verifies that an audit record is
+// emitted even when the backend returns a non-2xx status code.
+func TestAuditLog_Enabled_BackendError_StillLogged(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(w, `{"error":"oops"}`)
+	}))
+	defer backend.Close()
+
+	cap := &capturingHandler{}
+	old := slog.Default()
+	slog.SetDefault(slog.New(cap))
+	defer slog.SetDefault(old)
+
+	reg := provider.NewRegistry()
+	h := New(cache.NewNoop(), reg, &http.Client{Timeout: 5 * time.Second}, "", &noopTracker{}, AuditConfig{Enabled: true})
+	def := llmDef("passthrough", "", 0)
+	setBackend(def, backend.URL)
+	doServeJSON(h, def, chatBody)
+
+	v, ok := cap.attr("status")
+	if !ok {
+		t.Fatal("audit log missing 'status' field on backend error")
+	}
+	if v.Int64() != 500 {
+		t.Errorf("expected status=500 in audit log, got %d", v.Int64())
 	}
 }

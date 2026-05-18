@@ -189,7 +189,8 @@ func main() {
 	}
 
 	llmHandler := llmproxy.New(responseCache, providerRegistry, &http.Client{Timeout: 15 * time.Minute},
-		cfg.Server.UserTypeHeader, consumerTracker)
+		cfg.Server.UserTypeHeader, consumerTracker,
+		llmproxy.AuditConfig{Enabled: cfg.AuditLog.Enabled, Prompt: cfg.AuditLog.Prompt})
 
 	// ── Hot-reload ────────────────────────────────────────────────────────────
 	// reloadFn re-reads the config file, atomically swaps the active router,

@@ -17,11 +17,22 @@ type Config struct {
 	Services   []ServiceConfig                       `yaml:"services"`
 	Encryption EncryptionConfig                      `yaml:"encryption"`
 	Metrics    MetricsConfig                         `yaml:"metrics"`
+	AuditLog   AuditLogConfig                        `yaml:"audit_log"`
 	// RateLimits maps service type → user type → limit.
 	// User type "*" is the fallback applied when the user_type_header is absent
 	// or the specific type has no entry.
 	// Leave empty to disable rate limiting.
 	RateLimits map[string]map[string]RateLimitConfig `yaml:"rate_limits"`
+}
+
+// AuditLogConfig controls structured per-request audit logging for LLM requests.
+// Disabled by default to avoid unexpected log volume.
+type AuditLogConfig struct {
+	// Enabled activates a structured slog record for every LLM request.
+	Enabled bool `yaml:"enabled"`
+	// Prompt includes the raw request body in the log entry when true.
+	// Opt-in only — the body may contain PII.
+	Prompt bool `yaml:"prompt"`
 }
 
 // RateLimitConfig defines the allowed request rate for a (service, user-type) pair.
