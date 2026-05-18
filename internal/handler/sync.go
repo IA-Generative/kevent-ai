@@ -350,6 +350,24 @@ func (h *SyncHandler) handleMultipartViaKafka(w http.ResponseWriter, r *http.Req
 		metrics.JobsByConsumerTotal.WithLabelValues("sync", def.Type, def.Model, consumerName).Inc()
 	}
 
+	// Cleanup fires on ALL return paths (success, business failure, S3 error, timeout).
+	// resultRef is empty until GetJob succeeds; on timeout the relay result file (if any)
+	// is left in S3 and collected by the bucket lifecycle rule.
+	var resultRef string
+	defer func() {
+		go func() {
+			ctx := context.Background()
+			if resultRef != "" {
+				if err := h.s3.DeleteObject(ctx, resultRef); err != nil {
+					slog.Error("failed to delete sync result", "job_id", jobID, "error", err)
+				}
+			}
+			if err := h.redis.DeleteJob(ctx, jobID); err != nil {
+				slog.Error("failed to delete sync job record", "job_id", jobID, "error", err)
+			}
+		}()
+	}()
+
 	// committed tracks whether we have already sent the 200 + headers to the
 	// client. Once committed, WriteHeader calls are no-ops in HTTP/1.1, so errors
 	// can only be reported in the body. For fast inferences (< 20 s) we stay
@@ -401,23 +419,7 @@ waitLoop:
 		writeError(w, http.StatusInternalServerError, "failed to retrieve job")
 		return
 	}
-
-	// Cleanup lancé en goroutine quel que soit le chemin de sortie (succès,
-	// échec métier, erreur S3). Sans defer, les early-returns laissaient
-	// result.json et l'entrée Redis orphelins.
-	defer func() {
-		go func() {
-			ctx := context.Background()
-			if job.ResultRef != "" {
-				if err := h.s3.DeleteObject(ctx, job.ResultRef); err != nil {
-					slog.Error("failed to delete sync result", "job_id", jobID, "error", err)
-				}
-			}
-			if err := h.redis.DeleteJob(ctx, jobID); err != nil {
-				slog.Error("failed to delete sync job record", "job_id", jobID, "error", err)
-			}
-		}()
-	}()
+	resultRef = job.ResultRef
 
 	if job.Status == model.JobStatusFailed {
 		metrics.RequestsTotal.WithLabelValues("sync", def.Type, def.Model, "422").Inc()
