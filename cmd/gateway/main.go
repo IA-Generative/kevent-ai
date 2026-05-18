@@ -92,7 +92,9 @@ func buildRouter(
 	r.Get("/jobs", jobHandler.ListJobs)
 	r.Post("/jobs/{service_type}", jobHandler.Submit)
 	r.Get("/jobs/{service_type}/{id}", jobHandler.GetStatus)
+	r.Delete("/jobs/{service_type}/{id}", jobHandler.Cancel)
 	r.Post("/-/reload", handler.NewReloadHandler(reloadFn))
+	r.Post("/-/jobs/purge", jobHandler.AdminPurge)
 
 	if reg.HasSyncServices() {
 		syncHandler := handler.NewSyncHandler(reg, s3Client, redisClient, producer, cfg.Server.ConsumerHeader, rl, llmHandler)
@@ -189,7 +191,8 @@ func main() {
 	}
 
 	llmHandler := llmproxy.New(responseCache, providerRegistry, &http.Client{Timeout: 15 * time.Minute},
-		cfg.Server.UserTypeHeader, consumerTracker)
+		cfg.Server.UserTypeHeader, consumerTracker,
+		llmproxy.AuditConfig{Enabled: cfg.AuditLog.Enabled, Prompt: cfg.AuditLog.Prompt})
 
 	// ── Hot-reload ────────────────────────────────────────────────────────────
 	// reloadFn re-reads the config file, atomically swaps the active router,
@@ -227,6 +230,42 @@ func main() {
 
 	if consumerManager != nil {
 		consumerManager.Start(ctx, initialRegistry)
+	}
+
+	// ── Stale-job garbage collector ───────────────────────────────────────────
+	if cfg.Redis.PendingMaxAgeH > 0 {
+		maxAge := time.Duration(cfg.Redis.PendingMaxAgeH) * time.Hour
+		go func() {
+			ticker := time.NewTicker(15 * time.Minute)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					swept, err := redisClient.SweepStalePendingJobs(ctx, maxAge)
+					if err != nil {
+						slog.Error("stale-job GC failed", "error", err)
+					} else if len(swept) > 0 {
+						slog.Info("stale-job GC swept jobs", "count", len(swept), "max_age", maxAge)
+						for _, job := range swept {
+							gmetrics.AsyncStaleJobsSweptTotal.WithLabelValues(job.Model).Inc()
+							if job.InputRef == "" {
+								continue
+							}
+							inputRef := job.InputRef
+							jobID := job.ID
+							go func() {
+								if err := s3Client.DeleteObject(context.Background(), inputRef); err != nil {
+									slog.Error("stale-job GC: failed to delete S3 input", "job_id", jobID, "input_ref", inputRef, "error", err)
+								}
+							}()
+						}
+					}
+				}
+			}
+		}()
+		slog.Info("stale-job GC enabled", "max_age_hours", cfg.Redis.PendingMaxAgeH)
 	}
 
 	// ── HTTP server ───────────────────────────────────────────────────────────

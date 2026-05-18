@@ -35,14 +35,22 @@ import (
 	"kevent/gateway/internal/metrics"
 )
 
+// CheckResult holds the outcome of a rate-limit check together with the
+// metadata needed to set X-RateLimit-* response headers.
+type CheckResult struct {
+	Allowed    bool
+	Limit      int           // configured rate (0 = unlimited — headers not set)
+	Remaining  int           // requests left in the current window; 0 when rejected
+	ResetAfter time.Duration // time until the window resets; 0 when unlimited
+}
+
 // Checker is the interface implemented by Limiter.
 // Handlers depend on this interface so they can be tested without Redis.
 type Checker interface {
 	// Check evaluates the rate limit for the given request and service type.
-	// Returns (true, 0, nil) when the request is allowed.
-	// Returns (false, retryAfter, nil) when the limit is exceeded.
-	// Returns (false, 0, err) on Redis errors — callers should fail open.
-	Check(ctx context.Context, r *http.Request, serviceType string) (bool, time.Duration, error)
+	// The returned CheckResult is valid even on error (Allowed=false, zero metadata).
+	// On Redis errors callers should fail open.
+	Check(ctx context.Context, r *http.Request, serviceType string) (CheckResult, error)
 }
 
 // Limiter checks rate limits using Redis fixed-window counters.
@@ -53,8 +61,8 @@ type Limiter struct {
 	userTypeHeader string
 }
 
-// script atomically increments the counter and sets the TTL on first access.
-// Returns -1 when the request is allowed, or the remaining TTL (seconds) when denied.
+// script atomically increments the counter, sets the TTL on first access,
+// and returns {count, ttl} in all cases.
 var script = redis.NewScript(`
 local key   = KEYS[1]
 local limit = tonumber(ARGV[1])
@@ -63,10 +71,7 @@ local count = redis.call('INCR', key)
 if count == 1 then
   redis.call('EXPIRE', key, ttl)
 end
-if count > limit then
-  return redis.call('TTL', key)
-end
-return -1
+return {count, redis.call('TTL', key)}
 `)
 
 // New creates a Limiter. Pass the raw *redis.Client (available via storage.RedisClient.Client()).
@@ -84,10 +89,10 @@ func New(
 }
 
 // Check evaluates the rate limit for the given request and service type.
-func (l *Limiter) Check(ctx context.Context, r *http.Request, serviceType string) (bool, time.Duration, error) {
+func (l *Limiter) Check(ctx context.Context, r *http.Request, serviceType string) (CheckResult, error) {
 	typeLimits, ok := l.limits[serviceType]
 	if !ok {
-		return true, 0, nil
+		return CheckResult{Allowed: true}, nil
 	}
 
 	consumer := "anonymous"
@@ -109,32 +114,44 @@ func (l *Limiter) Check(ctx context.Context, r *http.Request, serviceType string
 	if !ok {
 		rlCfg, ok = typeLimits["*"]
 		if !ok {
-			return true, 0, nil
+			return CheckResult{Allowed: true}, nil
 		}
 	}
 
 	// rate: 0 is the sentinel for "no limit" — allow without touching Redis.
 	if rlCfg.Rate == 0 {
 		metrics.RateLimitRequestsTotal.WithLabelValues(serviceType, userType, "allowed").Inc()
-		return true, 0, nil
+		return CheckResult{Allowed: true, Limit: 0}, nil
 	}
 
 	period, err := time.ParseDuration(rlCfg.Period)
 	if err != nil {
-		return false, 0, fmt.Errorf("invalid rate_limit period %q for service %q: %w", rlCfg.Period, serviceType, err)
+		return CheckResult{}, fmt.Errorf("invalid rate_limit period %q for service %q: %w", rlCfg.Period, serviceType, err)
 	}
 
 	windowSec := int64(math.Ceil(period.Seconds()))
 	key := fmt.Sprintf("rl:%s:%s:%s", consumer, serviceType, userType)
 
-	ttl, err := script.Run(ctx, l.rdb, []string{key}, rlCfg.Rate, windowSec).Int64()
+	vals, err := script.Run(ctx, l.rdb, []string{key}, rlCfg.Rate, windowSec).Int64Slice()
 	if err != nil {
 		metrics.RateLimitErrorsTotal.WithLabelValues(serviceType).Inc()
-		return false, 0, fmt.Errorf("rate limit script: %w", err)
+		return CheckResult{}, fmt.Errorf("rate limit script: %w", err)
 	}
 
+	count := vals[0]
+	ttlSecs := vals[1]
+	if ttlSecs < 0 {
+		ttlSecs = windowSec
+	}
+
+	remaining := int(int64(rlCfg.Rate) - count)
+	if remaining < 0 {
+		remaining = 0
+	}
+
+	allowed := count <= int64(rlCfg.Rate)
 	result := "allowed"
-	if ttl != -1 {
+	if !allowed {
 		result = "rejected"
 	}
 	metrics.RateLimitRequestsTotal.WithLabelValues(serviceType, userType, result).Inc()
@@ -142,8 +159,10 @@ func (l *Limiter) Check(ctx context.Context, r *http.Request, serviceType string
 		metrics.RateLimitConsumerHitsTotal.WithLabelValues(serviceType, userType, consumer).Inc()
 	}
 
-	if ttl == -1 {
-		return true, 0, nil
-	}
-	return false, time.Duration(ttl) * time.Second, nil
+	return CheckResult{
+		Allowed:    allowed,
+		Limit:      rlCfg.Rate,
+		Remaining:  remaining,
+		ResetAfter: time.Duration(ttlSecs) * time.Second,
+	}, nil
 }

@@ -8,14 +8,22 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
+	"kevent/gateway/internal/cache"
 	"kevent/gateway/internal/config"
 	"kevent/gateway/internal/handler"
+	"kevent/gateway/internal/llmproxy"
+	"kevent/gateway/internal/llmproxy/provider"
+	"kevent/gateway/internal/metrics"
 	"kevent/gateway/internal/model"
+	"kevent/gateway/internal/ratelimit"
 	"kevent/gateway/internal/service"
 	"kevent/gateway/internal/storage"
 )
@@ -84,6 +92,16 @@ func (m *mockProducer) PublishInputEvent(_ context.Context, _ string, _ *model.I
 		}
 	}
 	return m.publishErr
+}
+
+// mockRateLimiter is a configurable Checker stub for testing.
+type mockRateLimiter struct {
+	result ratelimit.CheckResult
+	err    error
+}
+
+func (m *mockRateLimiter) Check(_ context.Context, _ *http.Request, _ string) (ratelimit.CheckResult, error) {
+	return m.result, m.err
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -738,5 +756,286 @@ func TestSyncHandler_Retry_NoRetryOn4xx(t *testing.T) {
 	}
 	if n := callCount.Load(); n != 1 {
 		t.Errorf("4xx must not trigger retry; backend called %d time(s)", n)
+	}
+}
+
+// ── Guardrails PII tests ──────────────────────────────────────────────────────
+
+// buildLLMHandler returns a minimal llmproxy.Handler wired to the given backend URL.
+func buildLLMHandler(backendURL string) *llmproxy.Handler {
+	return llmproxy.New(cache.NewNoop(), provider.NewRegistry(), &http.Client{Timeout: 5 * time.Second}, "", metrics.NoopTracker{}, llmproxy.AuditConfig{})
+}
+
+// buildLLMRegistry returns a registry with a single openai LLM service,
+// with the PII guardrail enabled when piiEnabled is true.
+func buildLLMRegistry(backendURL string, piiEnabled bool) *service.Registry {
+	cfgs := []config.ServiceConfig{{
+		Type:     "llm",
+		Model:    "gpt-4o",
+		Provider: "openai",
+		Operations: map[string][]string{
+			"chat": {"/v1/chat/completions"},
+		},
+		InferenceURL: backendURL,
+		Backends:     []config.BackendConfig{{URL: backendURL, Weight: 1}},
+		Guardrails:   config.GuardrailsConfig{PII: piiEnabled},
+	}}
+	return service.NewRegistry(cfgs)
+}
+
+// piiJSONRequest builds a POST /v1/chat/completions request with the given message content.
+func piiJSONRequest(content string) *http.Request {
+	body := `{"model":"gpt-4o","messages":[{"role":"user","content":"` + content + `"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	return req
+}
+
+// TestSyncHandler_Guardrails_PII_Blocked verifies that a request containing a
+// recognised PII pattern (email) is rejected with 400 when guardrails.pii is true.
+func TestSyncHandler_Guardrails_PII_Blocked(t *testing.T) {
+	backendCalled := false
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backendCalled = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	reg := buildLLMRegistry(backend.URL, true)
+	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, buildLLMHandler(backend.URL))
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, piiJSONRequest("Mon email est alice@example.com"))
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for PII request, got %d", w.Code)
+	}
+	if backendCalled {
+		t.Error("backend must not be called when PII is detected")
+	}
+	if !strings.Contains(w.Body.String(), "PII detected") {
+		t.Errorf("expected 'PII detected' in body, got: %s", w.Body.String())
+	}
+}
+
+// TestSyncHandler_Guardrails_PII_Disabled_AllowsThrough verifies that PII content
+// passes through unchanged when guardrails.pii is false.
+func TestSyncHandler_Guardrails_PII_Disabled_AllowsThrough(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"ok"}}],"usage":{}}`)
+	}))
+	defer backend.Close()
+
+	reg := buildLLMRegistry(backend.URL, false) // PII disabled
+	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, buildLLMHandler(backend.URL))
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, piiJSONRequest("Mon email est alice@example.com"))
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 when PII guard is off, got %d", w.Code)
+	}
+}
+
+// TestSyncHandler_Guardrails_NoPII_PassesThrough verifies that a clean request is
+// not blocked when guardrails.pii is enabled.
+func TestSyncHandler_Guardrails_NoPII_PassesThrough(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"ok"}}],"usage":{}}`)
+	}))
+	defer backend.Close()
+
+	reg := buildLLMRegistry(backend.URL, true) // PII enabled
+	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, buildLLMHandler(backend.URL))
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, piiJSONRequest("Quelle est la capitale de la France ?"))
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 for clean request, got %d", w.Code)
+	}
+}
+
+// TestSyncHandler_Guardrails_PII_MetricIncremented verifies that the Prometheus
+// counter is incremented exactly once when a PII-containing request is blocked.
+func TestSyncHandler_Guardrails_PII_MetricIncremented(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	reg := buildLLMRegistry(backend.URL, true)
+	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, buildLLMHandler(backend.URL))
+
+	counter := metrics.GuardrailsPiiBlockedTotal.WithLabelValues("llm", "gpt-4o")
+	before := testutil.ToFloat64(counter)
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, piiJSONRequest("IBAN: FR7630006000011234567890189"))
+
+	after := testutil.ToFloat64(counter)
+	if after-before != 1 {
+		t.Errorf("expected counter to increment by 1, got delta %.0f", after-before)
+	}
+}
+
+// TestSyncHandler_Guardrails_ConsumerHeader_LoggedOnBlock verifies that the consumer
+// header value is available for logging when a request is blocked by the guardrail.
+func TestSyncHandler_Guardrails_ConsumerHeader_LoggedOnBlock(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	reg := buildLLMRegistry(backend.URL, true)
+	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "X-Consumer-Username", nil, buildLLMHandler(backend.URL))
+
+	req := piiJSONRequest("Tel: 0612345678")
+	req.Header.Set("X-Consumer-Username", "alice")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+// ── X-RateLimit header tests ──────────────────────────────────────────────────
+
+// TestSyncHandler_RateLimitHeaders_SetOnAllowedRequest verifies that
+// X-RateLimit-{Limit,Remaining,Reset} headers are present on allowed requests.
+func TestSyncHandler_RateLimitHeaders_SetOnAllowedRequest(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"choices":[],"usage":{}}`)
+	}))
+	defer upstream.Close()
+
+	cfgs := []config.ServiceConfig{{
+		Type:  "transcription",
+		Model: "whisper-large-v3",
+		Operations: map[string][]string{
+			"transcription": {"/v1/audio/transcriptions"},
+		},
+		InferenceURL: upstream.URL,
+	}}
+	reg := service.NewRegistry(cfgs)
+
+	rl := &mockRateLimiter{result: ratelimit.CheckResult{
+		Allowed:    true,
+		Limit:      10,
+		Remaining:  9,
+		ResetAfter: 30 * time.Second,
+	}}
+	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", rl, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions",
+		strings.NewReader(`{"model":"whisper-large-v3"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	for _, hdr := range []string{"X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"} {
+		if w.Header().Get(hdr) == "" {
+			t.Errorf("expected header %q to be set, but it was empty", hdr)
+		}
+	}
+	if got := w.Header().Get("X-RateLimit-Limit"); got != "10" {
+		t.Errorf("X-RateLimit-Limit: expected '10', got %q", got)
+	}
+	if got := w.Header().Get("X-RateLimit-Remaining"); got != "9" {
+		t.Errorf("X-RateLimit-Remaining: expected '9', got %q", got)
+	}
+	// Reset must be a unix timestamp in the future.
+	resetStr := w.Header().Get("X-RateLimit-Reset")
+	resetTs, err := strconv.ParseInt(resetStr, 10, 64)
+	if err != nil {
+		t.Fatalf("X-RateLimit-Reset %q is not a valid int64: %v", resetStr, err)
+	}
+	if resetTs <= time.Now().Unix() {
+		t.Errorf("X-RateLimit-Reset %d should be in the future", resetTs)
+	}
+}
+
+// TestSyncHandler_RateLimitHeaders_SetOnRejectedRequest verifies that
+// all three X-RateLimit-* headers plus Retry-After are set on 429 responses.
+func TestSyncHandler_RateLimitHeaders_SetOnRejectedRequest(t *testing.T) {
+	cfgs := []config.ServiceConfig{{
+		Type:  "transcription",
+		Model: "whisper-large-v3",
+		Operations: map[string][]string{
+			"transcription": {"/v1/audio/transcriptions"},
+		},
+		InferenceURL: "http://should-not-be-called.example.com",
+	}}
+	reg := service.NewRegistry(cfgs)
+
+	rl := &mockRateLimiter{result: ratelimit.CheckResult{
+		Allowed:    false,
+		Limit:      5,
+		Remaining:  0,
+		ResetAfter: 45 * time.Second,
+	}}
+	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", rl, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions",
+		strings.NewReader(`{"model":"whisper-large-v3"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusTooManyRequests {
+		t.Errorf("expected 429, got %d", w.Code)
+	}
+	for _, hdr := range []string{"X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset", "Retry-After"} {
+		if w.Header().Get(hdr) == "" {
+			t.Errorf("expected header %q to be set on 429, but it was empty", hdr)
+		}
+	}
+	if got := w.Header().Get("X-RateLimit-Limit"); got != "5" {
+		t.Errorf("X-RateLimit-Limit: expected '5', got %q", got)
+	}
+	if got := w.Header().Get("X-RateLimit-Remaining"); got != "0" {
+		t.Errorf("X-RateLimit-Remaining: expected '0', got %q", got)
+	}
+}
+
+// TestSyncHandler_RateLimitHeaders_AbsentWhenNoLimiter verifies that no
+// X-RateLimit-* headers are set when the rate limiter is not configured.
+func TestSyncHandler_RateLimitHeaders_AbsentWhenNoLimiter(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"choices":[],"usage":{}}`)
+	}))
+	defer upstream.Close()
+
+	cfgs := []config.ServiceConfig{{
+		Type:  "transcription",
+		Model: "whisper-large-v3",
+		Operations: map[string][]string{
+			"transcription": {"/v1/audio/transcriptions"},
+		},
+		InferenceURL: upstream.URL,
+	}}
+	reg := service.NewRegistry(cfgs)
+
+	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, nil) // nil limiter
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions",
+		strings.NewReader(`{"model":"whisper-large-v3"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	for _, hdr := range []string{"X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"} {
+		if v := w.Header().Get(hdr); v != "" {
+			t.Errorf("expected header %q to be absent without limiter, got %q", hdr, v)
+		}
 	}
 }

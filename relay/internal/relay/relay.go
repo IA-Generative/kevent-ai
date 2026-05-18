@@ -20,6 +20,16 @@ import (
 	"kevent/relay/internal/storage"
 )
 
+type objectStore interface {
+	GetObject(ctx context.Context, key string) (io.ReadCloser, int64, string, error)
+	PutObject(ctx context.Context, key string, body io.Reader, size int64, contentType string) error
+	DeleteObject(ctx context.Context, key string) error
+}
+
+type eventPublisher interface {
+	PublishResultEvent(ctx context.Context, topic string, event *model.ResultEvent) error
+}
+
 // Dispatcher handles incoming CloudEvent HTTP requests from KafkaSource.
 //
 // En tant que sidecar, le handler est synchrone : il bloque jusqu'à la fin du
@@ -28,8 +38,8 @@ import (
 // containerConcurrency dans le Knative Service spec contrôle la concurrence max.
 type Dispatcher struct {
 	adapter      adapter.Adapter
-	s3           *storage.S3Client
-	publisher    *kafka.Publisher
+	s3           objectStore
+	publisher    eventPublisher
 	resultTopic  string
 	syncPriority atomic.Int32 // number of sync jobs currently in progress
 }
@@ -118,7 +128,17 @@ func (d *Dispatcher) process(ctx context.Context, event *model.InputEvent) error
 
 	body, size, contentType, err := d.s3.GetObject(ctx, event.InputRef)
 	if err != nil {
-		// Erreur transitoire : pas de ResultEvent, KafkaSource retentera.
+		if storage.IsNotFound(err) {
+			// Input file no longer exists — permanent failure. Publishing a
+			// ResultEvent stops KafkaSource from retrying indefinitely.
+			log.Error("input file not found, publishing permanent failure", "input_ref", event.InputRef)
+			metrics.JobsTotal.WithLabelValues(event.ServiceType, "failed").Inc()
+			if perr := d.publishFailure(context.Background(), event, "input file not found: "+event.InputRef); perr != nil {
+				return fmt.Errorf("publishing not-found failure event: %w", perr)
+			}
+			return nil
+		}
+		// Transient error (network, S3 unavailable): let KafkaSource retry.
 		return fmt.Errorf("s3 get: %w", err)
 	}
 	defer body.Close()

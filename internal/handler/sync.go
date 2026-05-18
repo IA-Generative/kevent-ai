@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"kevent/gateway/internal/guardrails"
 	"kevent/gateway/internal/llmproxy"
 	"kevent/gateway/internal/metrics"
 	"kevent/gateway/internal/model"
@@ -70,6 +71,7 @@ type SyncHandler struct {
 	consumerHeader string            // HTTP header identifying the API consumer (e.g. "X-Consumer-Username")
 	rateLimiter    ratelimit.Checker // nil = no rate limiting
 	llm            *llmproxy.Handler // nil when no LLM services are configured
+	piiChecker     *guardrails.Checker // nil = PII scanning disabled globally
 	retryBackoff   time.Duration     // initial backoff between retry cycles; default 500ms
 }
 
@@ -90,6 +92,7 @@ func NewSyncHandler(
 		consumerHeader: consumerHeader,
 		rateLimiter:    rateLimiter,
 		llm:            llm,
+		piiChecker:     guardrails.New(),
 		// Generous timeout for direct-proxy path; Knative timeoutSeconds is the
 		// real ceiling for the sync-over-Kafka path (controlled by context).
 		httpClient:   &http.Client{Timeout: 15 * time.Minute},
@@ -142,13 +145,16 @@ func (h *SyncHandler) handleMultipart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.rateLimiter != nil {
-		allowed, retryAfter, err := h.rateLimiter.Check(r.Context(), r, def.Type)
+		rl, err := h.rateLimiter.Check(r.Context(), r, def.Type)
 		if err != nil {
 			slog.ErrorContext(r.Context(), "rate limit check failed", "error", err)
-		} else if !allowed {
-			w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter.Seconds())))
-			writeError(w, http.StatusTooManyRequests, "rate limit exceeded")
-			return
+		} else {
+			setRateLimitHeaders(w, rl)
+			if !rl.Allowed {
+				w.Header().Set("Retry-After", strconv.Itoa(int(rl.ResetAfter.Seconds())))
+				writeError(w, http.StatusTooManyRequests, "rate limit exceeded")
+				return
+			}
 		}
 	}
 
@@ -195,18 +201,38 @@ func (h *SyncHandler) handleJSON(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.rateLimiter != nil {
-		allowed, retryAfter, err := h.rateLimiter.Check(r.Context(), r, def.Type)
+		rl, err := h.rateLimiter.Check(r.Context(), r, def.Type)
 		if err != nil {
 			slog.ErrorContext(r.Context(), "rate limit check failed", "error", err)
-		} else if !allowed {
-			w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter.Seconds())))
-			writeError(w, http.StatusTooManyRequests, "rate limit exceeded")
-			return
+		} else {
+			setRateLimitHeaders(w, rl)
+			if !rl.Allowed {
+				w.Header().Set("Retry-After", strconv.Itoa(int(rl.ResetAfter.Seconds())))
+				writeError(w, http.StatusTooManyRequests, "rate limit exceeded")
+				return
+			}
 		}
 	}
 
 	// JSON requests: route through LLM proxy if configured, else direct proxy.
 	if h.llm != nil && def.IsLLM() {
+		if def.GuardrailsPII && h.piiChecker != nil {
+			if violations := h.piiChecker.Check(raw); len(violations) > 0 {
+				consumer := ""
+				if h.consumerHeader != "" {
+					consumer = r.Header.Get(h.consumerHeader)
+				}
+				slog.WarnContext(r.Context(), "llm request blocked: PII detected",
+					"service_type", def.Type,
+					"model", def.Model,
+					"consumer", consumer,
+					"violations", violations,
+				)
+				metrics.GuardrailsPiiBlockedTotal.WithLabelValues(def.Type, def.Model).Inc()
+				writeError(w, http.StatusBadRequest, "PII detected: "+strings.Join(violations, ", "))
+				return
+			}
+		}
 		start := time.Now()
 		consumer := ""
 		if h.consumerHeader != "" {
@@ -324,6 +350,24 @@ func (h *SyncHandler) handleMultipartViaKafka(w http.ResponseWriter, r *http.Req
 		metrics.JobsByConsumerTotal.WithLabelValues("sync", def.Type, def.Model, consumerName).Inc()
 	}
 
+	// Cleanup fires on ALL return paths (success, business failure, S3 error, timeout).
+	// resultRef is empty until GetJob succeeds; on timeout the relay result file (if any)
+	// is left in S3 and collected by the bucket lifecycle rule.
+	var resultRef string
+	defer func() {
+		go func() {
+			ctx := context.Background()
+			if resultRef != "" {
+				if err := h.s3.DeleteObject(ctx, resultRef); err != nil {
+					slog.Error("failed to delete sync result", "job_id", jobID, "error", err)
+				}
+			}
+			if err := h.redis.DeleteJob(ctx, jobID); err != nil {
+				slog.Error("failed to delete sync job record", "job_id", jobID, "error", err)
+			}
+		}()
+	}()
+
 	// committed tracks whether we have already sent the 200 + headers to the
 	// client. Once committed, WriteHeader calls are no-ops in HTTP/1.1, so errors
 	// can only be reported in the body. For fast inferences (< 20 s) we stay
@@ -375,23 +419,7 @@ waitLoop:
 		writeError(w, http.StatusInternalServerError, "failed to retrieve job")
 		return
 	}
-
-	// Cleanup lancé en goroutine quel que soit le chemin de sortie (succès,
-	// échec métier, erreur S3). Sans defer, les early-returns laissaient
-	// result.json et l'entrée Redis orphelins.
-	defer func() {
-		go func() {
-			ctx := context.Background()
-			if job.ResultRef != "" {
-				if err := h.s3.DeleteObject(ctx, job.ResultRef); err != nil {
-					slog.Error("failed to delete sync result", "job_id", jobID, "error", err)
-				}
-			}
-			if err := h.redis.DeleteJob(ctx, jobID); err != nil {
-				slog.Error("failed to delete sync job record", "job_id", jobID, "error", err)
-			}
-		}()
-	}()
+	resultRef = job.ResultRef
 
 	if job.Status == model.JobStatusFailed {
 		metrics.RequestsTotal.WithLabelValues("sync", def.Type, def.Model, "422").Inc()

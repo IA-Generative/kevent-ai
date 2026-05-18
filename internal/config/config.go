@@ -17,11 +17,22 @@ type Config struct {
 	Services   []ServiceConfig                       `yaml:"services"`
 	Encryption EncryptionConfig                      `yaml:"encryption"`
 	Metrics    MetricsConfig                         `yaml:"metrics"`
+	AuditLog   AuditLogConfig                        `yaml:"audit_log"`
 	// RateLimits maps service type → user type → limit.
 	// User type "*" is the fallback applied when the user_type_header is absent
 	// or the specific type has no entry.
 	// Leave empty to disable rate limiting.
 	RateLimits map[string]map[string]RateLimitConfig `yaml:"rate_limits"`
+}
+
+// AuditLogConfig controls structured per-request audit logging for LLM requests.
+// Disabled by default to avoid unexpected log volume.
+type AuditLogConfig struct {
+	// Enabled activates a structured slog record for every LLM request.
+	Enabled bool `yaml:"enabled"`
+	// Prompt includes the raw request body in the log entry when true.
+	// Opt-in only — the body may contain PII.
+	Prompt bool `yaml:"prompt"`
 }
 
 // RateLimitConfig defines the allowed request rate for a (service, user-type) pair.
@@ -105,10 +116,11 @@ type S3Config struct {
 }
 
 type RedisConfig struct {
-	Addr     string `yaml:"addr"`
-	Password string `yaml:"password"`
-	DB       int    `yaml:"db"`
-	JobTTLH  int    `yaml:"job_ttl_hours"`
+	Addr           string `yaml:"addr"`
+	Password       string `yaml:"password"`
+	DB             int    `yaml:"db"`
+	JobTTLH        int    `yaml:"job_ttl_hours"`
+	PendingMaxAgeH int    `yaml:"pending_max_age_hours"` // 0 = GC disabled
 }
 
 // BackendConfig describes one backend in a multi-backend list.
@@ -191,7 +203,16 @@ type ServiceConfig struct {
 	// backends return a network error or a 5xx response. 0 = no retry (default).
 	// Only applies to the sync-direct proxy path (not Kafka-based flows).
 	// A 500ms exponential backoff is applied between each cycle.
-	Retries int `yaml:"retries"`
+	Retries    int              `yaml:"retries"`
+	Guardrails GuardrailsConfig `yaml:"guardrails"`
+}
+
+// GuardrailsConfig controls PII detection for a service's LLM requests.
+type GuardrailsConfig struct {
+	// PII enables scanning of message content for personally identifiable
+	// information (email, French phone numbers, IBAN, credit cards, SIREN/SIRET).
+	// Requests with detected PII are rejected with HTTP 400.
+	PII bool `yaml:"pii"`
 }
 
 // Load reads and validates the YAML config file at path.
@@ -249,6 +270,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Redis.JobTTLH == 0 {
 		c.Redis.JobTTLH = 72
+	}
+	if c.Redis.PendingMaxAgeH == 0 {
+		c.Redis.PendingMaxAgeH = 2
 	}
 	for i := range c.Services {
 		if c.Services[i].MaxFileSizeMB == 0 {

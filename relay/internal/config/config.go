@@ -32,8 +32,14 @@ type InferenceConfig struct {
 	ExtraFields map[string]string `yaml:"extra_fields"`
 }
 
+// TimeoutDuration returns the configured inference timeout.
+// "0" or "0s" means no timeout (http.Client.Timeout = 0).
+// Invalid or absent values fall back to 300s.
 func (c InferenceConfig) TimeoutDuration() time.Duration {
-	if d, err := time.ParseDuration(c.Timeout); err == nil && d > 0 {
+	if d, err := time.ParseDuration(c.Timeout); err == nil {
+		if d <= 0 {
+			return 0
+		}
 		return d
 	}
 	return 300 * time.Second

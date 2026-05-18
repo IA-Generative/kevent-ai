@@ -24,7 +24,8 @@ func GenerateSpec(reg *service.Registry, appVersion string) []byte {
 	sort.Strings(serviceTypes)
 
 	paths["/jobs/{service_type}"] = submitJobPathItem(serviceTypes, reg)
-	paths["/jobs/{service_type}/{id}"] = getJobPathItem(serviceTypes)
+	paths["/jobs/{service_type}/{id}"] = jobByIDPathItem(serviceTypes)
+	paths["/-/jobs/purge"] = purgeJobsPathItem()
 
 	if reg.HasSyncServices() {
 		paths["/v1/models"] = listModelsPathItem()
@@ -253,24 +254,26 @@ func submitJobPathItem(serviceTypes []string, reg *service.Registry) map[string]
 	}
 }
 
-func getJobPathItem(serviceTypes []string) map[string]any {
+// jobByIDPathItem returns the combined GET + DELETE path item for /jobs/{service_type}/{id}.
+func jobByIDPathItem(serviceTypes []string) map[string]any {
+	pathParams := []any{
+		map[string]any{
+			"name": "service_type", "in": "path", "required": true,
+			"schema": map[string]any{"type": "string", "enum": serviceTypes},
+		},
+		map[string]any{
+			"name": "id", "in": "path", "required": true,
+			"schema":  map[string]any{"type": "string", "format": "uuid"},
+			"example": "550e8400-e29b-41d4-a716-446655440000",
+		},
+	}
 	return map[string]any{
 		"get": map[string]any{
 			"tags":        []string{"Jobs"},
 			"summary":     "Get job status and result",
 			"operationId": "getJob",
 			"description": "Returns the current status of a job. When `completed`, the result is inlined.\n\n**The result file is deleted after this call** — subsequent calls return 404.",
-			"parameters": []any{
-				map[string]any{
-					"name": "service_type", "in": "path", "required": true,
-					"schema": map[string]any{"type": "string", "enum": serviceTypes},
-				},
-				map[string]any{
-					"name": "id", "in": "path", "required": true,
-					"schema":  map[string]any{"type": "string", "format": "uuid"},
-					"example": "550e8400-e29b-41d4-a716-446655440000",
-				},
-			},
+			"parameters":  pathParams,
 			"responses": map[string]any{
 				"200": map[string]any{
 					"description": "Job found",
@@ -281,6 +284,69 @@ func getJobPathItem(serviceTypes []string) map[string]any {
 					},
 				},
 				"404": map[string]any{"$ref": "#/components/responses/NotFound"},
+			},
+		},
+		"delete": map[string]any{
+			"tags":        []string{"Jobs"},
+			"summary":     "Cancel a job",
+			"operationId": "cancelJob",
+			"description": "Cancels a pending job and deletes its input file from S3. Returns 409 if the job is not in `pending` state: once the relay has started inference (`processing`, `completed`, or `failed`), cancellation is not allowed.\n\nApplies the same consumer ownership check as GET: if `consumer_header` is configured and present, only the owning consumer can cancel.",
+			"parameters":  pathParams,
+			"responses": map[string]any{
+				"204": map[string]any{"description": "Job cancelled"},
+				"404": map[string]any{"$ref": "#/components/responses/NotFound"},
+				"409": map[string]any{
+					"description": "Job is not cancellable in its current state",
+					"content": map[string]any{
+						"application/json": map[string]any{"schema": map[string]any{"$ref": "#/components/schemas/Error"}},
+					},
+				},
+			},
+		},
+	}
+}
+
+func purgeJobsPathItem() map[string]any {
+	return map[string]any{
+		"post": map[string]any{
+			"tags":        []string{"Jobs"},
+			"summary":     "Admin: purge stale pending jobs",
+			"operationId": "purgeJobs",
+			"description": "Deletes pending jobs older than `older_than`. Also cleans up their S3 input files. Restricted to the `/-/` admin namespace — protect with upstream auth.\n\nIf `truncated=true` in the response, there are more matching jobs — call again until `truncated=false` to fully drain the queue.\n\n**Example:** `POST /-/jobs/purge?older_than=2h&limit=200`",
+			"parameters": []any{
+				map[string]any{
+					"name":        "older_than",
+					"in":          "query",
+					"required":    true,
+					"description": "Minimum age of jobs to purge, as a Go duration string (e.g. `2h`, `30m`)",
+					"schema":      map[string]any{"type": "string", "example": "2h"},
+				},
+				map[string]any{
+					"name":        "limit",
+					"in":          "query",
+					"required":    false,
+					"description": "Maximum number of jobs to delete per call (default 500). Call repeatedly until `truncated=false` to fully drain.",
+					"schema":      map[string]any{"type": "integer", "default": 500, "minimum": 1},
+				},
+			},
+			"responses": map[string]any{
+				"200": map[string]any{
+					"description": "Purge result",
+					"content": map[string]any{
+						"application/json": map[string]any{
+							"schema": map[string]any{
+								"type": "object",
+								"properties": map[string]any{
+									"older_than": map[string]any{"type": "string", "example": "2h"},
+									"found":      map[string]any{"type": "integer", "description": "Jobs matched (capped at limit)"},
+									"purged":     map[string]any{"type": "integer", "description": "Jobs successfully deleted"},
+									"truncated":  map[string]any{"type": "boolean", "description": "True when more matching jobs exist beyond the limit"},
+								},
+							},
+						},
+					},
+				},
+				"400": map[string]any{"$ref": "#/components/responses/BadRequest"},
 			},
 		},
 	}
@@ -477,10 +543,14 @@ func specComponents() map[string]any {
 					"service_type": map[string]any{"type": "string"},
 					"model":        map[string]any{"type": "string"},
 					"status":       map[string]any{"$ref": "#/components/schemas/JobStatus"},
-					"result":       map[string]any{"type": "object", "description": "Inline result payload — present only when status is `completed`"},
-					"error":        map[string]any{"type": "string", "description": "Error message — present only when status is `failed`"},
-					"created_at":   map[string]any{"type": "string", "format": "date-time"},
-					"updated_at":   map[string]any{"type": "string", "format": "date-time"},
+					"queue_position": map[string]any{
+						"type":        "integer",
+						"description": "1-indexed position in the model queue. Present only when status is `pending`.",
+					},
+					"result":     map[string]any{"type": "object", "description": "Inline result payload — present only when status is `completed`"},
+					"error":      map[string]any{"type": "string", "description": "Error message — present only when status is `failed`"},
+					"created_at": map[string]any{"type": "string", "format": "date-time"},
+					"updated_at": map[string]any{"type": "string", "format": "date-time"},
 				},
 			},
 			"JobStatus": map[string]any{

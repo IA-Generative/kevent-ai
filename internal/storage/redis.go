@@ -226,12 +226,17 @@ func (r *RedisClient) ListJobsByConsumer(ctx context.Context, consumer string, l
 
 // updateJobScript atomically reads a job JSON, patches status/result_ref/error/updated_at,
 // and re-writes it with the same TTL — avoiding the read-modify-write race of GetJob+SaveJob.
+// Terminal states (completed, failed) are never overwritten: a relay that finishes processing
+// a job that was already marked stale by the GC is silently discarded.
 var updateJobScript = redis.NewScript(`
 local data = redis.call('GET', KEYS[1])
 if not data then
     return redis.error_reply('job not found: ' .. KEYS[1])
 end
 local job = cjson.decode(data)
+if job['status'] == 'completed' or job['status'] == 'failed' then
+    return redis.status_reply('OK')
+end
 job['status']     = ARGV[1]
 job['result_ref'] = ARGV[2]
 job['error']      = ARGV[3]
@@ -276,6 +281,89 @@ func (r *RedisClient) UpdateJobResult(ctx context.Context, jobID string, status 
 		return fmt.Errorf("updating job %q in redis: %w", jobID, err)
 	}
 	return nil
+}
+
+// scanStaleJobs returns all pending jobs whose queue score (creation Unix timestamp)
+// is older than cutoff. Used by both SweepStalePendingJobs and ListStalePendingJobs
+// to avoid duplicating the queue-scan + MGet logic.
+func (r *RedisClient) scanStaleJobs(ctx context.Context, cutoff string) ([]*model.Job, error) {
+	var queueKeys []string
+	iter := r.client.Scan(ctx, 0, "queue:*", 0).Iterator()
+	for iter.Next(ctx) {
+		queueKeys = append(queueKeys, iter.Val())
+	}
+	if err := iter.Err(); err != nil {
+		return nil, fmt.Errorf("scanning queue keys: %w", err)
+	}
+
+	var allIDs []string
+	for _, key := range queueKeys {
+		ids, err := r.client.ZRangeByScore(ctx, key, &redis.ZRangeBy{Min: "0", Max: cutoff}).Result()
+		if err != nil {
+			slog.Warn("failed to query stale jobs", "queue", key, "error", err)
+			continue
+		}
+		allIDs = append(allIDs, ids...)
+	}
+	if len(allIDs) == 0 {
+		return nil, nil
+	}
+
+	keys := make([]string, len(allIDs))
+	for i, id := range allIDs {
+		keys[i] = jobKey(id)
+	}
+	vals, err := r.client.MGet(ctx, keys...).Result()
+	if err != nil {
+		return nil, fmt.Errorf("fetching stale jobs: %w", err)
+	}
+
+	jobs := make([]*model.Job, 0, len(vals))
+	for i, v := range vals {
+		if v == nil {
+			continue
+		}
+		var job model.Job
+		if err := json.Unmarshal([]byte(v.(string)), &job); err != nil {
+			slog.Warn("skipping malformed job record during stale scan", "id", allIDs[i], "error", err)
+			continue
+		}
+		if job.Status != model.JobStatusPending {
+			continue
+		}
+		jobs = append(jobs, &job)
+	}
+	return jobs, nil
+}
+
+// SweepStalePendingJobs marks pending jobs older than maxAge as failed with
+// reason "stale: pending too long" and returns the swept jobs so the caller
+// can clean up their S3 input files. Called by the background GC goroutine.
+func (r *RedisClient) SweepStalePendingJobs(ctx context.Context, maxAge time.Duration) ([]*model.Job, error) {
+	cutoff := fmt.Sprintf("%d", time.Now().Add(-maxAge).Unix())
+
+	jobs, err := r.scanStaleJobs(ctx, cutoff)
+	if err != nil {
+		return nil, err
+	}
+
+	swept := jobs[:0]
+	for _, job := range jobs {
+		if err := r.UpdateJobResult(ctx, job.ID, model.JobStatusFailed, "", "stale: pending too long"); err != nil {
+			slog.Warn("failed to mark job stale", "job_id", job.ID, "error", err)
+			continue
+		}
+		swept = append(swept, job)
+		slog.Info("marked job stale", "job_id", job.ID, "model", job.Model)
+	}
+	return swept, nil
+}
+
+// ListStalePendingJobs returns all pending jobs older than olderThan.
+// Used by the admin purge endpoint to retrieve jobs before deletion.
+func (r *RedisClient) ListStalePendingJobs(ctx context.Context, olderThan time.Duration) ([]*model.Job, error) {
+	cutoff := fmt.Sprintf("%d", time.Now().Add(-olderThan).Unix())
+	return r.scanStaleJobs(ctx, cutoff)
 }
 
 // JobDoneSubscription is the interface returned by SubscribeJobDone.
