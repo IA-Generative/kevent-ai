@@ -13,8 +13,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
+	"kevent/gateway/internal/cache"
 	"kevent/gateway/internal/config"
 	"kevent/gateway/internal/handler"
+	"kevent/gateway/internal/llmproxy"
+	"kevent/gateway/internal/llmproxy/provider"
+	"kevent/gateway/internal/metrics"
 	"kevent/gateway/internal/model"
 	"kevent/gateway/internal/service"
 	"kevent/gateway/internal/storage"
@@ -738,5 +744,150 @@ func TestSyncHandler_Retry_NoRetryOn4xx(t *testing.T) {
 	}
 	if n := callCount.Load(); n != 1 {
 		t.Errorf("4xx must not trigger retry; backend called %d time(s)", n)
+	}
+}
+
+// ── Guardrails PII tests ──────────────────────────────────────────────────────
+
+// buildLLMHandler returns a minimal llmproxy.Handler wired to the given backend URL.
+func buildLLMHandler(backendURL string) *llmproxy.Handler {
+	return llmproxy.New(cache.NewNoop(), provider.NewRegistry(), &http.Client{Timeout: 5 * time.Second}, "", metrics.NoopTracker{})
+}
+
+// buildLLMRegistry returns a registry with a single openai LLM service,
+// with the PII guardrail enabled when piiEnabled is true.
+func buildLLMRegistry(backendURL string, piiEnabled bool) *service.Registry {
+	cfgs := []config.ServiceConfig{{
+		Type:     "llm",
+		Model:    "gpt-4o",
+		Provider: "openai",
+		Operations: map[string][]string{
+			"chat": {"/v1/chat/completions"},
+		},
+		InferenceURL: backendURL,
+		Backends:     []config.BackendConfig{{URL: backendURL, Weight: 1}},
+		Guardrails:   config.GuardrailsConfig{PII: piiEnabled},
+	}}
+	return service.NewRegistry(cfgs)
+}
+
+// piiJSONRequest builds a POST /v1/chat/completions request with the given message content.
+func piiJSONRequest(content string) *http.Request {
+	body := `{"model":"gpt-4o","messages":[{"role":"user","content":"` + content + `"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	return req
+}
+
+// TestSyncHandler_Guardrails_PII_Blocked verifies that a request containing a
+// recognised PII pattern (email) is rejected with 400 when guardrails.pii is true.
+func TestSyncHandler_Guardrails_PII_Blocked(t *testing.T) {
+	backendCalled := false
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backendCalled = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	reg := buildLLMRegistry(backend.URL, true)
+	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, buildLLMHandler(backend.URL))
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, piiJSONRequest("Mon email est alice@example.com"))
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for PII request, got %d", w.Code)
+	}
+	if backendCalled {
+		t.Error("backend must not be called when PII is detected")
+	}
+	if !strings.Contains(w.Body.String(), "PII detected") {
+		t.Errorf("expected 'PII detected' in body, got: %s", w.Body.String())
+	}
+}
+
+// TestSyncHandler_Guardrails_PII_Disabled_AllowsThrough verifies that PII content
+// passes through unchanged when guardrails.pii is false.
+func TestSyncHandler_Guardrails_PII_Disabled_AllowsThrough(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"ok"}}],"usage":{}}`)
+	}))
+	defer backend.Close()
+
+	reg := buildLLMRegistry(backend.URL, false) // PII disabled
+	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, buildLLMHandler(backend.URL))
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, piiJSONRequest("Mon email est alice@example.com"))
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 when PII guard is off, got %d", w.Code)
+	}
+}
+
+// TestSyncHandler_Guardrails_NoPII_PassesThrough verifies that a clean request is
+// not blocked when guardrails.pii is enabled.
+func TestSyncHandler_Guardrails_NoPII_PassesThrough(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"ok"}}],"usage":{}}`)
+	}))
+	defer backend.Close()
+
+	reg := buildLLMRegistry(backend.URL, true) // PII enabled
+	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, buildLLMHandler(backend.URL))
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, piiJSONRequest("Quelle est la capitale de la France ?"))
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 for clean request, got %d", w.Code)
+	}
+}
+
+// TestSyncHandler_Guardrails_PII_MetricIncremented verifies that the Prometheus
+// counter is incremented exactly once when a PII-containing request is blocked.
+func TestSyncHandler_Guardrails_PII_MetricIncremented(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	reg := buildLLMRegistry(backend.URL, true)
+	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, buildLLMHandler(backend.URL))
+
+	counter := metrics.GuardrailsPiiBlockedTotal.WithLabelValues("llm", "gpt-4o")
+	before := testutil.ToFloat64(counter)
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, piiJSONRequest("IBAN: FR7630006000011234567890189"))
+
+	after := testutil.ToFloat64(counter)
+	if after-before != 1 {
+		t.Errorf("expected counter to increment by 1, got delta %.0f", after-before)
+	}
+}
+
+// TestSyncHandler_Guardrails_ConsumerHeader_LoggedOnBlock verifies that the consumer
+// header value is available for logging when a request is blocked by the guardrail.
+func TestSyncHandler_Guardrails_ConsumerHeader_LoggedOnBlock(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	reg := buildLLMRegistry(backend.URL, true)
+	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "X-Consumer-Username", nil, buildLLMHandler(backend.URL))
+
+	req := piiJSONRequest("Tel: 0612345678")
+	req.Header.Set("X-Consumer-Username", "alice")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
 	}
 }
