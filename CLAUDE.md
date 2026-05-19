@@ -59,7 +59,7 @@ Images:
 - Gateway:    `ghcr.io/ia-generative/kevent-ai/gateway:vX.Y.Z`
 - Relay: `ghcr.io/ia-generative/kevent-ai/relay:vX.Y.Z`
 
-Current tags: gateway `v0.9.0`, relay `v0.5.1`.
+Current tags: gateway `v0.10.0`, relay `v0.5.2`.
 
 ## Architecture
 

@@ -16,6 +16,45 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Gateway
 
+### [v0.10.0] — 2026-05-18
+
+#### Added
+
+**Async job endpoints** (`internal/handler/`, `internal/storage/`)
+- `GET /jobs` — list jobs for the authenticated consumer (requires `consumer_header`), paginated (`limit`, `offset`), most-recent-first; includes `queue_position` for pending jobs
+- `GET /jobs/{service_type}/{id}` — job status with `queue_position`, `result_ref`, `error`
+- `DELETE /jobs/{service_type}/{id}` — cancel a pending job; returns 409 if already processing or terminal
+- `POST /-/jobs/purge?older_than=<duration>[&limit=N]` — admin purge of stale pending jobs with S3 cleanup; supports pagination via `limit` + `truncated` response field
+
+**Guardrails PII** (`internal/guardrails/`)
+- PII detection for LLM JSON requests: email, phone FR, IBAN, credit card, SIREN/SIRET patterns
+- Enabled per service via `guardrails.pii: true` in config
+- Blocked requests logged as security events (`slog.Warn`, `level=WARN`)
+- New Prometheus counter `kevent_guardrails_pii_blocked_total{service_type, model}`
+
+**Audit trail** (`internal/llmproxy/`)
+- Structured `slog` log per LLM request: `service_type`, `model`, `backend_model`, `provider`, `consumer`, `user_type`, `status`, `prompt_tokens`, `completion_tokens`, `cache_hit`, `duration_ms`, `backend_url`, `stream`
+- Opt-in via `audit_log.enabled: true`; prompt body logging via `audit_log.prompt: true` (PII risk — disabled by default)
+- New Grafana dashboard `kevent-audit-trail` (JSON in `dashboards/`)
+
+**X-RateLimit headers** (`internal/ratelimit/`, `internal/handler/`)
+- `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset` on every response (async submit and sync), not only on 429
+- `Check()` now returns `CheckResult{Allowed, Limit, Remaining, ResetAfter}` — replaces raw int return
+
+**`/v1/models` capabilities** (`internal/handler/models.go`)
+- Response enriched with `service_type`, `provider`, `capabilities` object: `supports_async`, `supports_sync`, `supports_streaming`, `accepted_formats`, `max_file_size_mb`, `operations`
+- Capabilities derived live from registry — no static config
+
+#### Fixed
+
+- **Sync orphaned jobs on timeout**: `defer DeleteJob` was registered after the wait-loop return, so 504 timeouts left jobs stuck as `pending` in Redis indefinitely. Defer now fires on all exit paths including timeout.
+- **Stale job scan status filter**: `scanStaleJobs` now filters `status == pending` to match `ListStalePendingJobs` / `AdminPurge` semantics.
+- Background GC (`SweepStalePendingJobs`): prevented ghost resurrection (job re-marked stale after completing); now cleans S3 input files on sweep.
+- Cancel restricted to `pending` only — returns 409 for processing/terminal states.
+- New Prometheus counter `kevent_async_stale_jobs_swept_total{model}` for GC activity.
+
+---
+
 ### [v0.9.0] — 2026-05-12
 
 #### Added
@@ -427,6 +466,16 @@ Versioning: each component is versioned independently — see tag conventions be
 ---
 
 ## Relay
+
+### [v0.5.2] — 2026-05-18
+
+#### Fixed
+
+- **S3 NoSuchKey permanent failure**: `GetObject` errors wrapping `*s3types.NoSuchKey` are now detected via `errors.As` (new `storage.IsNotFound` helper). A permanent failure ResultEvent is published immediately so the gateway stops waiting; KafkaSource does not retry. Previously the relay returned a transient error on every 404, causing an infinite retry loop.
+- **Inference context detach**: the inference HTTP call now uses `context.Background()` instead of the Knative request context. Knative's `timeoutSeconds` was cancelling in-flight inference calls, triggering an immediate KafkaSource retry on a job that was still running.
+- **`timeout: 0s`** now disables the inference HTTP client timeout entirely (previously treated as an invalid value).
+
+---
 
 ### [v0.5.1] — 2026-04-03
 
