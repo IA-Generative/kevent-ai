@@ -16,6 +16,17 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Gateway
 
+### [v0.11.1] — 2026-05-19
+
+#### Fixed
+
+**Async job result lifecycle** (`internal/handler/jobs.go`, `internal/kafka/consumer.go`, `config.yaml`)
+- `GET /jobs/{service_type}/{id}` no longer deletes the Redis record on first read — clients can poll or re-fetch within the TTL window without hitting a phantom 404
+- `job_ttl_hours` reduced from 72h to 24h — sufficient for any retry scenario without unnecessary memory overhead
+- Webhook path: S3 result file is now deleted after successful delivery, consistent with the polling path (previously leaked indefinitely)
+
+---
+
 ### [v0.10.0] — 2026-05-18
 
 #### Added

@@ -73,7 +73,7 @@ func buildRouter(
 	rl ratelimit.Checker,
 	llmHandler *llmproxy.Handler,
 ) *chi.Mux {
-	jobHandler := handler.NewJobHandler(reg, s3Client, redisClient, producer, cfg.Server.PriorityHeader, cfg.Server.ConsumerHeader, rl)
+	jobHandler := handler.NewJobHandler(reg, s3Client, redisClient, producer, cfg.Server.PriorityHeader, cfg.Server.ConsumerHeader, rl, cfg.Redis.JobTTLDuration())
 
 	r := chi.NewRouter()
 	r.Use(chimw.RequestID)

@@ -45,6 +45,7 @@ type JobHandler struct {
 	priorityHeader string        // HTTP header that triggers high-priority routing (e.g. "X-Priority")
 	consumerHeader string        // HTTP header identifying the API consumer (e.g. "X-Consumer-Username")
 	rateLimiter    ratelimit.Checker // nil = no rate limiting
+	jobTTL         time.Duration     // 0 = immediate cleanup on first read; >0 = keep until TTL
 }
 
 func NewJobHandler(
@@ -55,8 +56,9 @@ func NewJobHandler(
 	priorityHeader string,
 	consumerHeader string,
 	rateLimiter ratelimit.Checker,
+	jobTTL time.Duration,
 ) *JobHandler {
-	return &JobHandler{registry, store, redis, producer, priorityHeader, consumerHeader, rateLimiter}
+	return &JobHandler{registry, store, redis, producer, priorityHeader, consumerHeader, rateLimiter, jobTTL}
 }
 
 // submitResponse is the 202 body returned after a successful job submission.
@@ -359,14 +361,16 @@ func (h *JobHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 	enc.SetEscapeHTML(false)
 	_ = enc.Encode(resp)
 
-	// Clean up after delivering the result: delete the S3 file and Redis record.
-	// Uses a background context — the request context is already done by the time
-	// the goroutine runs.
-	if job.Status == model.JobStatusCompleted && job.ResultRef != "" {
+	// When job_ttl is set, both S3 result and Redis record persist until TTL —
+	// clients can re-fetch within that window. Without job_ttl, clean up immediately
+	// after delivery to minimise storage usage.
+	if job.Status == model.JobStatusCompleted && h.jobTTL == 0 {
 		go func(resultRef, jobID string) {
 			ctx := context.Background()
-			if err := h.store.DeleteObject(ctx, resultRef); err != nil {
-				slog.Error("failed to delete result file", "job_id", jobID, "result_ref", resultRef, "error", err)
+			if resultRef != "" {
+				if err := h.store.DeleteObject(ctx, resultRef); err != nil {
+					slog.Error("failed to delete result file", "job_id", jobID, "result_ref", resultRef, "error", err)
+				}
 			}
 			if err := h.redis.DeleteJob(ctx, jobID); err != nil {
 				slog.Error("failed to delete job record", "job_id", jobID, "error", err)

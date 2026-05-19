@@ -34,9 +34,15 @@ func NewRedis(cfg config.RedisConfig) (*RedisClient, error) {
 		return nil, fmt.Errorf("connecting to redis at %q: %w", cfg.Addr, err)
 	}
 
+	jobTTL := cfg.JobTTLDuration()
+	if jobTTL == 0 {
+		// Immediate-cleanup mode: records are deleted on first read, but we still
+		// need a short TTL as safety net for orphaned/unread records.
+		jobTTL = 2 * time.Hour
+	}
 	return &RedisClient{
 		client: rdb,
-		jobTTL: time.Duration(cfg.JobTTLH) * time.Hour,
+		jobTTL: jobTTL,
 	}, nil
 }
 

@@ -119,8 +119,17 @@ type RedisConfig struct {
 	Addr           string `yaml:"addr"`
 	Password       string `yaml:"password"`
 	DB             int    `yaml:"db"`
-	JobTTLH        int    `yaml:"job_ttl_hours"`
+	JobTTL         string `yaml:"job_ttl"`              // duration, e.g. "24h"; empty = immediate cleanup on first read
 	PendingMaxAgeH int    `yaml:"pending_max_age_hours"` // 0 = GC disabled
+}
+
+// JobTTLDuration returns the configured job TTL.
+// Returns 0 when not set — callers interpret 0 as "immediate cleanup" mode.
+func (r RedisConfig) JobTTLDuration() time.Duration {
+	if d, err := time.ParseDuration(r.JobTTL); err == nil && d > 0 {
+		return d
+	}
+	return 0
 }
 
 // BackendConfig describes one backend in a multi-backend list.
@@ -267,9 +276,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Kafka.ConsumerGroup == "" {
 		c.Kafka.ConsumerGroup = "kevent-gateway"
-	}
-	if c.Redis.JobTTLH == 0 {
-		c.Redis.JobTTLH = 72
 	}
 	if c.Redis.PendingMaxAgeH == 0 {
 		c.Redis.PendingMaxAgeH = 2

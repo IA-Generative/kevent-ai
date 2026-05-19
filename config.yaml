@@ -51,7 +51,11 @@ redis:
   addr: "${REDIS_ADDR:-redis:6379}"
   password: "${REDIS_PASSWORD:-}"
   db: 0
-  job_ttl_hours: 72  # keep job records for 3 days
+  # job_ttl: duration to keep job records and S3 results after completion.
+  # When set, GET /jobs/{id} will not delete the result on first read — clients
+  # can re-fetch within this window. When unset, cleanup is immediate on first read.
+  # Example: "24h", "72h". Env override: JOB_TTL.
+  job_ttl: "${JOB_TTL:-}"
   # pending_max_age_hours: mark pending jobs as failed (reason: stale) after N hours with no relay pickup.
   # Set to 0 to disable the garbage collector. Default: 2h.
   # ⚠ Must be set LOWER than your S3 staging input TTL: the GC marks jobs failed

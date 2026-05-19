@@ -185,6 +185,14 @@ redis-ha:
 # ── Consumer token tracking ───────────────────────────────────────────────────
 # Suivi de la consommation LLM par consumer (kevent_llm_consumer_tokens_top).
 # Nécessite server.consumerHeader configuré. Indépendant du ServiceMonitor ci-dessous.
+# ── Redis ────────────────────────────────────────────────────────────────────
+redisConfig:
+  # Duration to keep job records and S3 results after completion.
+  # When set, GET /jobs/{id} does not delete the result on first read.
+  # When empty, cleanup is immediate on first read.
+  # Example: "24h", "72h"
+  jobTTL: ""
+
 metricsConfig:
   # Nombre de top consumers à exposer dans Prometheus (Redis sorted set, refresh 60s).
   # 0 = désactivé. Recommandé : 20–50.

@@ -254,6 +254,11 @@ func (cm *ConsumerManager) sendWebhook(job *model.Job) {
 			resp.Body.Close()
 			if resp.StatusCode < 500 {
 				cm.logger.Info("webhook delivered", "job_id", job.ID, "status_code", resp.StatusCode, "attempt", attempt)
+				if job.ResultRef != "" {
+					if derr := cm.s3.DeleteObject(context.Background(), job.ResultRef); derr != nil {
+						cm.logger.Error("webhook: failed to delete result file", "job_id", job.ID, "error", derr)
+					}
+				}
 				return
 			}
 			cm.logger.Warn("webhook server error", "job_id", job.ID, "status_code", resp.StatusCode, "attempt", attempt)

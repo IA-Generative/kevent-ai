@@ -43,7 +43,9 @@ data:
       addr:         "{{ include "kevent-gateway.redisAddr" . }}"
       password:     ""
       db:           0
-      job_ttl_hours: 72
+      {{- if .Values.redisConfig.jobTTL }}
+      job_ttl: "{{ .Values.redisConfig.jobTTL }}"
+      {{- end }}
 
     metrics:
       top_consumers: {{ .Values.metricsConfig.topConsumers | default 0 }}
