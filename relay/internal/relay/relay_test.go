@@ -61,6 +61,56 @@ func (p *mockPublisher) PublishResultEvent(_ context.Context, _ string, event *m
 	return p.err
 }
 
+// mockAdapterFunc lets tests control adapter behaviour per call.
+type mockAdapterFunc struct {
+	fn func(context.Context, adapter.CallInput) ([]byte, error)
+}
+
+func (a *mockAdapterFunc) Call(ctx context.Context, in adapter.CallInput) ([]byte, error) {
+	return a.fn(ctx, in)
+}
+
+// mockS3CallCounter tracks GetObject call count and returns a configurable error.
+type mockS3CallCounter struct {
+	getErrFn  func() error
+	putErr    error
+	deleteErr error
+	deleted   []string
+}
+
+func (m *mockS3CallCounter) GetObject(_ context.Context, _ string) (io.ReadCloser, int64, string, error) {
+	return nil, 0, "", m.getErrFn()
+}
+
+func (m *mockS3CallCounter) PutObject(_ context.Context, _ string, _ io.Reader, _ int64, _ string) error {
+	return m.putErr
+}
+
+func (m *mockS3CallCounter) DeleteObject(_ context.Context, key string) error {
+	m.deleted = append(m.deleted, key)
+	return m.deleteErr
+}
+
+// mockS3PutCounter lets tests control PutObject behaviour per call.
+type mockS3PutCounter struct {
+	getBody string
+	putFn   func() error
+	deleted []string
+}
+
+func (m *mockS3PutCounter) GetObject(_ context.Context, _ string) (io.ReadCloser, int64, string, error) {
+	return io.NopCloser(strings.NewReader(m.getBody)), int64(len(m.getBody)), "application/octet-stream", nil
+}
+
+func (m *mockS3PutCounter) PutObject(_ context.Context, _ string, _ io.Reader, _ int64, _ string) error {
+	return m.putFn()
+}
+
+func (m *mockS3PutCounter) DeleteObject(_ context.Context, key string) error {
+	m.deleted = append(m.deleted, key)
+	return nil
+}
+
 func newTestDispatcher(s3 objectStore, adp adapter.Adapter, pub eventPublisher) *Dispatcher {
 	return &Dispatcher{
 		adapter:     adp,
@@ -320,5 +370,91 @@ func TestProcess_S3NotFound_PublishFails_ReturnsError(t *testing.T) {
 	err := d.process(context.Background(), testEvent())
 	if err == nil {
 		t.Fatal("expected error when publish of permanent failure fails, got nil")
+	}
+}
+
+// TestProcess_InferenceTransientError_RetriesOnce verifies that a transient
+// inference failure (e.g. network glitch, endpoint restart) triggers one
+// immediate retry. The second attempt succeeds and a completed ResultEvent is
+// published — no KafkaSource retry needed.
+func TestProcess_InferenceTransientError_RetriesOnce(t *testing.T) {
+	s3 := &mockS3{getBody: "audio data"}
+	calls := 0
+	adp := &mockAdapterFunc{fn: func(_ context.Context, _ adapter.CallInput) ([]byte, error) {
+		calls++
+		if calls == 1 {
+			return nil, errors.New("connection reset by peer")
+		}
+		return []byte(`{"text":"hello"}`), nil
+	}}
+	pub := &mockPublisher{}
+
+	d := newTestDispatcher(s3, adp, pub)
+	err := d.process(context.Background(), testEvent())
+	if err != nil {
+		t.Fatalf("expected nil after successful retry, got: %v", err)
+	}
+	if calls != 2 {
+		t.Errorf("expected 2 adapter calls (1 fail + 1 retry), got %d", calls)
+	}
+	if len(pub.published) != 1 || pub.published[0].Status != model.JobStatusCompleted {
+		t.Errorf("expected one completed ResultEvent, got %v", pub.published)
+	}
+}
+
+// TestProcess_InferencePermanentError_NoRetry verifies that a not-found S3
+// error is NOT retried (the file is gone, retrying would be pointless).
+func TestProcess_InferencePermanentError_NoRetry(t *testing.T) {
+	noSuchKey := &s3types.NoSuchKey{}
+	calls := 0
+	s3 := &mockS3CallCounter{
+		getErrFn: func() error {
+			calls++
+			return fmt.Errorf("getting S3 object: %w", noSuchKey)
+		},
+	}
+	pub := &mockPublisher{}
+
+	d := newTestDispatcher(s3, &mockAdapter{}, pub)
+	err := d.process(context.Background(), testEvent())
+	if err != nil {
+		t.Fatalf("expected nil for not-found (permanent failure), got: %v", err)
+	}
+	if calls != 1 {
+		t.Errorf("expected exactly 1 GetObject call (no retry on not-found), got %d", calls)
+	}
+	if len(pub.published) != 1 || pub.published[0].Status != model.JobStatusFailed {
+		t.Errorf("expected one failed ResultEvent, got %v", pub.published)
+	}
+}
+
+// TestProcess_S3PutTransientError_RetriesOnce verifies that a transient S3
+// PutObject failure triggers one immediate retry before returning an error to
+// KafkaSource.
+func TestProcess_S3PutTransientError_RetriesOnce(t *testing.T) {
+	putCalls := 0
+	s3 := &mockS3PutCounter{
+		getBody: "audio data",
+		putFn: func() error {
+			putCalls++
+			if putCalls == 1 {
+				return errors.New("connection reset")
+			}
+			return nil
+		},
+	}
+	adp := &mockAdapter{result: []byte(`{"text":"hello"}`)}
+	pub := &mockPublisher{}
+
+	d := newTestDispatcher(s3, adp, pub)
+	err := d.process(context.Background(), testEvent())
+	if err != nil {
+		t.Fatalf("expected nil after successful s3 put retry, got: %v", err)
+	}
+	if putCalls != 2 {
+		t.Errorf("expected 2 PutObject calls (1 fail + 1 retry), got %d", putCalls)
+	}
+	if len(pub.published) != 1 || pub.published[0].Status != model.JobStatusCompleted {
+		t.Errorf("expected one completed ResultEvent, got %v", pub.published)
 	}
 }
