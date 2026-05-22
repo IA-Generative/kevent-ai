@@ -15,10 +15,11 @@ import (
 )
 
 const (
-	serviceAccountTokenPath = "/var/run/secrets/kubernetes.io/serviceaccount/token"
-	serviceAccountCAPath    = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
-	kubernetesAPIURL        = "https://kubernetes.default.svc"
-	deletionCostAnnotation  = "controller.kubernetes.io/pod-deletion-cost"
+	serviceAccountTokenPath     = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+	serviceAccountCAPath        = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+	serviceAccountNamespacePath = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+	kubernetesAPIURL            = "https://kubernetes.default.svc"
+	deletionCostAnnotation      = "controller.kubernetes.io/pod-deletion-cost"
 
 	// CostBusy is set while the relay is processing at least one job, making
 	// Kubernetes prefer other (idle) pods when the autoscaler scales down.
@@ -42,17 +43,32 @@ type PodAnnotator struct {
 }
 
 // New returns a PodAnnotator using the in-cluster service account. Returns nil
-// when running outside Kubernetes (missing POD_NAME/POD_NAMESPACE env vars or
-// service account token), in which case annotation management is disabled.
+// when running outside Kubernetes (no service account token), in which case
+// annotation management is disabled.
+//
+// Pod name is read from /etc/hostname (set by Kubernetes for every pod).
+// Namespace is read from the service account namespace file — no Downward API
+// env vars required, which avoids KServe ServingRuntime fieldRef restrictions.
 func New() *PodAnnotator {
-	namespace := os.Getenv("POD_NAMESPACE")
-	podName := os.Getenv("POD_NAME")
-	if namespace == "" || podName == "" {
-		slog.Info("pod-deletion-cost management disabled (POD_NAME/POD_NAMESPACE not set)")
-		return nil
-	}
 	if _, err := os.Stat(serviceAccountTokenPath); err != nil {
 		slog.Info("pod-deletion-cost management disabled (no service account token)")
+		return nil
+	}
+
+	podName, err := os.Hostname()
+	if err != nil || podName == "" {
+		slog.Info("pod-deletion-cost management disabled (cannot read hostname)", "error", err)
+		return nil
+	}
+
+	nsBytes, err := os.ReadFile(serviceAccountNamespacePath)
+	if err != nil {
+		slog.Info("pod-deletion-cost management disabled (cannot read namespace)", "error", err)
+		return nil
+	}
+	namespace := string(bytes.TrimSpace(nsBytes))
+	if namespace == "" {
+		slog.Info("pod-deletion-cost management disabled (empty namespace)")
 		return nil
 	}
 
