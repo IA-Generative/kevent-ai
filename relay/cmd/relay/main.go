@@ -68,6 +68,11 @@ func main() {
 	}
 
 	annotator := lifecycle.New()
+	if annotator != nil {
+		if err := annotator.SetDeletionCost(context.Background(), lifecycle.CostIdle); err != nil {
+			slog.Warn("failed to initialise pod deletion cost annotation", "error", err)
+		}
+	}
 	disp := relay.New(adp, s3Client, publisher, cfg.Service.ResultTopic, annotator)
 
 	inferenceHealthURL := strings.TrimRight(cfg.Inference.BaseURL, "/") + "/health"
