@@ -15,6 +15,7 @@ import (
 
 	"kevent/relay/internal/adapter"
 	"kevent/relay/internal/kafka"
+	"kevent/relay/internal/lifecycle"
 	"kevent/relay/internal/metrics"
 	"kevent/relay/internal/model"
 	"kevent/relay/internal/storage"
@@ -42,6 +43,8 @@ type Dispatcher struct {
 	publisher    eventPublisher
 	resultTopic  string
 	syncPriority atomic.Int32 // number of sync jobs currently in progress
+	activeJobs   atomic.Int32 // number of jobs currently being processed
+	annotator    *lifecycle.PodAnnotator
 }
 
 func New(
@@ -49,12 +52,14 @@ func New(
 	s3 *storage.S3Client,
 	pub *kafka.Publisher,
 	resultTopic string,
+	annotator *lifecycle.PodAnnotator,
 ) *Dispatcher {
 	return &Dispatcher{
 		adapter:     adp,
 		s3:          s3,
 		publisher:   pub,
 		resultTopic: resultTopic,
+		annotator:   annotator,
 	}
 }
 
@@ -100,6 +105,23 @@ func (d *Dispatcher) serveHTTP(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("event received", "job_id", event.JobID, "service_type", event.ServiceType, "input_ref", event.InputRef)
 
+	if d.activeJobs.Add(1) == 1 && d.annotator != nil {
+		go func() {
+			if err := d.annotator.SetDeletionCost(context.Background(), lifecycle.CostBusy); err != nil {
+				slog.Warn("failed to set pod deletion cost", "cost", lifecycle.CostBusy, "error", err)
+			}
+		}()
+	}
+	defer func() {
+		if d.activeJobs.Add(-1) == 0 && d.annotator != nil {
+			go func() {
+				if err := d.annotator.SetDeletionCost(context.Background(), lifecycle.CostIdle); err != nil {
+					slog.Warn("failed to set pod deletion cost", "cost", lifecycle.CostIdle, "error", err)
+				}
+			}()
+		}
+	}()
+
 	if err := d.process(r.Context(), event); err != nil {
 		slog.Error("transient error, letting KafkaSource retry", "job_id", event.JobID, "error", err)
 		http.Error(w, "transient error", http.StatusInternalServerError)
@@ -122,6 +144,13 @@ func (d *Dispatcher) serveHTTP(w http.ResponseWriter, r *http.Request) {
 // les pannes infrastructure (S3 indisponible, réseau) afin que KafkaSource
 // puisse retenter. Les échecs d'inférence sont publiés en ResultEvent et ne
 // génèrent pas d'erreur (le job est définitivement terminé, en échec).
+//
+// Stratégie de retry : chaque étape transiente (inférence, S3 put result,
+// Kafka publish result) est retentée une fois immédiatement avant de
+// déléguer à KafkaSource. Le retry inférence implique un nouveau téléchargement
+// du fichier depuis S3 (le stream S3 précédent est épuisé).
+// Le téléchargement initial (GetObject input) n'est pas retenté : une erreur
+// infra S3 à cette étape remonte directement à KafkaSource.
 func (d *Dispatcher) process(ctx context.Context, event *model.InputEvent) error {
 	log := slog.With("job_id", event.JobID, "service_type", event.ServiceType)
 	log.Info("processing job", "input_ref", event.InputRef)
@@ -129,8 +158,6 @@ func (d *Dispatcher) process(ctx context.Context, event *model.InputEvent) error
 	body, size, contentType, err := d.s3.GetObject(ctx, event.InputRef)
 	if err != nil {
 		if storage.IsNotFound(err) {
-			// Input file no longer exists — permanent failure. Publishing a
-			// ResultEvent stops KafkaSource from retrying indefinitely.
 			log.Error("input file not found, publishing permanent failure", "input_ref", event.InputRef)
 			metrics.JobsTotal.WithLabelValues(event.ServiceType, "failed").Inc()
 			if perr := d.publishFailure(context.Background(), event, "input file not found: "+event.InputRef); perr != nil {
@@ -138,7 +165,6 @@ func (d *Dispatcher) process(ctx context.Context, event *model.InputEvent) error
 			}
 			return nil
 		}
-		// Transient error (network, S3 unavailable): let KafkaSource retry.
 		return fmt.Errorf("s3 get: %w", err)
 	}
 	defer body.Close()
@@ -147,6 +173,67 @@ func (d *Dispatcher) process(ctx context.Context, event *model.InputEvent) error
 		metrics.InputSizeBytes.WithLabelValues(event.ServiceType).Observe(float64(size))
 	}
 
+	result, inferErr := d.runInference(ctx, event, body, size, contentType)
+	if inferErr != nil {
+		// Retry inference once immediately: re-download for a fresh stream.
+		log.Warn("inference attempt failed, retrying immediately", "error", inferErr)
+		body2, size2, ct2, getErr := d.s3.GetObject(ctx, event.InputRef)
+		if getErr != nil {
+			if storage.IsNotFound(getErr) {
+				log.Error("input file not found on inference retry, publishing permanent failure", "input_ref", event.InputRef)
+				metrics.JobsTotal.WithLabelValues(event.ServiceType, "failed").Inc()
+				if perr := d.publishFailure(context.Background(), event, "input file not found on retry: "+event.InputRef); perr != nil {
+					return fmt.Errorf("publishing not-found failure event: %w", perr)
+				}
+				return nil
+			}
+			return fmt.Errorf("s3 get on inference retry: %w", getErr)
+		}
+		defer body2.Close()
+		result, inferErr = d.runInference(ctx, event, body2, size2, ct2)
+	}
+
+	if inferErr != nil {
+		log.Error("inference failed", "error", inferErr)
+		metrics.JobsTotal.WithLabelValues(event.ServiceType, "failed").Inc()
+		if perr := d.publishFailure(context.Background(), event, fmt.Sprintf("inference: %v", inferErr)); perr != nil {
+			return fmt.Errorf("publishing failure event: %w", perr)
+		}
+		if derr := d.s3.DeleteObject(context.Background(), event.InputRef); derr != nil {
+			log.Error("failed to delete input file after failure", "input_ref", event.InputRef, "error", derr)
+		}
+		return nil
+	}
+
+	resultKey := event.JobID + "/result.json"
+	if err := d.s3.PutObject(ctx, resultKey, bytes.NewReader(result), int64(len(result)), "application/json"); err != nil {
+		log.Warn("s3 put attempt failed, retrying immediately", "error", err)
+		if err := d.s3.PutObject(ctx, resultKey, bytes.NewReader(result), int64(len(result)), "application/json"); err != nil {
+			return fmt.Errorf("s3 put: %w", err)
+		}
+	}
+
+	resultEvent := &model.ResultEvent{
+		JobID:       event.JobID,
+		ServiceType: event.ServiceType,
+		Status:      model.JobStatusCompleted,
+		ResultRef:   resultKey,
+		CompletedAt: time.Now().UTC(),
+	}
+	if err := d.publisher.PublishResultEvent(ctx, d.resultTopic, resultEvent); err != nil {
+		log.Warn("publish result attempt failed, retrying immediately", "error", err)
+		if err := d.publisher.PublishResultEvent(ctx, d.resultTopic, resultEvent); err != nil {
+			log.Error("failed to publish result event after retry", "error", err)
+		}
+	}
+
+	metrics.JobsTotal.WithLabelValues(event.ServiceType, "completed").Inc()
+	log.Info("job completed", "result_ref", resultKey)
+	return nil
+}
+
+// runInference calls the adapter and records timing metrics.
+func (d *Dispatcher) runInference(ctx context.Context, event *model.InputEvent, body io.Reader, size int64, contentType string) ([]byte, error) {
 	inferStart := time.Now()
 	result, err := d.adapter.Call(ctx, adapter.CallInput{
 		JobID:        event.JobID,
@@ -159,52 +246,7 @@ func (d *Dispatcher) process(ctx context.Context, event *model.InputEvent) error
 		Params:       event.Params,
 	})
 	metrics.InferenceDuration.WithLabelValues(event.ServiceType).Observe(time.Since(inferStart).Seconds())
-
-	if err != nil {
-		// Échec métier (modèle, fichier invalide…) : on publie le failure et on
-		// retourne nil pour que KafkaSource ne retente pas.
-		// Use context.Background() — ctx may already be cancelled (e.g. Knative
-		// timeoutSeconds exceeded) and we must still publish the failure result
-		// so the gateway does not wait indefinitely.
-		log.Error("inference failed", "error", err)
-		metrics.JobsTotal.WithLabelValues(event.ServiceType, "failed").Inc()
-		bgCtx := context.Background()
-		if perr := d.publishFailure(bgCtx, event, fmt.Sprintf("inference: %v", err)); perr != nil {
-			// Kafka unavailable: return an error so KafkaSource retries the job.
-			// The input file is kept in S3 so the retry can re-download it.
-			// On retry, inference will fail again and we'll attempt to publish
-			// the failure event once Kafka recovers.
-			return fmt.Errorf("publishing failure event: %w", perr)
-		}
-		if derr := d.s3.DeleteObject(bgCtx, event.InputRef); derr != nil {
-			log.Error("failed to delete input file after failure", "input_ref", event.InputRef, "error", derr)
-		}
-		return nil
-	}
-
-	resultKey := event.JobID + "/result.json"
-	if err := d.s3.PutObject(ctx, resultKey, bytes.NewReader(result), int64(len(result)), "application/json"); err != nil {
-		// Le résultat est en RAM et le job n'est pas encore commité : on laisse
-		// KafkaSource retenter pour qu'on puisse re-tenter le PutObject.
-		return fmt.Errorf("s3 put: %w", err)
-	}
-
-	resultEvent := &model.ResultEvent{
-		JobID:       event.JobID,
-		ServiceType: event.ServiceType,
-		Status:      model.JobStatusCompleted,
-		ResultRef:   resultKey,
-		CompletedAt: time.Now().UTC(),
-	}
-	if err := d.publisher.PublishResultEvent(ctx, d.resultTopic, resultEvent); err != nil {
-		// Le résultat est persisté en S3. On logue l'erreur mais on ne retente
-		// pas le job entier : le gateway pourra interroger S3 directement si besoin.
-		log.Error("failed to publish result event", "error", err)
-	}
-
-	metrics.JobsTotal.WithLabelValues(event.ServiceType, "completed").Inc()
-	log.Info("job completed", "result_ref", resultKey)
-	return nil
+	return result, err
 }
 
 // decodeInputEvent reads an InputEvent from the HTTP request body.

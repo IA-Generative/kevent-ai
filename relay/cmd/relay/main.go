@@ -3,13 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"kevent/relay/internal/adapter"
 	"kevent/relay/internal/config"
 	"kevent/relay/internal/kafka"
+	"kevent/relay/internal/lifecycle"
 	"kevent/relay/internal/metrics"
 	"kevent/relay/internal/relay"
 	"kevent/relay/internal/storage"
@@ -65,20 +67,27 @@ func main() {
 		os.Exit(1)
 	}
 
-	disp := relay.New(adp, s3Client, publisher, cfg.Service.ResultTopic)
+	annotator := lifecycle.New()
+	disp := relay.New(adp, s3Client, publisher, cfg.Service.ResultTopic, annotator)
 
-	inferenceAddr := inferenceHostPort(cfg)
+	inferenceHealthURL := strings.TrimRight(cfg.Inference.BaseURL, "/") + "/health"
+	healthClient := &http.Client{Timeout: cfg.Inference.HealthCheckTimeoutDuration()}
+
+	waitForInference(inferenceHealthURL, healthClient, cfg.Inference.ReadyTimeoutDuration(), cfg.Inference.ReadyIntervalDuration())
 
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
-		if inferenceAddr != "" {
-			conn, err := net.DialTimeout("tcp", inferenceAddr, time.Second)
-			if err != nil {
-				http.Error(w, "inference not ready", http.StatusServiceUnavailable)
-				return
-			}
-			conn.Close()
+		resp, err := healthClient.Get(inferenceHealthURL)
+		if err != nil {
+			http.Error(w, "inference not ready: "+err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			http.Error(w, fmt.Sprintf("inference not ready: status %d", resp.StatusCode), http.StatusServiceUnavailable)
+			return
 		}
 		w.WriteHeader(http.StatusOK)
 	})
@@ -109,12 +118,12 @@ func main() {
 	srv := &http.Server{
 		Addr:        ":8080",
 		Handler:     mux,
-		ReadTimeout: 30 * time.Second,
+		ReadTimeout: cfg.Server.ReadTimeoutDuration(),
 		// WriteTimeout désactivé : le handler bloque pendant toute la durée de
-		// l'inférence (jusqu'à 10 min). Le timeout est géré par Knative via
+		// l'inférence. Le timeout est géré par Knative via
 		// spec.template.spec.timeoutSeconds sur le Service.
 		WriteTimeout: 0,
-		IdleTimeout:  120 * time.Second,
+		IdleTimeout:  cfg.Server.IdleTimeoutDuration(),
 	}
 
 	serverErr := make(chan error, 1)
@@ -137,7 +146,7 @@ func main() {
 
 	slog.Info("shutting down…")
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeoutDuration())
 	defer cancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
@@ -145,6 +154,31 @@ func main() {
 	}
 
 	slog.Info("server stopped")
+}
+
+// waitForInference polls the inference service's /health endpoint until it
+// returns 200 or the configured deadline is exceeded. Exits the process on
+// timeout so Kubernetes restarts the pod.
+func waitForInference(healthURL string, client *http.Client, timeout, interval time.Duration) {
+	slog.Info("waiting for inference service", "health_url", healthURL, "timeout", timeout, "interval", interval)
+	deadline := time.Now().Add(timeout)
+	for {
+		resp, err := client.Get(healthURL)
+		if err == nil {
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				slog.Info("inference service ready")
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			slog.Error("inference service did not become ready within timeout", "health_url", healthURL, "timeout", timeout)
+			os.Exit(1)
+		}
+		slog.Info("inference not ready yet, retrying", "health_url", healthURL, "interval", interval)
+		time.Sleep(interval)
+	}
 }
 
 // newInferenceProxy returns a reverse proxy that forwards requests to the local
@@ -168,14 +202,4 @@ type statusRecorder struct {
 func (r *statusRecorder) WriteHeader(code int) {
 	r.status = code
 	r.ResponseWriter.WriteHeader(code)
-}
-
-// inferenceHostPort extracts host:port from inference.base_url (e.g. "127.0.0.1:9000").
-// Used by the /health TCP readiness check.
-func inferenceHostPort(cfg *config.Config) string {
-	u, err := url.Parse(cfg.Inference.BaseURL)
-	if err != nil || u.Host == "" {
-		return ""
-	}
-	return u.Host
 }

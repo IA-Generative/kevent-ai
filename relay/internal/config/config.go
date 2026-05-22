@@ -15,6 +15,7 @@ type Config struct {
 	S3         S3Config         `yaml:"s3"`
 	Encryption EncryptionConfig `yaml:"encryption"`
 	Inference  InferenceConfig  `yaml:"inference"`
+	Server     ServerConfig     `yaml:"server"`
 }
 
 // InferenceConfig holds the local inference endpoint configuration.
@@ -26,10 +27,19 @@ type Config struct {
 // extra_fields contains optional form fields sent with every multipart request
 // (e.g. response_format, language, prompt). Empty values are skipped.
 type InferenceConfig struct {
-	BaseURL     string            `yaml:"base_url"`
-	APIKey      string            `yaml:"api_key"`
-	Timeout     string            `yaml:"timeout"`
-	ExtraFields map[string]string `yaml:"extra_fields"`
+	BaseURL            string            `yaml:"base_url"`
+	APIKey             string            `yaml:"api_key"`
+	Timeout            string            `yaml:"timeout"`
+	ReadyTimeout       string            `yaml:"ready_timeout"`
+	ReadyInterval      string            `yaml:"ready_interval"`
+	HealthCheckTimeout string            `yaml:"health_check_timeout"`
+	ExtraFields        map[string]string `yaml:"extra_fields"`
+}
+
+type ServerConfig struct {
+	ReadTimeout     string `yaml:"read_timeout"`
+	IdleTimeout     string `yaml:"idle_timeout"`
+	ShutdownTimeout string `yaml:"shutdown_timeout"`
 }
 
 // TimeoutDuration returns the configured inference timeout.
@@ -43,6 +53,60 @@ func (c InferenceConfig) TimeoutDuration() time.Duration {
 		return d
 	}
 	return 300 * time.Second
+}
+
+// ReadyTimeoutDuration returns how long to wait for the inference service to
+// become healthy at startup. Invalid or absent values fall back to 10 minutes.
+func (c InferenceConfig) ReadyTimeoutDuration() time.Duration {
+	if d, err := time.ParseDuration(c.ReadyTimeout); err == nil && d > 0 {
+		return d
+	}
+	return 10 * time.Minute
+}
+
+// ReadyIntervalDuration returns the polling interval between health checks
+// during startup. Invalid or absent values fall back to 5 seconds.
+func (c InferenceConfig) ReadyIntervalDuration() time.Duration {
+	if d, err := time.ParseDuration(c.ReadyInterval); err == nil && d > 0 {
+		return d
+	}
+	return 5 * time.Second
+}
+
+// HealthCheckTimeoutDuration returns the per-request timeout for health check
+// HTTP calls. Invalid or absent values fall back to 2 seconds.
+func (c InferenceConfig) HealthCheckTimeoutDuration() time.Duration {
+	if d, err := time.ParseDuration(c.HealthCheckTimeout); err == nil && d > 0 {
+		return d
+	}
+	return 2 * time.Second
+}
+
+// ReadTimeoutDuration returns the HTTP server read timeout.
+// Invalid or absent values fall back to 30 seconds.
+func (c ServerConfig) ReadTimeoutDuration() time.Duration {
+	if d, err := time.ParseDuration(c.ReadTimeout); err == nil && d > 0 {
+		return d
+	}
+	return 30 * time.Second
+}
+
+// IdleTimeoutDuration returns the HTTP server idle connection timeout.
+// Invalid or absent values fall back to 120 seconds.
+func (c ServerConfig) IdleTimeoutDuration() time.Duration {
+	if d, err := time.ParseDuration(c.IdleTimeout); err == nil && d > 0 {
+		return d
+	}
+	return 120 * time.Second
+}
+
+// ShutdownTimeoutDuration returns how long to wait for graceful shutdown.
+// Invalid or absent values fall back to 30 seconds.
+func (c ServerConfig) ShutdownTimeoutDuration() time.Duration {
+	if d, err := time.ParseDuration(c.ShutdownTimeout); err == nil && d > 0 {
+		return d
+	}
+	return 30 * time.Second
 }
 
 type EncryptionConfig struct {

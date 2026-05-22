@@ -33,10 +33,18 @@ s3:
 # extra_fields: optional form fields added to every multipart request.
 # Use them to pass model-specific parameters (empty values are skipped).
 inference:
-  base_url: "http://127.0.0.1:${INFERENCE_PORT:-9000}"
-  api_key:  ""
-  timeout:  "300s"
+  base_url:             "http://127.0.0.1:${INFERENCE_PORT:-9000}"
+  api_key:              ""
+  timeout:              "${INFERENCE_TIMEOUT:-300s}"
+  ready_timeout:        "${INFERENCE_READY_TIMEOUT:-10m}"
+  ready_interval:       "${INFERENCE_READY_INTERVAL:-5s}"
+  health_check_timeout: "${INFERENCE_HEALTH_CHECK_TIMEOUT:-2s}"
   extra_fields:
     response_format: "json"
     # language: "fr"
     # prompt: "Extract all text visible in this document."
+
+server:
+  read_timeout:     "${SERVER_READ_TIMEOUT:-30s}"
+  idle_timeout:     "${SERVER_IDLE_TIMEOUT:-120s}"
+  shutdown_timeout: "${SERVER_SHUTDOWN_TIMEOUT:-30s}"
