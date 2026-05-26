@@ -184,13 +184,15 @@ func main() {
 	// ── LLM proxy ─────────────────────────────────────────────────────────────
 	providerRegistry := provider.NewRegistry()
 	responseCache := cache.NewRedisCache(redisClient.Raw())
+	llmHTTPClient := &http.Client{Timeout: 15 * time.Minute}
 
 	var consumerTracker gmetrics.ConsumerTracker = gmetrics.NoopTracker{}
 	if cfg.Metrics.TopConsumers > 0 {
 		consumerTracker = gmetrics.NewRedisTracker(redisClient.Raw())
 	}
 
-	llmHandler := llmproxy.New(responseCache, providerRegistry, &http.Client{Timeout: 15 * time.Minute},
+	var llmHandler *llmproxy.Handler
+	llmHandler = llmproxy.New(responseCache, providerRegistry, llmHTTPClient,
 		cfg.Server.UserTypeHeader, consumerTracker,
 		llmproxy.AuditConfig{Enabled: cfg.AuditLog.Enabled, Prompt: cfg.AuditLog.Prompt})
 
@@ -200,6 +202,9 @@ func main() {
 	// Infrastructure (S3, Redis, Kafka connection) is not re-initialised.
 	holder := &routerHolder{}
 
+	// gcMaxAge is declared here so reloadFn can update it before the GC goroutine starts.
+	var gcMaxAge atomic.Int64
+
 	var reloadFn func() error
 	reloadFn = func() error {
 		newCfg, err := config.Load(cfgPath)
@@ -207,12 +212,30 @@ func main() {
 			return err
 		}
 		newReg := service.NewRegistry(newCfg.Services)
+
+		// Update infrastructure state that survives across reloads.
+		redisClient.UpdateLifecycle(newCfg.Lifecycle)
+		if consumerManager != nil {
+			consumerManager.UpdatePersistsResult(newCfg.Lifecycle.PersistsResult)
+		}
+		gcMaxAge.Store(int64(time.Duration(newCfg.Redis.PendingMaxAgeH) * time.Hour))
+
+		// Rebuild stateless config-driven objects.
+		if len(newCfg.RateLimits) > 0 {
+			rl = ratelimit.New(redisClient.Client(), newCfg.RateLimits, newCfg.Server.ConsumerHeader, newCfg.Server.UserTypeHeader)
+		} else {
+			rl = nil
+		}
+		llmHandler = llmproxy.New(responseCache, providerRegistry, llmHTTPClient,
+			newCfg.Server.UserTypeHeader, consumerTracker,
+			llmproxy.AuditConfig{Enabled: newCfg.AuditLog.Enabled, Prompt: newCfg.AuditLog.Prompt})
+
 		newRouter := buildRouter(newCfg, newReg, s3Client, redisClient, producer, logger, reloadFn, rl, llmHandler)
 		holder.p.Store(newRouter)
 		if consumerManager != nil {
 			consumerManager.Reconcile(newReg)
 		}
-		slog.Info("service registry reloaded", "types", newReg.Types())
+		slog.Info("config reloaded", "types", newReg.Types())
 		return nil
 	}
 
@@ -233,38 +256,44 @@ func main() {
 	}
 
 	// ── Stale-job garbage collector ───────────────────────────────────────────
-	if cfg.Redis.PendingMaxAgeH > 0 {
-		maxAge := time.Duration(cfg.Redis.PendingMaxAgeH) * time.Hour
-		go func() {
-			ticker := time.NewTicker(15 * time.Minute)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-					swept, err := redisClient.SweepStalePendingJobs(ctx, maxAge)
-					if err != nil {
-						slog.Error("stale-job GC failed", "error", err)
-					} else if len(swept) > 0 {
-						slog.Info("stale-job GC swept jobs", "count", len(swept), "max_age", maxAge)
-						for _, job := range swept {
-							gmetrics.AsyncStaleJobsSweptTotal.WithLabelValues(job.Model).Inc()
-							if job.InputRef == "" {
-								continue
-							}
-							inputRef := job.InputRef
-							jobID := job.ID
-							go func() {
-								if err := s3Client.DeleteObject(context.Background(), inputRef); err != nil {
-									slog.Error("stale-job GC: failed to delete S3 input", "job_id", jobID, "input_ref", inputRef, "error", err)
-								}
-							}()
+	// gcMaxAge is read by the goroutine on each tick so hot-reload takes effect
+	// without a pod restart. 0 = GC disabled.
+	gcMaxAge.Store(int64(time.Duration(cfg.Redis.PendingMaxAgeH) * time.Hour))
+	go func() {
+		ticker := time.NewTicker(15 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				maxAge := time.Duration(gcMaxAge.Load())
+				if maxAge <= 0 {
+					continue
+				}
+				swept, err := redisClient.SweepStalePendingJobs(ctx, maxAge)
+				if err != nil {
+					slog.Error("stale-job GC failed", "error", err)
+				} else if len(swept) > 0 {
+					slog.Info("stale-job GC swept jobs", "count", len(swept), "max_age", maxAge)
+					for _, job := range swept {
+						gmetrics.AsyncStaleJobsSweptTotal.WithLabelValues(job.Model).Inc()
+						if job.InputRef == "" {
+							continue
 						}
+						inputRef := job.InputRef
+						jobID := job.ID
+						go func() {
+							if err := s3Client.DeleteObject(context.Background(), inputRef); err != nil {
+								slog.Error("stale-job GC: failed to delete S3 input", "job_id", jobID, "input_ref", inputRef, "error", err)
+							}
+						}()
 					}
 				}
 			}
-		}()
+		}
+	}()
+	if cfg.Redis.PendingMaxAgeH > 0 {
 		slog.Info("stale-job GC enabled", "max_age_hours", cfg.Redis.PendingMaxAgeH)
 	}
 

@@ -62,6 +62,12 @@ func (r *RedisClient) Close() error {
 	return r.client.Close()
 }
 
+// UpdateLifecycle replaces the lifecycle config used for TTL calculations.
+// Called by the hot-reload path so changes to job_ttl take effect without restart.
+func (r *RedisClient) UpdateLifecycle(lc config.LifecycleConfig) {
+	r.lifecycle = lc
+}
+
 // Client returns the underlying *redis.Client for callers that need direct access
 // (e.g. rate limiting via Lua scripts).
 func (r *RedisClient) Client() *redis.Client { return r.client }
