@@ -93,8 +93,11 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.Kafka.ConsumerGroup != "kevent-gateway" {
 		t.Errorf("ConsumerGroup: expected kevent-gateway, got %q", cfg.Kafka.ConsumerGroup)
 	}
-	if cfg.Redis.JobTTLDuration() != 0 {
-		t.Errorf("JobTTL: expected 0 (unset), got %v", cfg.Redis.JobTTLDuration())
+	if cfg.Lifecycle.JobTTL.GlobalDuration() != 0 {
+		t.Errorf("lifecycle.job_ttl.global: expected 0 (unset), got %v", cfg.Lifecycle.JobTTL.GlobalDuration())
+	}
+	if cfg.Lifecycle.PersistsResult {
+		t.Errorf("lifecycle.persists_result: expected false (default), got true")
 	}
 	for i, svc := range cfg.Services {
 		if svc.MaxFileSizeMB != 100 {
@@ -111,7 +114,10 @@ s3:
   bucket: my-bucket
 redis:
   addr: "localhost:6379"
-  job_ttl: "48h"
+lifecycle:
+  persists_result: true
+  job_ttl:
+    global: "48h"
 server:
   addr: ":9090"
   read_timeout: 30s
@@ -137,8 +143,11 @@ services:
 	if cfg.Kafka.ConsumerGroup != "my-group" {
 		t.Errorf("explicit consumer_group should not be overridden, got %q", cfg.Kafka.ConsumerGroup)
 	}
-	if cfg.Redis.JobTTLDuration() != 48*time.Hour {
-		t.Errorf("explicit job_ttl should not be overridden, got %v", cfg.Redis.JobTTLDuration())
+	if cfg.Lifecycle.JobTTL.GlobalDuration() != 48*time.Hour {
+		t.Errorf("explicit lifecycle.job_ttl.global should not be overridden, got %v", cfg.Lifecycle.JobTTL.GlobalDuration())
+	}
+	if !cfg.Lifecycle.PersistsResult {
+		t.Errorf("explicit lifecycle.persists_result should not be overridden, got false")
 	}
 	if cfg.Services[0].MaxFileSizeMB != 200 {
 		t.Errorf("explicit max_file_size_mb should not be overridden, got %d", cfg.Services[0].MaxFileSizeMB)

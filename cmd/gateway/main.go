@@ -73,7 +73,7 @@ func buildRouter(
 	rl ratelimit.Checker,
 	llmHandler *llmproxy.Handler,
 ) *chi.Mux {
-	jobHandler := handler.NewJobHandler(reg, s3Client, redisClient, producer, cfg.Server.PriorityHeader, cfg.Server.ConsumerHeader, rl, cfg.Redis.JobTTLDuration())
+	jobHandler := handler.NewJobHandler(reg, s3Client, redisClient, producer, cfg.Server.PriorityHeader, cfg.Server.ConsumerHeader, rl, cfg.Lifecycle)
 
 	r := chi.NewRouter()
 	r.Use(chimw.RequestID)
@@ -147,7 +147,7 @@ func main() {
 	}
 	slog.Info("S3 storage initialised", "encryption", cfg.Encryption.Key != "")
 
-	redisClient, err := storage.NewRedis(cfg.Redis)
+	redisClient, err := storage.NewRedis(cfg.Redis, cfg.Lifecycle)
 	if err != nil {
 		slog.Error("failed to initialise Redis", "error", err)
 		os.Exit(1)
@@ -173,7 +173,7 @@ func main() {
 		}
 		defer producer.Close()
 
-		consumerManager, err = kafka.NewConsumerManager(cfg.Kafka, redisClient, s3Client, logger)
+		consumerManager, err = kafka.NewConsumerManager(cfg.Kafka, redisClient, s3Client, logger, cfg.Lifecycle.PersistsResult)
 		if err != nil {
 			slog.Error("failed to initialise Kafka consumer manager", "error", err)
 			os.Exit(1)

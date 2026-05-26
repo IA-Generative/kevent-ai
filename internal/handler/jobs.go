@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"kevent/gateway/internal/config"
 	"kevent/gateway/internal/metrics"
 	"kevent/gateway/internal/model"
 	"kevent/gateway/internal/ratelimit"
@@ -39,13 +40,13 @@ var reservedJobFields = map[string]bool{
 // JobHandler handles job submission and status queries.
 type JobHandler struct {
 	registry       *service.Registry
-	store          s3Store       // reuses the interface defined in sync.go
+	store          s3Store           // reuses the interface defined in sync.go
 	redis          asyncJobStore
-	producer       eventProducer // reuses the interface defined in sync.go
-	priorityHeader string        // HTTP header that triggers high-priority routing (e.g. "X-Priority")
-	consumerHeader string        // HTTP header identifying the API consumer (e.g. "X-Consumer-Username")
+	producer       eventProducer     // reuses the interface defined in sync.go
+	priorityHeader string            // HTTP header that triggers high-priority routing (e.g. "X-Priority")
+	consumerHeader string            // HTTP header identifying the API consumer (e.g. "X-Consumer-Username")
 	rateLimiter    ratelimit.Checker // nil = no rate limiting
-	jobTTL         time.Duration     // 0 = immediate cleanup on first read; >0 = keep until TTL
+	lifecycle      config.LifecycleConfig
 }
 
 func NewJobHandler(
@@ -56,9 +57,9 @@ func NewJobHandler(
 	priorityHeader string,
 	consumerHeader string,
 	rateLimiter ratelimit.Checker,
-	jobTTL time.Duration,
+	lifecycle config.LifecycleConfig,
 ) *JobHandler {
-	return &JobHandler{registry, store, redis, producer, priorityHeader, consumerHeader, rateLimiter, jobTTL}
+	return &JobHandler{registry, store, redis, producer, priorityHeader, consumerHeader, rateLimiter, lifecycle}
 }
 
 // submitResponse is the 202 body returned after a successful job submission.
@@ -361,10 +362,9 @@ func (h *JobHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 	enc.SetEscapeHTML(false)
 	_ = enc.Encode(resp)
 
-	// When job_ttl is set, both S3 result and Redis record persist until TTL —
-	// clients can re-fetch within that window. Without job_ttl, clean up immediately
-	// after delivery to minimise storage usage.
-	if job.Status == model.JobStatusCompleted && h.jobTTL == 0 {
+	// When persists_result is false, clean up immediately after delivery to
+	// minimise storage usage. When true, records persist until their TTL expires.
+	if job.Status == model.JobStatusCompleted && !h.lifecycle.PersistsResult {
 		go func(resultRef, jobID string) {
 			ctx := context.Background()
 			if resultRef != "" {
