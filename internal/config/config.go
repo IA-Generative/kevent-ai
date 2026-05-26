@@ -14,6 +14,7 @@ type Config struct {
 	Kafka      KafkaConfig                           `yaml:"kafka"`
 	S3         S3Config                              `yaml:"s3"`
 	Redis      RedisConfig                           `yaml:"redis"`
+	Lifecycle  LifecycleConfig                       `yaml:"lifecycle"`
 	Services   []ServiceConfig                       `yaml:"services"`
 	Encryption EncryptionConfig                      `yaml:"encryption"`
 	Metrics    MetricsConfig                         `yaml:"metrics"`
@@ -119,9 +120,40 @@ type RedisConfig struct {
 	Addr           string `yaml:"addr"`
 	Password       string `yaml:"password"`
 	DB             int    `yaml:"db"`
-	JobTTLH        int    `yaml:"job_ttl_hours"`
 	PendingMaxAgeH int    `yaml:"pending_max_age_hours"` // 0 = GC disabled
 }
+
+// LifecycleConfig controls job record and S3 result retention.
+type LifecycleConfig struct {
+	// PersistsResult controls whether S3 results and Redis records are kept after
+	// the job result is first consumed (GET /jobs/{type}/{id} or webhook delivery).
+	// false (default): cleanup is immediate on first consumption.
+	// true: records persist until their TTL expires naturally.
+	PersistsResult bool         `yaml:"persists_result"`
+	JobTTL         JobTTLConfig `yaml:"job_ttl"`
+}
+
+// JobTTLConfig holds per-status TTLs for Redis job records.
+// Per-status values take precedence over Global; 0 means no TTL configured.
+// When all values are 0, an internal 2h safety net applies for orphaned records.
+type JobTTLConfig struct {
+	Global  string `yaml:"global"`  // fallback for all statuses
+	Success string `yaml:"success"` // override for completed jobs
+	Pending string `yaml:"pending"` // override for pending/processing jobs
+	Failed  string `yaml:"failed"`  // override for failed jobs
+}
+
+func parseDuration(s string) time.Duration {
+	if d, err := time.ParseDuration(s); err == nil && d > 0 {
+		return d
+	}
+	return 0
+}
+
+func (j JobTTLConfig) GlobalDuration() time.Duration  { return parseDuration(j.Global) }
+func (j JobTTLConfig) PendingDuration() time.Duration { return parseDuration(j.Pending) }
+func (j JobTTLConfig) SuccessDuration() time.Duration { return parseDuration(j.Success) }
+func (j JobTTLConfig) FailedDuration() time.Duration  { return parseDuration(j.Failed) }
 
 // BackendConfig describes one backend in a multi-backend list.
 type BackendConfig struct {
@@ -267,9 +299,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Kafka.ConsumerGroup == "" {
 		c.Kafka.ConsumerGroup = "kevent-gateway"
-	}
-	if c.Redis.JobTTLH == 0 {
-		c.Redis.JobTTLH = 72
 	}
 	if c.Redis.PendingMaxAgeH == 0 {
 		c.Redis.PendingMaxAgeH = 2

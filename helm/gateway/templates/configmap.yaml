@@ -43,7 +43,20 @@ data:
       addr:         "{{ include "kevent-gateway.redisAddr" . }}"
       password:     ""
       db:           0
-      job_ttl_hours: 72
+
+    lifecycle:
+      persists_result: {{ .Values.lifecycle.persistsResult | default false }}
+      job_ttl:
+        global: "{{ .Values.lifecycle.jobTTL.global | default "" }}"
+        {{- if .Values.lifecycle.jobTTL.success }}
+        success: "{{ .Values.lifecycle.jobTTL.success }}"
+        {{- end }}
+        {{- if .Values.lifecycle.jobTTL.pending }}
+        pending: "{{ .Values.lifecycle.jobTTL.pending }}"
+        {{- end }}
+        {{- if .Values.lifecycle.jobTTL.failed }}
+        failed: "{{ .Values.lifecycle.jobTTL.failed }}"
+        {{- end }}
 
     metrics:
       top_consumers: {{ .Values.metricsConfig.topConsumers | default 0 }}
