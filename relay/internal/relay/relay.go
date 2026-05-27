@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -44,6 +45,7 @@ type Dispatcher struct {
 	resultTopic  string
 	syncPriority atomic.Int32 // number of sync jobs currently in progress
 	activeJobs   atomic.Int32 // number of jobs currently being processed
+	wg           sync.WaitGroup
 	annotator    *lifecycle.PodAnnotator
 }
 
@@ -83,9 +85,19 @@ func (d *Dispatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	d.serveHTTP(w, r)
 }
 
+// WaitIdle blocks until all in-flight jobs have completed.
+// Call after srv.Shutdown to ensure the process does not exit while inference
+// or result-publishing is still in progress.
+func (d *Dispatcher) WaitIdle() {
+	d.wg.Wait()
+}
+
 // serveHTTP is the shared CloudEvent processing implementation used by both
 // ServeHTTP (async) and ServeHTTPSync (priority).
 func (d *Dispatcher) serveHTTP(w http.ResponseWriter, r *http.Request) {
+	d.wg.Add(1)
+	defer d.wg.Done()
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return

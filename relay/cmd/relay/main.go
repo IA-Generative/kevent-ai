@@ -158,6 +158,12 @@ func main() {
 		slog.Error("server forced to shutdown", "error", err)
 	}
 
+	// Wait for in-flight inference jobs to complete before exiting.
+	// The inference HTTP call runs with context.WithoutCancel so it outlives
+	// the HTTP server shutdown; we must not exit the process before result
+	// publishing and Redis updates finish or Kubernetes will kill them mid-flight.
+	disp.WaitIdle()
+
 	slog.Info("server stopped")
 }
 
