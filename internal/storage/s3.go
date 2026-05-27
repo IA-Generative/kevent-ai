@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -22,6 +23,39 @@ type S3Client struct {
 	uploader *manager.Uploader
 	bucket   string
 	encKey   []byte // nil = encryption disabled
+}
+
+// S3JobEntry groups all S3 object keys belonging to a single job.
+type S3JobEntry struct {
+	Keys          []string
+	OldestModTime time.Time
+}
+
+// s3Object is an internal DTO used by groupByJobID.
+type s3Object struct {
+	key     string
+	modTime time.Time
+}
+
+// groupByJobID groups S3 objects by their first path segment (the job ID).
+// Objects whose key has no "/" or starts with "/" are ignored (not job files).
+// OldestModTime tracks the earliest LastModified across all objects for a job.
+func groupByJobID(objects []s3Object) map[string]S3JobEntry {
+	result := make(map[string]S3JobEntry)
+	for _, obj := range objects {
+		idx := strings.IndexByte(obj.key, '/')
+		if idx <= 0 {
+			continue
+		}
+		jobID := obj.key[:idx]
+		entry := result[jobID]
+		entry.Keys = append(entry.Keys, obj.key)
+		if entry.OldestModTime.IsZero() || obj.modTime.Before(entry.OldestModTime) {
+			entry.OldestModTime = obj.modTime
+		}
+		result[jobID] = entry
+	}
+	return result
 }
 
 // NewS3Client builds a standard S3 client from the provided config.
@@ -112,4 +146,36 @@ func (c *S3Client) DeleteObject(ctx context.Context, objectKey string) error {
 		return fmt.Errorf("deleting S3 object %q: %w", objectKey, err)
 	}
 	return nil
+}
+
+// ListJobObjects lists all objects in the bucket and groups them by job ID
+// (first path segment of the key). Returns a map of jobID → S3JobEntry.
+// Objects with no "/" in their key are ignored.
+func (c *S3Client) ListJobObjects(ctx context.Context) (map[string]S3JobEntry, error) {
+	start := time.Now()
+	paginator := s3.NewListObjectsV2Paginator(c.s3, &s3.ListObjectsV2Input{
+		Bucket: aws.String(c.bucket),
+	})
+
+	var objects []s3Object
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			metrics.S3OperationDuration.WithLabelValues("list").Observe(time.Since(start).Seconds())
+			metrics.S3ErrorsTotal.WithLabelValues("list").Inc()
+			return nil, fmt.Errorf("listing S3 objects: %w", err)
+		}
+		for _, obj := range page.Contents {
+			if obj.Key == nil || obj.LastModified == nil {
+				continue
+			}
+			objects = append(objects, s3Object{
+				key:     aws.ToString(obj.Key),
+				modTime: *obj.LastModified,
+			})
+		}
+	}
+	metrics.S3OperationDuration.WithLabelValues("list").Observe(time.Since(start).Seconds())
+
+	return groupByJobID(objects), nil
 }

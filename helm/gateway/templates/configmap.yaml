@@ -48,8 +48,8 @@ data:
       persists_result: {{ .Values.lifecycle.persistsResult | default false }}
       job_ttl:
         global: "{{ .Values.lifecycle.jobTTL.global | default "" }}"
-        {{- if .Values.lifecycle.jobTTL.success }}
-        success: "{{ .Values.lifecycle.jobTTL.success }}"
+        {{- if .Values.lifecycle.jobTTL.completed }}
+        completed: "{{ .Values.lifecycle.jobTTL.completed }}"
         {{- end }}
         {{- if .Values.lifecycle.jobTTL.pending }}
         pending: "{{ .Values.lifecycle.jobTTL.pending }}"
@@ -57,6 +57,10 @@ data:
         {{- if .Values.lifecycle.jobTTL.failed }}
         failed: "{{ .Values.lifecycle.jobTTL.failed }}"
         {{- end }}
+      gc:
+        enabled: {{ .Values.lifecycle.gc.enabled | default false }}
+        interval: "{{ .Values.lifecycle.gc.interval | default "15m" }}"
+        orphan_min_age: "{{ .Values.lifecycle.gc.orphanMinAge | default "5m" }}"
 
     metrics:
       top_consumers: {{ .Values.metricsConfig.topConsumers | default 0 }}

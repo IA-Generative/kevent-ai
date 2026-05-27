@@ -117,11 +117,13 @@ type S3Config struct {
 }
 
 type RedisConfig struct {
-	Addr           string `yaml:"addr"`
-	Password       string `yaml:"password"`
-	DB             int    `yaml:"db"`
-	PendingMaxAgeH int    `yaml:"pending_max_age_hours"` // 0 = GC disabled
+	Addr          string `yaml:"addr"`
+	Password      string `yaml:"password"`
+	DB            int    `yaml:"db"`
+	PendingMaxAge string `yaml:"pending_max_age"` // duration string, e.g. "2h"; empty = disabled
 }
+
+func (r RedisConfig) PendingMaxAgeDuration() time.Duration { return parseDuration(r.PendingMaxAge) }
 
 // LifecycleConfig controls job record and S3 result retention.
 type LifecycleConfig struct {
@@ -131,6 +133,7 @@ type LifecycleConfig struct {
 	// true: records persist until their TTL expires naturally.
 	PersistsResult bool         `yaml:"persists_result"`
 	JobTTL         JobTTLConfig `yaml:"job_ttl"`
+	GC             GCConfig     `yaml:"gc"`
 }
 
 // JobTTLConfig holds per-status TTLs for Redis job records.
@@ -138,7 +141,7 @@ type LifecycleConfig struct {
 // When all values are 0, an internal 2h safety net applies for orphaned records.
 type JobTTLConfig struct {
 	Global  string `yaml:"global"`  // fallback for all statuses
-	Success string `yaml:"success"` // override for completed jobs
+	Completed string `yaml:"completed"` // override for completed jobs
 	Pending string `yaml:"pending"` // override for pending/processing jobs
 	Failed  string `yaml:"failed"`  // override for failed jobs
 }
@@ -150,10 +153,20 @@ func parseDuration(s string) time.Duration {
 	return 0
 }
 
-func (j JobTTLConfig) GlobalDuration() time.Duration  { return parseDuration(j.Global) }
-func (j JobTTLConfig) PendingDuration() time.Duration { return parseDuration(j.Pending) }
-func (j JobTTLConfig) SuccessDuration() time.Duration { return parseDuration(j.Success) }
-func (j JobTTLConfig) FailedDuration() time.Duration  { return parseDuration(j.Failed) }
+func (j JobTTLConfig) GlobalDuration() time.Duration    { return parseDuration(j.Global) }
+func (j JobTTLConfig) PendingDuration() time.Duration   { return parseDuration(j.Pending) }
+func (j JobTTLConfig) CompletedDuration() time.Duration { return parseDuration(j.Completed) }
+func (j JobTTLConfig) FailedDuration() time.Duration    { return parseDuration(j.Failed) }
+
+// GCConfig controls the unified background garbage collector.
+type GCConfig struct {
+	Enabled      bool   `yaml:"enabled"`        // master switch; default false
+	Interval     string `yaml:"interval"`       // tick frequency; default "15m"
+	OrphanMinAge string `yaml:"orphan_min_age"` // min S3 object age before orphan check; default "5m"
+}
+
+func (g GCConfig) IntervalDuration() time.Duration     { return parseDuration(g.Interval) }
+func (g GCConfig) OrphanMinAgeDuration() time.Duration { return parseDuration(g.OrphanMinAge) }
 
 // BackendConfig describes one backend in a multi-backend list.
 type BackendConfig struct {
@@ -300,8 +313,14 @@ func (c *Config) applyDefaults() {
 	if c.Kafka.ConsumerGroup == "" {
 		c.Kafka.ConsumerGroup = "kevent-gateway"
 	}
-	if c.Redis.PendingMaxAgeH == 0 {
-		c.Redis.PendingMaxAgeH = 2
+	if c.Redis.PendingMaxAge == "" {
+		c.Redis.PendingMaxAge = "2h"
+	}
+	if c.Lifecycle.GC.Interval == "" {
+		c.Lifecycle.GC.Interval = "15m"
+	}
+	if c.Lifecycle.GC.OrphanMinAge == "" {
+		c.Lifecycle.GC.OrphanMinAge = "5m"
 	}
 	for i := range c.Services {
 		if c.Services[i].MaxFileSizeMB == 0 {

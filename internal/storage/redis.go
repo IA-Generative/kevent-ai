@@ -45,7 +45,7 @@ func (r *RedisClient) ttlForStatus(status model.JobStatus) time.Duration {
 	case model.JobStatusPending, model.JobStatusProcessing:
 		d = r.lifecycle.JobTTL.PendingDuration()
 	case model.JobStatusCompleted:
-		d = r.lifecycle.JobTTL.SuccessDuration()
+		d = r.lifecycle.JobTTL.CompletedDuration()
 	case model.JobStatusFailed:
 		d = r.lifecycle.JobTTL.FailedDuration()
 	}
@@ -62,6 +62,12 @@ func (r *RedisClient) Close() error {
 	return r.client.Close()
 }
 
+// UpdateLifecycle replaces the lifecycle config used for TTL calculations.
+// Called by the hot-reload path so changes to job_ttl take effect without restart.
+func (r *RedisClient) UpdateLifecycle(lc config.LifecycleConfig) {
+	r.lifecycle = lc
+}
+
 // Client returns the underlying *redis.Client for callers that need direct access
 // (e.g. rate limiting via Lua scripts).
 func (r *RedisClient) Client() *redis.Client { return r.client }
@@ -69,6 +75,33 @@ func (r *RedisClient) Client() *redis.Client { return r.client }
 // Raw exposes the underlying go-redis client for subsystems that need
 // generic Redis access (e.g. the LLM response cache).
 func (r *RedisClient) Raw() *redis.Client { return r.client }
+
+// Ping checks the Redis connection health. Returns an error if unavailable.
+func (r *RedisClient) Ping(ctx context.Context) error {
+	return r.client.Ping(ctx).Err()
+}
+
+// JobsExistBatch checks which job IDs from ids have a live record in Redis.
+// Returns a presence map keyed by job ID. Returns an error if Redis is unavailable —
+// callers must treat an error as "inventory unreliable" and skip any deletion.
+func (r *RedisClient) JobsExistBatch(ctx context.Context, ids []string) (map[string]bool, error) {
+	if len(ids) == 0 {
+		return map[string]bool{}, nil
+	}
+	keys := make([]string, len(ids))
+	for i, id := range ids {
+		keys[i] = jobKey(id)
+	}
+	vals, err := r.client.MGet(ctx, keys...).Result()
+	if err != nil {
+		return nil, fmt.Errorf("redis MGET for batch job existence check: %w", err)
+	}
+	result := make(map[string]bool, len(ids))
+	for i, v := range vals {
+		result[ids[i]] = v != nil
+	}
+	return result, nil
+}
 
 func jobKey(id string) string        { return "job:" + id }
 func consumerKey(name string) string { return "consumer:" + name + ":jobs" }

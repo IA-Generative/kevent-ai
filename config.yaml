@@ -51,12 +51,11 @@ redis:
   addr: "${REDIS_ADDR:-redis:6379}"
   password: "${REDIS_PASSWORD:-}"
   db: 0
-  # pending_max_age_hours: mark pending jobs as failed (reason: stale) after N hours with no relay pickup.
-  # Set to 0 to disable the garbage collector. Default: 2h.
-  # ⚠ Must be set LOWER than your S3 staging input TTL: the GC marks jobs failed
-  # and deletes their input files before S3 purges them. If the GC runs after S3
-  # purges the input, the relay will pick up the job and fail with "input file not found".
-  pending_max_age_hours: ${PENDING_MAX_AGE_HOURS:-2}
+  # pending_max_age: mark pending jobs as failed (stale) after this duration with no relay pickup.
+  # Empty or "0s" disables stale-pending sweep. Default: 2h.
+  # ⚠ Must be shorter than the S3 input staging TTL — the GC deletes input files when marking
+  # jobs stale. If the GC runs after S3 has already purged the input, the relay gets "file not found".
+  pending_max_age: "${PENDING_MAX_AGE:-2h}"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Lifecycle — job record and S3 result retention
@@ -73,9 +72,17 @@ lifecycle:
   # Example: "24h", "72h"
   job_ttl:
     global: "${LIFECYCLE_JOB_TTL:-}"
-    # success: "${LIFECYCLE_JOB_TTL_SUCCESS:-}"
-    # pending: "${LIFECYCLE_JOB_TTL_PENDING:-}"
-    # failed:  "${LIFECYCLE_JOB_TTL_FAILED:-}"
+    # completed: "${LIFECYCLE_JOB_TTL_COMPLETED:-}"
+    # pending:   "${LIFECYCLE_JOB_TTL_PENDING:-}"
+    # failed:    "${LIFECYCLE_JOB_TTL_FAILED:-}"
+  # gc: unified background garbage collector.
+  # enabled: false by default — set to true to activate.
+  # interval: how often the GC runs (default 15m).
+  # orphan_min_age: S3 objects younger than this are never treated as orphans (default 5m).
+  gc:
+    enabled: ${LIFECYCLE_GC_ENABLED:-false}
+    interval: "${LIFECYCLE_GC_INTERVAL:-15m}"
+    orphan_min_age: "${LIFECYCLE_GC_ORPHAN_MIN_AGE:-5m}"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Metrics — consumer tracking

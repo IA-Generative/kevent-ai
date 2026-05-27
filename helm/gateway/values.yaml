@@ -191,9 +191,16 @@ lifecycle:
     # global: fallback TTL for all job statuses. Example: "24h", "72h"
     global: ""
     # Per-status overrides (take precedence over global):
-    # success: ""
-    # pending: ""
-    # failed:  ""
+    # completed: ""
+    # pending:   ""
+    # failed:    ""
+  gc:
+    # enabled: set to true to activate the unified GC
+    enabled: false
+    # interval: how often the GC runs. Default "15m".
+    interval: "15m"
+    # orphanMinAge: S3 objects younger than this are never treated as orphans. Default "5m".
+    orphanMinAge: "5m"
 
 metricsConfig:
   # Nombre de top consumers à exposer dans Prometheus (Redis sorted set, refresh 60s).
