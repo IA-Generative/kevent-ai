@@ -188,8 +188,11 @@ func (d *Dispatcher) process(ctx context.Context, event *model.InputEvent) error
 	result, inferErr := d.runInference(ctx, event, body, size, contentType)
 	if inferErr != nil {
 		// Retry inference once immediately: re-download for a fresh stream.
+		// Use WithoutCancel so that a queue-proxy timeout that cancelled ctx
+		// does not also abort the retry download — inference was already
+		// detached by the adapter, so the retry should be too.
 		log.Warn("inference attempt failed, retrying immediately", "error", inferErr)
-		body2, size2, ct2, getErr := d.s3.GetObject(ctx, event.InputRef)
+		body2, size2, ct2, getErr := d.s3.GetObject(context.WithoutCancel(ctx), event.InputRef)
 		if getErr != nil {
 			if storage.IsNotFound(getErr) {
 				log.Error("input file not found on inference retry, publishing permanent failure", "input_ref", event.InputRef)
@@ -217,10 +220,19 @@ func (d *Dispatcher) process(ctx context.Context, event *model.InputEvent) error
 		return nil
 	}
 
+	// Detach from r.Context() for result persistence: the HTTP connection to
+	// the queue-proxy may have been closed (proxy timeout, pod drain) while
+	// inference was running, cancelling ctx. We must not let that abort the
+	// S3 upload or Kafka publish — the result exists and must be persisted.
+	persistCtx := context.WithoutCancel(ctx)
+	if ctx.Err() != nil {
+		log.Warn("HTTP context cancelled before result persistence; using detached context", "cause", context.Cause(ctx))
+	}
+
 	resultKey := event.JobID + "/result.json"
-	if err := d.s3.PutObject(ctx, resultKey, bytes.NewReader(result), int64(len(result)), "application/json"); err != nil {
+	if err := d.s3.PutObject(persistCtx, resultKey, bytes.NewReader(result), int64(len(result)), "application/json"); err != nil {
 		log.Warn("s3 put attempt failed, retrying immediately", "error", err)
-		if err := d.s3.PutObject(ctx, resultKey, bytes.NewReader(result), int64(len(result)), "application/json"); err != nil {
+		if err := d.s3.PutObject(persistCtx, resultKey, bytes.NewReader(result), int64(len(result)), "application/json"); err != nil {
 			return fmt.Errorf("s3 put: %w", err)
 		}
 	}
@@ -232,9 +244,9 @@ func (d *Dispatcher) process(ctx context.Context, event *model.InputEvent) error
 		ResultRef:   resultKey,
 		CompletedAt: time.Now().UTC(),
 	}
-	if err := d.publisher.PublishResultEvent(ctx, d.resultTopic, resultEvent); err != nil {
+	if err := d.publisher.PublishResultEvent(persistCtx, d.resultTopic, resultEvent); err != nil {
 		log.Warn("publish result attempt failed, retrying immediately", "error", err)
-		if err := d.publisher.PublishResultEvent(ctx, d.resultTopic, resultEvent); err != nil {
+		if err := d.publisher.PublishResultEvent(persistCtx, d.resultTopic, resultEvent); err != nil {
 			log.Error("failed to publish result event after retry", "error", err)
 		}
 	}
