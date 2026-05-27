@@ -57,6 +57,10 @@ data:
         {{- if .Values.lifecycle.jobTTL.failed }}
         failed: "{{ .Values.lifecycle.jobTTL.failed }}"
         {{- end }}
+      gc:
+        enabled: {{ .Values.lifecycle.gc.enabled | default false }}
+        interval: "{{ .Values.lifecycle.gc.interval | default "15m" }}"
+        orphan_min_age: "{{ .Values.lifecycle.gc.orphanMinAge | default "5m" }}"
 
     metrics:
       top_consumers: {{ .Values.metricsConfig.topConsumers | default 0 }}
