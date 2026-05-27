@@ -218,7 +218,7 @@ func main() {
 		if consumerManager != nil {
 			consumerManager.UpdatePersistsResult(newCfg.Lifecycle.PersistsResult)
 		}
-		gcMaxAge.Store(int64(time.Duration(newCfg.Redis.PendingMaxAgeH) * time.Hour))
+		gcMaxAge.Store(int64(newCfg.Redis.PendingMaxAgeDuration()))
 
 		// Rebuild stateless config-driven objects.
 		if len(newCfg.RateLimits) > 0 {
@@ -258,7 +258,7 @@ func main() {
 	// ── Stale-job garbage collector ───────────────────────────────────────────
 	// gcMaxAge is read by the goroutine on each tick so hot-reload takes effect
 	// without a pod restart. 0 = GC disabled.
-	gcMaxAge.Store(int64(time.Duration(cfg.Redis.PendingMaxAgeH) * time.Hour))
+	gcMaxAge.Store(int64(cfg.Redis.PendingMaxAgeDuration()))
 	go func() {
 		ticker := time.NewTicker(15 * time.Minute)
 		defer ticker.Stop()
@@ -293,8 +293,8 @@ func main() {
 			}
 		}
 	}()
-	if cfg.Redis.PendingMaxAgeH > 0 {
-		slog.Info("stale-job GC enabled", "max_age_hours", cfg.Redis.PendingMaxAgeH)
+	if cfg.Redis.PendingMaxAgeDuration() > 0 {
+		slog.Info("stale-job GC enabled", "pending_max_age", cfg.Redis.PendingMaxAge)
 	}
 
 	// ── HTTP server ───────────────────────────────────────────────────────────
