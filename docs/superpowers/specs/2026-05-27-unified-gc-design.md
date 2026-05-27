@@ -26,18 +26,18 @@ lifecycle:
     orphan_min_age: "5m"  # min S3 object age before orphan check; default 5m
 ```
 
-`pending_max_age_hours` stays in `redis:` for backward compatibility.
+`redis.pending_max_age_hours` is **renamed** to `redis.pending_max_age` (duration string, e.g. `"2h"`). The old integer field is removed; `config.Load` validates the new field with `parseDuration`.
 
-Hot-reload updates `enabled`, `interval`, and `orphan_min_age` via atomics without pod restart.
+Hot-reload updates `enabled`, `interval`, `orphan_min_age`, and `pending_max_age` via atomics without pod restart.
 
 ## GC Phases
 
 ### Phase 1 — Stale-pending sweep (existing, renamed)
 
-- Scan `queue:*` Redis keys for jobs pending longer than `redis.pending_max_age_hours`
+- Scan `queue:*` Redis keys for jobs pending longer than `redis.pending_max_age`
 - Mark each as failed (`"stale: pending too long"`)
 - Delete their S3 `input_ref`
-- Skipped when `pending_max_age_hours == 0`
+- Skipped when `pending_max_age` is unset or zero
 
 ### Phase 2 — Orphan S3 cleanup (new)
 
