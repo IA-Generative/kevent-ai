@@ -92,6 +92,11 @@ func (d *Dispatcher) WaitIdle() {
 	d.wg.Wait()
 }
 
+// ActiveJobs returns the number of jobs currently being processed.
+func (d *Dispatcher) ActiveJobs() int {
+	return int(d.activeJobs.Load())
+}
+
 // serveHTTP is the shared CloudEvent processing implementation used by both
 // ServeHTTP (async) and ServeHTTPSync (priority).
 func (d *Dispatcher) serveHTTP(w http.ResponseWriter, r *http.Request) {

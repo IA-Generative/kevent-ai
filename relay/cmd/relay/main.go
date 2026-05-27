@@ -83,6 +83,14 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+		// When a job is in progress the inference model is busy. Probing it
+		// would either block or return a non-200 "busy" status, which would
+		// look like a failing liveness probe and cause Kubernetes to SIGTERM
+		// the pod mid-inference. Skip the upstream check while processing.
+		if disp.ActiveJobs() > 0 {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		resp, err := healthClient.Get(inferenceHealthURL)
 		if err != nil {
 			http.Error(w, "inference not ready: "+err.Error(), http.StatusServiceUnavailable)
