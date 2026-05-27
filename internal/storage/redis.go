@@ -76,6 +76,33 @@ func (r *RedisClient) Client() *redis.Client { return r.client }
 // generic Redis access (e.g. the LLM response cache).
 func (r *RedisClient) Raw() *redis.Client { return r.client }
 
+// Ping checks the Redis connection health. Returns an error if unavailable.
+func (r *RedisClient) Ping(ctx context.Context) error {
+	return r.client.Ping(ctx).Err()
+}
+
+// JobsExistBatch checks which job IDs from ids have a live record in Redis.
+// Returns a presence map keyed by job ID. Returns an error if Redis is unavailable —
+// callers must treat an error as "inventory unreliable" and skip any deletion.
+func (r *RedisClient) JobsExistBatch(ctx context.Context, ids []string) (map[string]bool, error) {
+	if len(ids) == 0 {
+		return map[string]bool{}, nil
+	}
+	keys := make([]string, len(ids))
+	for i, id := range ids {
+		keys[i] = jobKey(id)
+	}
+	vals, err := r.client.MGet(ctx, keys...).Result()
+	if err != nil {
+		return nil, fmt.Errorf("redis MGET for batch job existence check: %w", err)
+	}
+	result := make(map[string]bool, len(ids))
+	for i, v := range vals {
+		result[ids[i]] = v != nil
+	}
+	return result, nil
+}
+
 func jobKey(id string) string        { return "job:" + id }
 func consumerKey(name string) string { return "consumer:" + name + ":jobs" }
 func queueKey(model string) string   { return "queue:" + model }
