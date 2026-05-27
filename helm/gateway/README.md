@@ -199,6 +199,27 @@ services:
 
 Don't forget to inject the token env vars via `extraEnvVars`.
 
+### Lifecycle and job retention
+
+Controls how long Redis job records and S3 result files are kept, and when orphaned S3 files are cleaned up.
+
+| Parameter | Description | Default |
+|---|---|---|
+| `lifecycle.persistsResult` | Keep Redis records and S3 results after first consumption (`GET` or webhook). `false` = immediate cleanup | `false` |
+| `lifecycle.jobTTL.global` | Redis TTL for all job statuses (duration string, e.g. `"24h"`) | `""` (2h internal safety net) |
+| `lifecycle.jobTTL.completed` | TTL override for completed jobs | `""` |
+| `lifecycle.jobTTL.pending` | TTL override for pending/processing jobs | `""` |
+| `lifecycle.jobTTL.failed` | TTL override for failed jobs | `""` |
+| `lifecycle.gc.enabled` | Enable the unified GC | `false` |
+| `lifecycle.gc.interval` | GC tick frequency | `"15m"` |
+| `lifecycle.gc.orphanMinAge` | Minimum S3 object age before it is considered orphaned | `"5m"` |
+
+The GC runs two phases per tick:
+1. **Stale-pending sweep** — marks pending jobs stuck longer than `redis.pending_max_age` as failed and deletes their S3 input files.
+2. **S3 orphan cleanup** — lists all S3 objects, groups them by job ID, and deletes any file whose Redis record has expired. Covers both `input_ref` and `result_ref` for all exit paths (failed webhooks, `persists_result: true`, never-polled results). Skipped entirely if Redis is unavailable.
+
+All lifecycle parameters are hot-reload safe.
+
 ### Metrics configuration
 
 | Parameter | Description | Default |
@@ -456,3 +477,33 @@ The generated secret (`kevent-gateway` in `infra-kafka`) must be copied to the g
 - **Per-backend `model` override** — `backends[].model` overrides `backendModel` for a specific backend; enables canary deployments with different model versions
 - **Per-backend `headers` override** — `backends[].headers` overrides `inferenceHeaders` for a specific backend; enables per-backend authentication tokens
 - **`backend_model` label** on all 4 LLM metrics — identifies which backend model version served each request
+
+### 0.8.0 → 0.11.0
+
+**Breaking changes:**
+
+- `redis.pending_max_age_hours` (integer, hours) renamed to `redis.pending_max_age` (duration string). Update your values or `config.yaml`:
+  ```yaml
+  # Before:
+  redis:
+    pending_max_age_hours: 2
+  # After:
+  redis:
+    pending_max_age: "2h"
+  ```
+  The env var also changes: `PENDING_MAX_AGE_HOURS` → `PENDING_MAX_AGE` (value becomes e.g. `"2h"`).
+
+- `lifecycle.jobTTL.success` renamed to `lifecycle.jobTTL.completed`. Update `values.yaml` if set:
+  ```yaml
+  # Before:
+  lifecycle:
+    jobTTL:
+      success: "24h"
+  # After:
+  lifecycle:
+    jobTTL:
+      completed: "24h"
+  ```
+
+**New optional parameters:**
+- `lifecycle.gc.enabled` / `lifecycle.gc.interval` / `lifecycle.gc.orphanMinAge` — unified GC (off by default, see [Lifecycle and job retention](#lifecycle-and-job-retention))
