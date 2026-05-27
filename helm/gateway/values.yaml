@@ -191,9 +191,9 @@ lifecycle:
     # global: fallback TTL for all job statuses. Example: "24h", "72h"
     global: ""
     # Per-status overrides (take precedence over global):
-    # success: ""
-    # pending: ""
-    # failed:  ""
+    # completed: ""
+    # pending:   ""
+    # failed:    ""
 
 metricsConfig:
   # Nombre de top consumers à exposer dans Prometheus (Redis sorted set, refresh 60s).

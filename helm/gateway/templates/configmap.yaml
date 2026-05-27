@@ -48,8 +48,8 @@ data:
       persists_result: {{ .Values.lifecycle.persistsResult | default false }}
       job_ttl:
         global: "{{ .Values.lifecycle.jobTTL.global | default "" }}"
-        {{- if .Values.lifecycle.jobTTL.success }}
-        success: "{{ .Values.lifecycle.jobTTL.success }}"
+        {{- if .Values.lifecycle.jobTTL.completed }}
+        completed: "{{ .Values.lifecycle.jobTTL.completed }}"
         {{- end }}
         {{- if .Values.lifecycle.jobTTL.pending }}
         pending: "{{ .Values.lifecycle.jobTTL.pending }}"

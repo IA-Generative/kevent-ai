@@ -73,9 +73,9 @@ lifecycle:
   # Example: "24h", "72h"
   job_ttl:
     global: "${LIFECYCLE_JOB_TTL:-}"
-    # success: "${LIFECYCLE_JOB_TTL_SUCCESS:-}"
-    # pending: "${LIFECYCLE_JOB_TTL_PENDING:-}"
-    # failed:  "${LIFECYCLE_JOB_TTL_FAILED:-}"
+    # completed: "${LIFECYCLE_JOB_TTL_COMPLETED:-}"
+    # pending:   "${LIFECYCLE_JOB_TTL_PENDING:-}"
+    # failed:    "${LIFECYCLE_JOB_TTL_FAILED:-}"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Metrics — consumer tracking

@@ -138,7 +138,7 @@ type LifecycleConfig struct {
 // When all values are 0, an internal 2h safety net applies for orphaned records.
 type JobTTLConfig struct {
 	Global  string `yaml:"global"`  // fallback for all statuses
-	Success string `yaml:"success"` // override for completed jobs
+	Completed string `yaml:"completed"` // override for completed jobs
 	Pending string `yaml:"pending"` // override for pending/processing jobs
 	Failed  string `yaml:"failed"`  // override for failed jobs
 }
@@ -152,7 +152,7 @@ func parseDuration(s string) time.Duration {
 
 func (j JobTTLConfig) GlobalDuration() time.Duration  { return parseDuration(j.Global) }
 func (j JobTTLConfig) PendingDuration() time.Duration { return parseDuration(j.Pending) }
-func (j JobTTLConfig) SuccessDuration() time.Duration { return parseDuration(j.Success) }
+func (j JobTTLConfig) CompletedDuration() time.Duration { return parseDuration(j.Completed) }
 func (j JobTTLConfig) FailedDuration() time.Duration  { return parseDuration(j.Failed) }
 
 // BackendConfig describes one backend in a multi-backend list.
