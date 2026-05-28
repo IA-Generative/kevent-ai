@@ -83,6 +83,14 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+		// When a job is in progress the inference model is busy. Probing it
+		// would either block or return a non-200 "busy" status, which would
+		// look like a failing liveness probe and cause Kubernetes to SIGTERM
+		// the pod mid-inference. Skip the upstream check while processing.
+		if disp.ActiveJobs() > 0 {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		resp, err := healthClient.Get(inferenceHealthURL)
 		if err != nil {
 			http.Error(w, "inference not ready: "+err.Error(), http.StatusServiceUnavailable)
@@ -157,6 +165,12 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("server forced to shutdown", "error", err)
 	}
+
+	// Wait for in-flight inference jobs to complete before exiting.
+	// The inference HTTP call runs with context.WithoutCancel so it outlives
+	// the HTTP server shutdown; we must not exit the process before result
+	// publishing and Redis updates finish or Kubernetes will kill them mid-flight.
+	disp.WaitIdle()
 
 	slog.Info("server stopped")
 }
