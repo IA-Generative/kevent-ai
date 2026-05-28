@@ -38,4 +38,4 @@ Common causes:
 1. Verify S3 env vars are set in the KServe ServingRuntime/InferenceService manifest
 2. Confirm `ENCRYPTION_KEY` is the same secret referenced in both gateway and relay deployments
 3. Check network policies — inference pods must reach the S3 endpoint
-4. If input files are disappearing prematurely: check gateway job TTL (`job_ttl_hours`) vs inference duration
+4. If input files are disappearing prematurely: check `redis.pending_max_age` and `lifecycle.job_ttl.pending` vs inference duration

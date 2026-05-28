@@ -17,7 +17,7 @@ kevent-ai consists of two independent components deployed separately:
 - Routes to the correct service based on `service_type`, `model`, and path
 - Enforces per-consumer, per-service rate limits (Redis fixed-window)
 - Uploads input files to S3
-- Persists job records in Redis (TTL 72h)
+- Persists job records in Redis (configurable TTL per status via `lifecycle.job_ttl`)
 - Publishes `InputEvent` messages to Kafka
 - Consumes `ResultEvent` messages and notifies clients
 - Proxies sync requests directly to `inference_url`

@@ -519,6 +519,7 @@ Version bump aligned with gateway v0.11.0 release. No relay code changes.
 
 ---
 
+
 ### [v0.5.2] — 2026-05-18
 
 #### Fixed
