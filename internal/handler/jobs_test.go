@@ -141,7 +141,7 @@ func submitReq(t *testing.T, serviceType, modelName, operation, filename string,
 }
 
 func newAsyncHandler(reg *service.Registry, s3 *mockJobS3, store *mockAsyncStore, prod *mockProducer) *handler.JobHandler {
-	return handler.NewJobHandler(reg, s3, store, prod, "", "", nil)
+	return handler.NewJobHandler(reg, s3, store, prod, "", "", nil, config.LifecycleConfig{})
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -338,7 +338,7 @@ func listReq(t *testing.T, consumer string) *http.Request {
 }
 
 func newHandlerWithConsumer(reg *service.Registry, s3 *mockJobS3, store *mockAsyncStore, prod *mockProducer) *handler.JobHandler {
-	return handler.NewJobHandler(reg, s3, store, prod, "", "X-Consumer-Username", nil)
+	return handler.NewJobHandler(reg, s3, store, prod, "", "X-Consumer-Username", nil, config.LifecycleConfig{})
 }
 
 // ── GetStatus tests ───────────────────────────────────────────────────────────

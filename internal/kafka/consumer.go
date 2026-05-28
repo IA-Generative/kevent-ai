@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	kafkago "github.com/segmentio/kafka-go"
@@ -28,12 +29,13 @@ const (
 // Use Reconcile to dynamically add/remove consumers at runtime without restart.
 // Call Wait() after cancelling the context to drain all in-flight goroutines.
 type ConsumerManager struct {
-	cfg        config.KafkaConfig
-	dialer     *kafkago.Dialer
-	redis      *storage.RedisClient
-	s3         *storage.S3Client
-	logger     *slog.Logger
-	httpClient *http.Client
+	cfg            config.KafkaConfig
+	dialer         *kafkago.Dialer
+	redis          *storage.RedisClient
+	s3             *storage.S3Client
+	logger         *slog.Logger
+	httpClient     *http.Client
+	persistsResult atomic.Bool // when true, S3 result is NOT deleted after webhook delivery
 
 	mu        sync.Mutex
 	parentCtx context.Context
@@ -46,12 +48,13 @@ func NewConsumerManager(
 	redis *storage.RedisClient,
 	s3 *storage.S3Client,
 	logger *slog.Logger,
+	persistsResult bool,
 ) (*ConsumerManager, error) {
 	dialer, err := buildDialer(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("building kafka dialer: %w", err)
 	}
-	return &ConsumerManager{
+	cm := &ConsumerManager{
 		cfg:    cfg,
 		dialer: dialer,
 		redis:  redis,
@@ -61,7 +64,15 @@ func NewConsumerManager(
 			Timeout: 10 * time.Second,
 		},
 		cancels: make(map[string]context.CancelFunc),
-	}, nil
+	}
+	cm.persistsResult.Store(persistsResult)
+	return cm, nil
+}
+
+// UpdatePersistsResult updates the S3 result retention policy at runtime.
+// Safe to call concurrently with webhook delivery goroutines.
+func (cm *ConsumerManager) UpdatePersistsResult(v bool) {
+	cm.persistsResult.Store(v)
 }
 
 // Start launches one goroutine per service result topic in the initial registry.
@@ -254,6 +265,11 @@ func (cm *ConsumerManager) sendWebhook(job *model.Job) {
 			resp.Body.Close()
 			if resp.StatusCode < 500 {
 				cm.logger.Info("webhook delivered", "job_id", job.ID, "status_code", resp.StatusCode, "attempt", attempt)
+				if !cm.persistsResult.Load() && job.ResultRef != "" {
+					if derr := cm.s3.DeleteObject(context.Background(), job.ResultRef); derr != nil {
+						cm.logger.Error("webhook: failed to delete result file", "job_id", job.ID, "error", derr)
+					}
+				}
 				return
 			}
 			cm.logger.Warn("webhook server error", "job_id", job.ID, "status_code", resp.StatusCode, "attempt", attempt)

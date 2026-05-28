@@ -16,11 +16,11 @@ import (
 
 // RedisClient wraps go-redis with job-specific persistence helpers.
 type RedisClient struct {
-	client *redis.Client
-	jobTTL time.Duration
+	client    *redis.Client
+	lifecycle config.LifecycleConfig
 }
 
-func NewRedis(cfg config.RedisConfig) (*RedisClient, error) {
+func NewRedis(cfg config.RedisConfig, lc config.LifecycleConfig) (*RedisClient, error) {
 	rdb := redis.NewClient(&redis.Options{
 		Addr:     cfg.Addr,
 		Password: cfg.Password,
@@ -34,14 +34,38 @@ func NewRedis(cfg config.RedisConfig) (*RedisClient, error) {
 		return nil, fmt.Errorf("connecting to redis at %q: %w", cfg.Addr, err)
 	}
 
-	return &RedisClient{
-		client: rdb,
-		jobTTL: time.Duration(cfg.JobTTLH) * time.Hour,
-	}, nil
+	return &RedisClient{client: rdb, lifecycle: lc}, nil
+}
+
+// ttlForStatus returns the Redis TTL to apply when storing a job with the given status.
+// Falls back to Global, then to a 2h internal safety net for orphaned records.
+func (r *RedisClient) ttlForStatus(status model.JobStatus) time.Duration {
+	var d time.Duration
+	switch status {
+	case model.JobStatusPending, model.JobStatusProcessing:
+		d = r.lifecycle.JobTTL.PendingDuration()
+	case model.JobStatusCompleted:
+		d = r.lifecycle.JobTTL.CompletedDuration()
+	case model.JobStatusFailed:
+		d = r.lifecycle.JobTTL.FailedDuration()
+	}
+	if d == 0 {
+		d = r.lifecycle.JobTTL.GlobalDuration()
+	}
+	if d == 0 {
+		d = 2 * time.Hour // safety net for orphaned/unread records
+	}
+	return d
 }
 
 func (r *RedisClient) Close() error {
 	return r.client.Close()
+}
+
+// UpdateLifecycle replaces the lifecycle config used for TTL calculations.
+// Called by the hot-reload path so changes to job_ttl take effect without restart.
+func (r *RedisClient) UpdateLifecycle(lc config.LifecycleConfig) {
+	r.lifecycle = lc
 }
 
 // Client returns the underlying *redis.Client for callers that need direct access
@@ -51,6 +75,33 @@ func (r *RedisClient) Client() *redis.Client { return r.client }
 // Raw exposes the underlying go-redis client for subsystems that need
 // generic Redis access (e.g. the LLM response cache).
 func (r *RedisClient) Raw() *redis.Client { return r.client }
+
+// Ping checks the Redis connection health. Returns an error if unavailable.
+func (r *RedisClient) Ping(ctx context.Context) error {
+	return r.client.Ping(ctx).Err()
+}
+
+// JobsExistBatch checks which job IDs from ids have a live record in Redis.
+// Returns a presence map keyed by job ID. Returns an error if Redis is unavailable —
+// callers must treat an error as "inventory unreliable" and skip any deletion.
+func (r *RedisClient) JobsExistBatch(ctx context.Context, ids []string) (map[string]bool, error) {
+	if len(ids) == 0 {
+		return map[string]bool{}, nil
+	}
+	keys := make([]string, len(ids))
+	for i, id := range ids {
+		keys[i] = jobKey(id)
+	}
+	vals, err := r.client.MGet(ctx, keys...).Result()
+	if err != nil {
+		return nil, fmt.Errorf("redis MGET for batch job existence check: %w", err)
+	}
+	result := make(map[string]bool, len(ids))
+	for i, v := range vals {
+		result[ids[i]] = v != nil
+	}
+	return result, nil
+}
 
 func jobKey(id string) string        { return "job:" + id }
 func consumerKey(name string) string { return "consumer:" + name + ":jobs" }
@@ -66,19 +117,20 @@ func (r *RedisClient) SaveJob(ctx context.Context, job *model.Job) error {
 		return fmt.Errorf("marshaling job %q: %w", job.ID, err)
 	}
 
+	ttl := r.ttlForStatus(job.Status)
 	_, pipeErr := r.client.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-		pipe.Set(ctx, jobKey(job.ID), data, r.jobTTL)
+		pipe.Set(ctx, jobKey(job.ID), data, ttl)
 		pipe.ZAdd(ctx, queueKey(job.Model), redis.Z{
 			Score:  float64(job.CreatedAt.Unix()),
 			Member: job.ID,
 		})
-		pipe.Expire(ctx, queueKey(job.Model), r.jobTTL)
+		pipe.Expire(ctx, queueKey(job.Model), ttl)
 		if job.ConsumerName != "" {
 			pipe.ZAdd(ctx, consumerKey(job.ConsumerName), redis.Z{
 				Score:  float64(job.CreatedAt.Unix()),
 				Member: job.ID,
 			})
-			pipe.Expire(ctx, consumerKey(job.ConsumerName), r.jobTTL)
+			pipe.Expire(ctx, consumerKey(job.ConsumerName), ttl)
 		}
 		return nil
 	})
@@ -266,10 +318,7 @@ func (r *RedisClient) GetQueuePosition(ctx context.Context, jobID, model string)
 // Uses a Lua script so the read-modify-write is executed without a race window.
 func (r *RedisClient) UpdateJobResult(ctx context.Context, jobID string, status model.JobStatus, resultRef, errMsg string) error {
 	updatedAt := time.Now().UTC().Format(time.RFC3339Nano)
-	ttlSecs := int64(r.jobTTL.Seconds())
-	if ttlSecs <= 0 {
-		ttlSecs = 3600
-	}
+	ttlSecs := int64(r.ttlForStatus(status).Seconds())
 	start := time.Now()
 	err := updateJobScript.Run(ctx, r.client,
 		[]string{jobKey(jobID)},

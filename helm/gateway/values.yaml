@@ -182,9 +182,26 @@ redis-ha:
     masterGroupName: "mymaster"
   replicas: 3
 
-# ── Consumer token tracking ───────────────────────────────────────────────────
-# Suivi de la consommation LLM par consumer (kevent_llm_consumer_tokens_top).
-# Nécessite server.consumerHeader configuré. Indépendant du ServiceMonitor ci-dessous.
+# ── Lifecycle — job record and S3 result retention ───────────────────────────
+lifecycle:
+  # When true, S3 results and Redis records persist until their TTL expires.
+  # When false (default), cleanup is immediate on first GET or webhook delivery.
+  persistsResult: false
+  jobTTL:
+    # global: fallback TTL for all job statuses. Example: "24h", "72h"
+    global: ""
+    # Per-status overrides (take precedence over global):
+    # completed: ""
+    # pending:   ""
+    # failed:    ""
+  gc:
+    # enabled: set to true to activate the unified GC
+    enabled: false
+    # interval: how often the GC runs. Default "15m".
+    interval: "15m"
+    # orphanMinAge: S3 objects younger than this are never treated as orphans. Default "5m".
+    orphanMinAge: "5m"
+
 metricsConfig:
   # Nombre de top consumers à exposer dans Prometheus (Redis sorted set, refresh 60s).
   # 0 = désactivé. Recommandé : 20–50.

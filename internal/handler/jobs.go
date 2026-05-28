@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"kevent/gateway/internal/config"
 	"kevent/gateway/internal/metrics"
 	"kevent/gateway/internal/model"
 	"kevent/gateway/internal/ratelimit"
@@ -39,12 +40,13 @@ var reservedJobFields = map[string]bool{
 // JobHandler handles job submission and status queries.
 type JobHandler struct {
 	registry       *service.Registry
-	store          s3Store       // reuses the interface defined in sync.go
+	store          s3Store           // reuses the interface defined in sync.go
 	redis          asyncJobStore
-	producer       eventProducer // reuses the interface defined in sync.go
-	priorityHeader string        // HTTP header that triggers high-priority routing (e.g. "X-Priority")
-	consumerHeader string        // HTTP header identifying the API consumer (e.g. "X-Consumer-Username")
+	producer       eventProducer     // reuses the interface defined in sync.go
+	priorityHeader string            // HTTP header that triggers high-priority routing (e.g. "X-Priority")
+	consumerHeader string            // HTTP header identifying the API consumer (e.g. "X-Consumer-Username")
 	rateLimiter    ratelimit.Checker // nil = no rate limiting
+	lifecycle      config.LifecycleConfig
 }
 
 func NewJobHandler(
@@ -55,8 +57,9 @@ func NewJobHandler(
 	priorityHeader string,
 	consumerHeader string,
 	rateLimiter ratelimit.Checker,
+	lifecycle config.LifecycleConfig,
 ) *JobHandler {
-	return &JobHandler{registry, store, redis, producer, priorityHeader, consumerHeader, rateLimiter}
+	return &JobHandler{registry, store, redis, producer, priorityHeader, consumerHeader, rateLimiter, lifecycle}
 }
 
 // submitResponse is the 202 body returned after a successful job submission.
@@ -359,14 +362,15 @@ func (h *JobHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 	enc.SetEscapeHTML(false)
 	_ = enc.Encode(resp)
 
-	// Clean up after delivering the result: delete the S3 file and Redis record.
-	// Uses a background context — the request context is already done by the time
-	// the goroutine runs.
-	if job.Status == model.JobStatusCompleted && job.ResultRef != "" {
+	// When persists_result is false, clean up immediately after delivery to
+	// minimise storage usage. When true, records persist until their TTL expires.
+	if job.Status == model.JobStatusCompleted && !h.lifecycle.PersistsResult {
 		go func(resultRef, jobID string) {
 			ctx := context.Background()
-			if err := h.store.DeleteObject(ctx, resultRef); err != nil {
-				slog.Error("failed to delete result file", "job_id", jobID, "result_ref", resultRef, "error", err)
+			if resultRef != "" {
+				if err := h.store.DeleteObject(ctx, resultRef); err != nil {
+					slog.Error("failed to delete result file", "job_id", jobID, "result_ref", resultRef, "error", err)
+				}
 			}
 			if err := h.redis.DeleteJob(ctx, jobID); err != nil {
 				slog.Error("failed to delete job record", "job_id", jobID, "error", err)

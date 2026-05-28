@@ -16,6 +16,42 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Gateway
 
+### [v0.11.0] — 2026-05-27
+
+#### Added
+
+**Unified GC** (`cmd/gateway/gc.go`, `internal/storage/`)
+- New background garbage collector — two phases per tick:
+  - **Phase 1** (stale-pending sweep): marks pending jobs older than `redis.pending_max_age` as failed and deletes their S3 input files
+  - **Phase 2** (S3 orphan cleanup): lists all S3 objects, groups by job ID, and deletes files whose Redis record has expired — covers both `input_ref` and `result_ref` orphans for all exit paths (failed webhooks, `persists_result: true`, never-polled results)
+- Redis safeguard: if `Ping` or `MGET` fails, Phase 2 is skipped entirely and an error is logged — prevents mass deletion when Redis is temporarily unavailable
+- Fully hot-reload safe — all GC parameters updated via atomics without pod restart
+
+New `lifecycle.gc` config block:
+
+| Field | Default | Description |
+|---|---|---|
+| `lifecycle.gc.enabled` | `false` | Master switch |
+| `lifecycle.gc.interval` | `"15m"` | How often the GC runs |
+| `lifecycle.gc.orphan_min_age` | `"5m"` | Minimum object age before orphan check — prevents race conditions on in-flight uploads |
+
+**Lifecycle config block** (`internal/config/`)
+- `lifecycle.persists_result`: controls whether Redis records and S3 results survive first consumption (`false` = immediate cleanup, `true` = keep until TTL)
+- `lifecycle.job_ttl.*`: per-status Redis TTL (`global`, `completed`, `pending`, `failed`)
+- All lifecycle parameters now hot-reload safe (`POST /-/reload`)
+
+#### Changed
+
+- **`redis.pending_max_age_hours` (int, hours) renamed to `redis.pending_max_age` (duration string)** e.g. `"2h"` — consistent with all other duration parameters. See upgrade notes.
+- **`lifecycle.job_ttl.success` renamed to `lifecycle.job_ttl.completed`** — aligns with the `JobStatusCompleted` value used throughout the codebase.
+
+#### Fixed
+
+- `GET /jobs/{service_type}/{id}` no longer wipes the Redis record and S3 result on first fetch — clients can re-fetch within the TTL window without hitting a phantom 404
+- S3 result file is now deleted after successful webhook delivery when `persists_result: false` — previously only `input_ref` was cleaned up on the webhook path
+
+---
+
 ### [v0.10.0] — 2026-05-18
 
 #### Added

@@ -139,8 +139,65 @@ redis:
   addr: "${REDIS_ADDR:-redis:6379}"
   password: "${REDIS_PASSWORD:-}"
   db: 0
-  job_ttl_hours: 72
+  pending_max_age: "${PENDING_MAX_AGE:-2h}"   # duration string; empty or "0s" = disabled
 ```
+
+`pending_max_age` controls the stale-pending sweep (GC Phase 1): jobs still in `pending` state after this duration are marked failed and their S3 input files are deleted. Must be shorter than the S3 input object lifetime.
+
+## Lifecycle
+
+```yaml
+lifecycle:
+  persists_result: false        # true = keep records until TTL; false = delete on first GET or webhook
+  job_ttl:
+    global:    "${LIFECYCLE_JOB_TTL:-}"           # fallback for all statuses; empty = 2h safety net
+    completed: "${LIFECYCLE_JOB_TTL_COMPLETED:-}" # override for completed jobs
+    pending:   "${LIFECYCLE_JOB_TTL_PENDING:-}"   # override for pending/processing jobs
+    failed:    "${LIFECYCLE_JOB_TTL_FAILED:-}"    # override for failed jobs
+  gc:
+    enabled:       ${LIFECYCLE_GC_ENABLED:-false}
+    interval:      "${LIFECYCLE_GC_INTERVAL:-15m}"
+    orphan_min_age: "${LIFECYCLE_GC_ORPHAN_MIN_AGE:-5m}"
+```
+
+### `persists_result`
+
+When `false` (default): Redis record and S3 result file are deleted immediately after first consumption (first `GET /jobs/{id}` that returns a completed result, or first successful webhook delivery). Minimises storage usage.
+
+When `true`: records survive until their TTL expires. Clients can re-fetch the result multiple times within the TTL window.
+
+### `job_ttl`
+
+Per-status Redis TTL for job records. `global` is the fallback for all statuses; per-status values take precedence. When all values are empty, an internal 2h safety net applies to orphaned records.
+
+Example — keep completed results for 24h, fail quickly:
+
+```yaml
+lifecycle:
+  job_ttl:
+    global:    "2h"
+    completed: "24h"
+```
+
+### `gc`
+
+Background garbage collector — runs as a goroutine on a configurable ticker. Two phases per tick:
+
+**Phase 1 — stale-pending sweep** (runs when `redis.pending_max_age` > 0):
+Marks pending jobs older than `pending_max_age` as failed and deletes their S3 input files.
+
+**Phase 2 — S3 orphan cleanup** (runs when `gc.enabled: true`):
+Lists all S3 objects, groups by job ID (first path segment), and deletes any file whose Redis record has expired. Covers both `input_ref` and `result_ref` orphans — catches failed webhooks, `persists_result: true` jobs after TTL, and never-polled results.
+
+Safety: if Redis `Ping` or `MGET` fails before any deletion, Phase 2 is aborted entirely and an error is logged. This prevents mass deletion when Redis is temporarily unavailable.
+
+All `gc` parameters are hot-reload safe.
+
+| Field | Default | Description |
+|---|---|---|
+| `gc.enabled` | `false` | Master switch — GC is off by default |
+| `gc.interval` | `"15m"` | How often the GC runs |
+| `gc.orphan_min_age` | `"5m"` | Minimum object age before orphan check — avoids deleting objects from in-flight uploads not yet registered in Redis |
 
 ## Services
 
@@ -273,3 +330,16 @@ inference_headers:
 `POST /-/reload` re-reads the config file and atomically swaps the router. Kafka consumers are reconciled (stopped for removed topics, started for new ones). S3, Redis, and Kafka connections are not re-initialised.
 
 The `configmap-reload` sidecar can trigger this automatically on ConfigMap changes.
+
+Parameters updated at runtime without pod restart:
+
+| Parameter | Notes |
+|---|---|
+| `services.*` | Full registry rebuild; Kafka consumers reconciled |
+| `lifecycle.*` (all fields) | Including `gc.enabled`, `gc.interval`, `gc.orphan_min_age`, `job_ttl.*` |
+| `redis.pending_max_age` | Picked up on the next GC tick |
+| `rate_limits` | Applied immediately to new requests |
+| `audit_log` | Toggled without restart |
+| `server.user_type_header` | Applied to new requests |
+
+Not hot-reloadable (restart required): `redis.addr`, `s3.*`, `kafka.*`, `server.addr`, `server.*_timeout`, `metrics.top_consumers`.

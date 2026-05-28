@@ -73,7 +73,7 @@ func buildRouter(
 	rl ratelimit.Checker,
 	llmHandler *llmproxy.Handler,
 ) *chi.Mux {
-	jobHandler := handler.NewJobHandler(reg, s3Client, redisClient, producer, cfg.Server.PriorityHeader, cfg.Server.ConsumerHeader, rl)
+	jobHandler := handler.NewJobHandler(reg, s3Client, redisClient, producer, cfg.Server.PriorityHeader, cfg.Server.ConsumerHeader, rl, cfg.Lifecycle)
 
 	r := chi.NewRouter()
 	r.Use(chimw.RequestID)
@@ -147,7 +147,7 @@ func main() {
 	}
 	slog.Info("S3 storage initialised", "encryption", cfg.Encryption.Key != "")
 
-	redisClient, err := storage.NewRedis(cfg.Redis)
+	redisClient, err := storage.NewRedis(cfg.Redis, cfg.Lifecycle)
 	if err != nil {
 		slog.Error("failed to initialise Redis", "error", err)
 		os.Exit(1)
@@ -173,7 +173,7 @@ func main() {
 		}
 		defer producer.Close()
 
-		consumerManager, err = kafka.NewConsumerManager(cfg.Kafka, redisClient, s3Client, logger)
+		consumerManager, err = kafka.NewConsumerManager(cfg.Kafka, redisClient, s3Client, logger, cfg.Lifecycle.PersistsResult)
 		if err != nil {
 			slog.Error("failed to initialise Kafka consumer manager", "error", err)
 			os.Exit(1)
@@ -184,13 +184,15 @@ func main() {
 	// ── LLM proxy ─────────────────────────────────────────────────────────────
 	providerRegistry := provider.NewRegistry()
 	responseCache := cache.NewRedisCache(redisClient.Raw())
+	llmHTTPClient := &http.Client{Timeout: 15 * time.Minute}
 
 	var consumerTracker gmetrics.ConsumerTracker = gmetrics.NoopTracker{}
 	if cfg.Metrics.TopConsumers > 0 {
 		consumerTracker = gmetrics.NewRedisTracker(redisClient.Raw())
 	}
 
-	llmHandler := llmproxy.New(responseCache, providerRegistry, &http.Client{Timeout: 15 * time.Minute},
+	var llmHandler *llmproxy.Handler
+	llmHandler = llmproxy.New(responseCache, providerRegistry, llmHTTPClient,
 		cfg.Server.UserTypeHeader, consumerTracker,
 		llmproxy.AuditConfig{Enabled: cfg.AuditLog.Enabled, Prompt: cfg.AuditLog.Prompt})
 
@@ -200,6 +202,14 @@ func main() {
 	// Infrastructure (S3, Redis, Kafka connection) is not re-initialised.
 	holder := &routerHolder{}
 
+	// GC atomics — declared before reloadFn so the reload path can update them.
+	var (
+		gcEnabled      atomic.Bool
+		gcInterval     atomic.Int64 // nanoseconds
+		gcOrphanMinAge atomic.Int64 // nanoseconds
+		gcMaxAge       atomic.Int64 // nanoseconds
+	)
+
 	var reloadFn func() error
 	reloadFn = func() error {
 		newCfg, err := config.Load(cfgPath)
@@ -207,12 +217,37 @@ func main() {
 			return err
 		}
 		newReg := service.NewRegistry(newCfg.Services)
+
+		// Update infrastructure state that survives across reloads.
+		redisClient.UpdateLifecycle(newCfg.Lifecycle)
+		if consumerManager != nil {
+			consumerManager.UpdatePersistsResult(newCfg.Lifecycle.PersistsResult)
+		}
+		gcEnabled.Store(newCfg.Lifecycle.GC.Enabled)
+		if iv := newCfg.Lifecycle.GC.IntervalDuration(); iv > 0 {
+			gcInterval.Store(int64(iv))
+		}
+		if oma := newCfg.Lifecycle.GC.OrphanMinAgeDuration(); oma > 0 {
+			gcOrphanMinAge.Store(int64(oma))
+		}
+		gcMaxAge.Store(int64(newCfg.Redis.PendingMaxAgeDuration()))
+
+		// Rebuild stateless config-driven objects.
+		if len(newCfg.RateLimits) > 0 {
+			rl = ratelimit.New(redisClient.Client(), newCfg.RateLimits, newCfg.Server.ConsumerHeader, newCfg.Server.UserTypeHeader)
+		} else {
+			rl = nil
+		}
+		llmHandler = llmproxy.New(responseCache, providerRegistry, llmHTTPClient,
+			newCfg.Server.UserTypeHeader, consumerTracker,
+			llmproxy.AuditConfig{Enabled: newCfg.AuditLog.Enabled, Prompt: newCfg.AuditLog.Prompt})
+
 		newRouter := buildRouter(newCfg, newReg, s3Client, redisClient, producer, logger, reloadFn, rl, llmHandler)
 		holder.p.Store(newRouter)
 		if consumerManager != nil {
 			consumerManager.Reconcile(newReg)
 		}
-		slog.Info("service registry reloaded", "types", newReg.Types())
+		slog.Info("config reloaded", "types", newReg.Types())
 		return nil
 	}
 
@@ -232,40 +267,55 @@ func main() {
 		consumerManager.Start(ctx, initialRegistry)
 	}
 
-	// ── Stale-job garbage collector ───────────────────────────────────────────
-	if cfg.Redis.PendingMaxAgeH > 0 {
-		maxAge := time.Duration(cfg.Redis.PendingMaxAgeH) * time.Hour
-		go func() {
-			ticker := time.NewTicker(15 * time.Minute)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-					swept, err := redisClient.SweepStalePendingJobs(ctx, maxAge)
-					if err != nil {
-						slog.Error("stale-job GC failed", "error", err)
-					} else if len(swept) > 0 {
-						slog.Info("stale-job GC swept jobs", "count", len(swept), "max_age", maxAge)
-						for _, job := range swept {
-							gmetrics.AsyncStaleJobsSweptTotal.WithLabelValues(job.Model).Inc()
-							if job.InputRef == "" {
-								continue
-							}
-							inputRef := job.InputRef
-							jobID := job.ID
-							go func() {
-								if err := s3Client.DeleteObject(context.Background(), inputRef); err != nil {
-									slog.Error("stale-job GC: failed to delete S3 input", "job_id", jobID, "input_ref", inputRef, "error", err)
-								}
-							}()
-						}
-					}
+	// ── Unified GC ────────────────────────────────────────────────────────────
+	// All atomics are read on each tick so hot-reload takes effect without restart.
+	gcEnabled.Store(cfg.Lifecycle.GC.Enabled)
+	iv := cfg.Lifecycle.GC.IntervalDuration()
+	if iv <= 0 {
+		iv = 15 * time.Minute
+	}
+	gcInterval.Store(int64(iv))
+	oma := cfg.Lifecycle.GC.OrphanMinAgeDuration()
+	if oma <= 0 {
+		oma = 5 * time.Minute
+	}
+	gcOrphanMinAge.Store(int64(oma))
+	gcMaxAge.Store(int64(cfg.Redis.PendingMaxAgeDuration()))
+
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		var lastRun time.Time
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if !gcEnabled.Load() {
+					continue
 				}
+				interval := time.Duration(gcInterval.Load())
+				if interval <= 0 {
+					interval = 15 * time.Minute
+				}
+				if !lastRun.IsZero() && time.Since(lastRun) < interval {
+					continue
+				}
+				lastRun = time.Now()
+				runGC(ctx, redisClient, s3Client,
+					time.Duration(gcMaxAge.Load()),
+					time.Duration(gcOrphanMinAge.Load()),
+				)
 			}
-		}()
-		slog.Info("stale-job GC enabled", "max_age_hours", cfg.Redis.PendingMaxAgeH)
+		}
+	}()
+
+	if cfg.Lifecycle.GC.Enabled {
+		slog.Info("unified GC enabled",
+			"interval", cfg.Lifecycle.GC.Interval,
+			"pending_max_age", cfg.Redis.PendingMaxAge,
+			"orphan_min_age", cfg.Lifecycle.GC.OrphanMinAge,
+		)
 	}
 
 	// ── HTTP server ───────────────────────────────────────────────────────────
