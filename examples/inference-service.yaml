@@ -63,7 +63,7 @@ spec:
 
     # ── kevent relay sidecar ──────────────────────────────────────────────────
     - name: relay
-      image: ghcr.io/ia-generative/kevent-ai/relay:v0.6.1
+      image: ghcr.io/ia-generative/kevent-ai/relay:v0.5.4
       imagePullPolicy: IfNotPresent
       ports:
         - name: http1
