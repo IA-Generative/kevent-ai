@@ -503,6 +503,16 @@ New `lifecycle.gc` config block:
 
 ## Relay
 
+### [v0.5.3] — 2026-05-28
+
+#### Fixed
+
+- **Graceful shutdown**: relay process now waits for all in-flight jobs to complete before exiting (`WaitIdle()`). Previously `main()` returned as soon as `srv.Shutdown()` timed out (default 30 s), killing goroutines mid-inference and losing the result.
+- **Result persistence after queue-proxy timeout**: S3 upload and Kafka publish of the inference result now run on a context detached from the HTTP request (`context.WithoutCancel`). A Knative queue-proxy timeout that cancelled the request context no longer silently discards the result.
+- **Liveness probe false positive during inference**: `/health` now returns 200 immediately when a job is in progress, skipping the upstream inference model health check. Previously the model's busy response caused repeated liveness failures, triggering a SIGTERM after `failureThreshold × periodSeconds` (~150 s with the default KServe probe config) while inference was still running.
+
+---
+
 ### [v0.5.2] — 2026-05-18
 
 #### Fixed

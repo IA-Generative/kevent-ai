@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -44,6 +45,7 @@ type Dispatcher struct {
 	resultTopic  string
 	syncPriority atomic.Int32 // number of sync jobs currently in progress
 	activeJobs   atomic.Int32 // number of jobs currently being processed
+	wg           sync.WaitGroup
 	annotator    *lifecycle.PodAnnotator
 }
 
@@ -83,9 +85,24 @@ func (d *Dispatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	d.serveHTTP(w, r)
 }
 
+// WaitIdle blocks until all in-flight jobs have completed.
+// Call after srv.Shutdown to ensure the process does not exit while inference
+// or result-publishing is still in progress.
+func (d *Dispatcher) WaitIdle() {
+	d.wg.Wait()
+}
+
+// ActiveJobs returns the number of jobs currently being processed.
+func (d *Dispatcher) ActiveJobs() int {
+	return int(d.activeJobs.Load())
+}
+
 // serveHTTP is the shared CloudEvent processing implementation used by both
 // ServeHTTP (async) and ServeHTTPSync (priority).
 func (d *Dispatcher) serveHTTP(w http.ResponseWriter, r *http.Request) {
+	d.wg.Add(1)
+	defer d.wg.Done()
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -176,8 +193,11 @@ func (d *Dispatcher) process(ctx context.Context, event *model.InputEvent) error
 	result, inferErr := d.runInference(ctx, event, body, size, contentType)
 	if inferErr != nil {
 		// Retry inference once immediately: re-download for a fresh stream.
+		// Use WithoutCancel so that a queue-proxy timeout that cancelled ctx
+		// does not also abort the retry download — inference was already
+		// detached by the adapter, so the retry should be too.
 		log.Warn("inference attempt failed, retrying immediately", "error", inferErr)
-		body2, size2, ct2, getErr := d.s3.GetObject(ctx, event.InputRef)
+		body2, size2, ct2, getErr := d.s3.GetObject(context.WithoutCancel(ctx), event.InputRef)
 		if getErr != nil {
 			if storage.IsNotFound(getErr) {
 				log.Error("input file not found on inference retry, publishing permanent failure", "input_ref", event.InputRef)
@@ -205,10 +225,19 @@ func (d *Dispatcher) process(ctx context.Context, event *model.InputEvent) error
 		return nil
 	}
 
+	// Detach from r.Context() for result persistence: the HTTP connection to
+	// the queue-proxy may have been closed (proxy timeout, pod drain) while
+	// inference was running, cancelling ctx. We must not let that abort the
+	// S3 upload or Kafka publish — the result exists and must be persisted.
+	persistCtx := context.WithoutCancel(ctx)
+	if ctx.Err() != nil {
+		log.Warn("HTTP context cancelled before result persistence; using detached context", "cause", context.Cause(ctx))
+	}
+
 	resultKey := event.JobID + "/result.json"
-	if err := d.s3.PutObject(ctx, resultKey, bytes.NewReader(result), int64(len(result)), "application/json"); err != nil {
+	if err := d.s3.PutObject(persistCtx, resultKey, bytes.NewReader(result), int64(len(result)), "application/json"); err != nil {
 		log.Warn("s3 put attempt failed, retrying immediately", "error", err)
-		if err := d.s3.PutObject(ctx, resultKey, bytes.NewReader(result), int64(len(result)), "application/json"); err != nil {
+		if err := d.s3.PutObject(persistCtx, resultKey, bytes.NewReader(result), int64(len(result)), "application/json"); err != nil {
 			return fmt.Errorf("s3 put: %w", err)
 		}
 	}
@@ -220,9 +249,9 @@ func (d *Dispatcher) process(ctx context.Context, event *model.InputEvent) error
 		ResultRef:   resultKey,
 		CompletedAt: time.Now().UTC(),
 	}
-	if err := d.publisher.PublishResultEvent(ctx, d.resultTopic, resultEvent); err != nil {
+	if err := d.publisher.PublishResultEvent(persistCtx, d.resultTopic, resultEvent); err != nil {
 		log.Warn("publish result attempt failed, retrying immediately", "error", err)
-		if err := d.publisher.PublishResultEvent(ctx, d.resultTopic, resultEvent); err != nil {
+		if err := d.publisher.PublishResultEvent(persistCtx, d.resultTopic, resultEvent); err != nil {
 			log.Error("failed to publish result event after retry", "error", err)
 		}
 	}
