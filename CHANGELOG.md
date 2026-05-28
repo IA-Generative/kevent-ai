@@ -16,17 +16,6 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Gateway
 
-### [v0.11.1] — 2026-05-19
-
-#### Fixed
-
-**Async job result lifecycle** (`internal/handler/jobs.go`, `internal/kafka/consumer.go`, `config.yaml`)
-- `GET /jobs/{service_type}/{id}` no longer deletes the Redis record on first read — clients can poll or re-fetch within the TTL window without hitting a phantom 404
-- `job_ttl_hours` reduced from 72h to 24h — sufficient for any retry scenario without unnecessary memory overhead
-- Webhook path: S3 result file is now deleted after successful delivery, consistent with the polling path (previously leaked indefinitely)
-
----
-
 ### [v0.11.0] — 2026-05-27
 
 #### Added
@@ -55,6 +44,11 @@ New `lifecycle.gc` config block:
 
 - **`redis.pending_max_age_hours` (int, hours) renamed to `redis.pending_max_age` (duration string)** e.g. `"2h"` — consistent with all other duration parameters. See upgrade notes.
 - **`lifecycle.job_ttl.success` renamed to `lifecycle.job_ttl.completed`** — aligns with the `JobStatusCompleted` value used throughout the codebase.
+
+#### Fixed
+
+- `GET /jobs/{service_type}/{id}` no longer wipes the Redis record and S3 result on first fetch — clients can re-fetch within the TTL window without hitting a phantom 404
+- S3 result file is now deleted after successful webhook delivery when `persists_result: false` — previously only `input_ref` was cleaned up on the webhook path
 
 ---
 
