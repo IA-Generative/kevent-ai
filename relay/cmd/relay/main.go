@@ -2,21 +2,22 @@ package main
 
 import (
 	"context"
-	"io"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
-	"strings"
-	"time"
+	"os/signal"
+	"syscall"
+
+	kafkago "github.com/segmentio/kafka-go"
 
 	"kevent/relay/internal/adapter"
 	"kevent/relay/internal/config"
 	"kevent/relay/internal/kafka"
+	"kevent/relay/internal/lifecycle"
 	"kevent/relay/internal/relay"
 	"kevent/relay/internal/storage"
 )
-
-const jobsinkEventPath = "/etc/jobsink-event/event"
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -46,66 +47,88 @@ func main() {
 	}
 	defer publisher.Close()
 
+	consumer, err := kafka.NewConsumer(cfg.Kafka)
+	if err != nil {
+		slog.Error("failed to initialise Kafka consumer", "error", err)
+		os.Exit(1)
+	}
+	defer consumer.Close()
+
 	adp, err := adapter.New(cfg)
 	if err != nil {
 		slog.Error("failed to initialise adapter", "error", err)
 		os.Exit(1)
 	}
 
-	proc := relay.New(adp, s3Client, publisher, cfg.Service.ResultTopic)
+	annotator := lifecycle.New()
+	proc := relay.New(adp, s3Client, publisher, cfg.Service.ResultTopic, annotator)
 
-	inferenceHealthURL := strings.TrimRight(cfg.Inference.BaseURL, "/") + "/health"
-	healthClient := &http.Client{Timeout: cfg.Inference.HealthCheckTimeoutDuration()}
-	waitForInference(inferenceHealthURL, healthClient, cfg.Inference.ReadyTimeoutDuration(), cfg.Inference.ReadyIntervalDuration())
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
 
-	eventData, err := os.ReadFile(jobsinkEventPath)
-	if err != nil {
-		slog.Error("failed to read jobsink event", "path", jobsinkEventPath, "error", err)
-		os.Exit(1)
-	}
+	go serveHealth()
 
-	event, err := relay.ParseInputEvent(eventData)
-	if err != nil {
-		slog.Error("failed to parse input event", "error", err)
-		os.Exit(1)
-	}
-	if event.JobID == "" {
-		slog.Error("input event missing job_id")
-		os.Exit(1)
-	}
-
-	slog.Info("relay job starting",
-		"job_id", event.JobID,
-		"service_type", event.ServiceType,
-		"inference_base_url", cfg.Inference.BaseURL,
+	slog.Info("relay consumer started",
+		"topic", cfg.Kafka.InputTopic,
+		"consumer_group", cfg.Kafka.ConsumerGroup,
 	)
 
-	if err := proc.Process(context.Background(), event); err != nil {
-		slog.Error("job failed (system error)", "job_id", event.JobID, "error", err)
-		os.Exit(1)
-	}
-
-	slog.Info("job done", "job_id", event.JobID)
-}
-
-func waitForInference(healthURL string, client *http.Client, timeout, interval time.Duration) {
-	slog.Info("waiting for inference service", "health_url", healthURL, "timeout", timeout)
-	deadline := time.Now().Add(timeout)
 	for {
-		resp, err := client.Get(healthURL)
-		if err == nil {
-			io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				slog.Info("inference service ready")
-				return
+		msg, err := consumer.FetchMessage(ctx)
+		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				slog.Info("relay shutting down")
+				break
 			}
-		}
-		if time.Now().After(deadline) {
-			slog.Error("inference service did not become ready within timeout", "health_url", healthURL)
+			slog.Error("kafka fetch error", "error", err)
 			os.Exit(1)
 		}
-		slog.Info("inference not ready yet, retrying", "health_url", healthURL, "interval", interval)
-		time.Sleep(interval)
+
+		if err := handleMessage(proc, consumer, msg); err != nil {
+			slog.Error("fatal job error, exiting for Kafka redeliver", "error", err)
+			os.Exit(1)
+		}
+
+		// After completing a job, honour a pending shutdown signal.
+		if ctx.Err() != nil {
+			slog.Info("relay shutting down after job completion")
+			break
+		}
+	}
+}
+
+// handleMessage processes one Kafka message.
+// Returns an error only for transient infra failures that warrant pod restart.
+// Malformed/invalid messages are skipped (committed without processing).
+func handleMessage(proc *relay.Processor, consumer *kafka.Consumer, msg kafkago.Message) error {
+	event, err := relay.ParseInputEvent(msg.Value)
+	if err != nil || event.JobID == "" {
+		slog.Error("skipping unparseable message", "error", err, "offset", msg.Offset, "partition", msg.Partition)
+		// Use Background context: upstream ctx may be cancelled (SIGTERM).
+		return consumer.CommitMessages(context.Background(), msg)
+	}
+
+	slog.Info("processing job", "job_id", event.JobID, "service_type", event.ServiceType, "offset", msg.Offset)
+
+	// Use Background context so SIGTERM does not interrupt an in-flight inference job.
+	if err := proc.Process(context.Background(), event); err != nil {
+		return err // transient infra error — caller will os.Exit(1)
+	}
+
+	if err := consumer.CommitMessages(context.Background(), msg); err != nil {
+		return err
+	}
+
+	slog.Info("job committed", "job_id", event.JobID)
+	return nil
+}
+
+func serveHealth() {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	if err := http.ListenAndServe(":8080", mux); err != nil {
+		slog.Error("health server stopped", "error", err)
 	}
 }
