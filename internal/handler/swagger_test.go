@@ -214,7 +214,7 @@ func getProperties(t *testing.T, spec json.RawMessage, path, method string) map[
 	return nil
 }
 
-func TestApplyGatewayOverlay_SingleModel_SingleOp_NoInjection(t *testing.T) {
+func TestApplyGatewayOverlay_SingleModel_SingleOp(t *testing.T) {
 	svc := whisperSvc(map[string][]string{
 		"transcription": {"/v1/audio/transcriptions"},
 	})
@@ -224,9 +224,15 @@ func TestApplyGatewayOverlay_SingleModel_SingleOp_NoInjection(t *testing.T) {
 	if props == nil {
 		t.Fatal("expected properties, got nil")
 	}
-	if _, ok := props["model"]; ok {
-		t.Error("model field should not be injected for single-model service")
+	// model is always injected with default so it appears pre-filled in Swagger UI
+	modelField, ok := props["model"].(map[string]any)
+	if !ok {
+		t.Fatal("expected model field to be injected")
 	}
+	if modelField["default"] != "whisper-large-v3" {
+		t.Errorf("expected default=whisper-large-v3, got %v", modelField["default"])
+	}
+	// operation is not injected for single-operation service
 	if _, ok := props["operation"]; ok {
 		t.Error("operation field should not be injected for single-operation service")
 	}
@@ -333,14 +339,18 @@ func TestFetchSwaggerSpecs_OverlayApplied(t *testing.T) {
 		t.Fatalf("expected 2 specs, got %d", len(specs))
 	}
 
-	// Both specs should have model field injected (2 models for type "audio").
+	// Both specs should have model field injected with their respective default values.
 	for _, spec := range specs {
 		props := getProperties(t, spec.Data, "/v1/audio/transcriptions", "post")
 		if props == nil {
 			t.Fatalf("nil properties for spec %s/%s", spec.Type, spec.Model)
 		}
-		if _, ok := props["model"]; !ok {
-			t.Errorf("model field not injected in spec %s/%s", spec.Type, spec.Model)
+		modelField, ok := props["model"].(map[string]any)
+		if !ok {
+			t.Fatalf("model field not injected in spec %s/%s", spec.Type, spec.Model)
+		}
+		if modelField["default"] != spec.Model {
+			t.Errorf("spec %s/%s: expected default=%s, got %v", spec.Type, spec.Model, spec.Model, modelField["default"])
 		}
 	}
 }

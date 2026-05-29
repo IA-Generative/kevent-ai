@@ -89,7 +89,7 @@ func ApplyGatewayOverlay(raw json.RawMessage, svc config.ServiceConfig, allModel
 		if !managedPaths[path] {
 			continue
 		}
-		overlayPathItem(item, spec, svc.Model, len(allModels) > 1, opNames)
+		overlayPathItem(item, spec, svc.Model, opNames)
 	}
 
 	out, err := json.Marshal(spec)
@@ -99,7 +99,7 @@ func ApplyGatewayOverlay(raw json.RawMessage, svc config.ServiceConfig, allModel
 	return out
 }
 
-func overlayPathItem(pathItem any, spec map[string]any, model string, multiModel bool, opNames []string) {
+func overlayPathItem(pathItem any, spec map[string]any, model string, opNames []string) {
 	item, _ := pathItem.(map[string]any)
 	for _, method := range []string{"post", "put", "patch"} {
 		op, _ := item[method].(map[string]any)
@@ -110,12 +110,11 @@ func overlayPathItem(pathItem any, spec map[string]any, model string, multiModel
 		if props == nil {
 			continue
 		}
-		if multiModel {
-			props["model"] = map[string]any{
-				"type":        "string",
-				"enum":        []string{model},
-				"description": "Inference model — required when multiple models are available for this service type",
-			}
+		props["model"] = map[string]any{
+			"type":        "string",
+			"enum":        []string{model},
+			"default":     model,
+			"description": "Inference model",
 		}
 		if len(opNames) > 1 {
 			props["operation"] = map[string]any{
