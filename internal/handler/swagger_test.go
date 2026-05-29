@@ -239,6 +239,7 @@ func TestApplyGatewayOverlay_MultiModel_InjectsModelField(t *testing.T) {
 	svc := whisperSvc(map[string][]string{
 		"transcription": {"/v1/audio/transcriptions"},
 	})
+	// Two models exist for this type, but the spec is for whisper-large-v3 only.
 	models := []string{"whisper-large-v3", "whisper-large-v3-turbo"}
 	result := ApplyGatewayOverlay(whisperFixture, svc, models)
 
@@ -251,8 +252,11 @@ func TestApplyGatewayOverlay_MultiModel_InjectsModelField(t *testing.T) {
 		t.Fatal("expected model field to be injected")
 	}
 	enum, _ := modelField["enum"].([]any)
-	if len(enum) != 2 {
-		t.Errorf("expected 2 enum values, got %d", len(enum))
+	if len(enum) != 1 {
+		t.Errorf("expected 1 enum value (this model only), got %d", len(enum))
+	}
+	if enum[0] != "whisper-large-v3" {
+		t.Errorf("expected enum[0] = whisper-large-v3, got %v", enum[0])
 	}
 }
 
