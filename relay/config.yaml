@@ -24,7 +24,7 @@ s3:
   secret_key: "${S3_SECRET_KEY}"
   bucket:     "${S3_BUCKET:-kevent-jobs}"
 
-# Local inference endpoint (sidecar in the same pod).
+# Inference service endpoint. For Job deployments, set INFERENCE_BASE_URL to the InferenceService cluster URL.
 # INFERENCE_PORT is the port of the model server in the pod.
 # The OpenAI path (e.g. /v1/audio/transcriptions) is provided per-event by the
 # gateway (InputEvent.inference_url) and appended at runtime:
@@ -44,7 +44,3 @@ inference:
     # language: "fr"
     # prompt: "Extract all text visible in this document."
 
-server:
-  read_timeout:     "${SERVER_READ_TIMEOUT:-30s}"
-  idle_timeout:     "${SERVER_IDLE_TIMEOUT:-120s}"
-  shutdown_timeout: "${SERVER_SHUTDOWN_TIMEOUT:-30s}"

@@ -15,7 +15,6 @@ type Config struct {
 	S3         S3Config         `yaml:"s3"`
 	Encryption EncryptionConfig `yaml:"encryption"`
 	Inference  InferenceConfig  `yaml:"inference"`
-	Server     ServerConfig     `yaml:"server"`
 }
 
 // InferenceConfig holds the local inference endpoint configuration.
@@ -34,12 +33,6 @@ type InferenceConfig struct {
 	ReadyInterval      string            `yaml:"ready_interval"`
 	HealthCheckTimeout string            `yaml:"health_check_timeout"`
 	ExtraFields        map[string]string `yaml:"extra_fields"`
-}
-
-type ServerConfig struct {
-	ReadTimeout     string `yaml:"read_timeout"`
-	IdleTimeout     string `yaml:"idle_timeout"`
-	ShutdownTimeout string `yaml:"shutdown_timeout"`
 }
 
 // TimeoutDuration returns the configured inference timeout.
@@ -80,33 +73,6 @@ func (c InferenceConfig) HealthCheckTimeoutDuration() time.Duration {
 		return d
 	}
 	return 2 * time.Second
-}
-
-// ReadTimeoutDuration returns the HTTP server read timeout.
-// Invalid or absent values fall back to 30 seconds.
-func (c ServerConfig) ReadTimeoutDuration() time.Duration {
-	if d, err := time.ParseDuration(c.ReadTimeout); err == nil && d > 0 {
-		return d
-	}
-	return 30 * time.Second
-}
-
-// IdleTimeoutDuration returns the HTTP server idle connection timeout.
-// Invalid or absent values fall back to 120 seconds.
-func (c ServerConfig) IdleTimeoutDuration() time.Duration {
-	if d, err := time.ParseDuration(c.IdleTimeout); err == nil && d > 0 {
-		return d
-	}
-	return 120 * time.Second
-}
-
-// ShutdownTimeoutDuration returns how long to wait for graceful shutdown.
-// Invalid or absent values fall back to 30 seconds.
-func (c ServerConfig) ShutdownTimeoutDuration() time.Duration {
-	if d, err := time.ParseDuration(c.ShutdownTimeout); err == nil && d > 0 {
-		return d
-	}
-	return 30 * time.Second
 }
 
 type EncryptionConfig struct {

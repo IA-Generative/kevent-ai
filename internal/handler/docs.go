@@ -377,18 +377,17 @@ func listModelsPathItem() map[string]any {
 // service definitions. Pattern paths (containing {model}) get a path parameter.
 func syncPathItems(reg *service.Registry) map[string]any {
 	type entry struct {
-		serviceType  string
-		models       []string
-		opNames      []string
-		exts         []string
-		hasSyncTopic bool
-		isPattern    bool
+		serviceType string
+		models      []string
+		opNames     []string
+		exts        []string
+		isPattern   bool
 	}
 
 	byPath := map[string]*entry{}
 
 	for _, def := range reg.All() {
-		if def.InferenceURL == "" && def.SyncTopic == "" {
+		if def.InferenceURL == "" {
 			continue
 		}
 		for opName, paths := range def.Operations {
@@ -408,9 +407,6 @@ func syncPathItems(reg *service.Registry) map[string]any {
 				e.opNames = appendUniq(e.opNames, opName)
 				for ext := range def.AcceptedExts {
 					e.exts = appendUniq(e.exts, ext)
-				}
-				if def.SyncTopic != "" {
-					e.hasSyncTopic = true
 				}
 			}
 		}
@@ -461,12 +457,7 @@ func syncPathItems(reg *service.Registry) map[string]any {
 			summary = "Inference (sync)"
 		}
 
-		var desc string
-		if e.hasSyncTopic {
-			desc = "Sync-over-Kafka: processed via a priority Kafka topic; connection is held open until the result is ready."
-		} else {
-			desc = "Direct proxy to the inference backend (`inference_url`)."
-		}
+		desc := "Direct proxy to the inference backend (`inference_url`)."
 
 		op := map[string]any{
 			"tags":        []string{e.serviceType},

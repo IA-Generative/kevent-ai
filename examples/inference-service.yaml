@@ -1,7 +1,12 @@
 # KServe InferenceService + ServingRuntime example for a Whisper transcription service.
 #
-# The relay sidecar is declared inside the ServingRuntime so it runs
-# alongside the inference model in every pod.
+# The InferenceService is now a standalone service shared by:
+#   - sync requests: proxied directly by the gateway (POST /v1/audio/transcriptions)
+#   - async requests: called over the network by relay Jobs (JobSink)
+#
+# The relay sidecar has been removed. Set minReplicas: 1 to keep the model warm
+# for sync requests, or 0 to allow scale-to-zero (first request after idle has
+# cold start latency while the model loads).
 #
 # Apply in the namespace where your InferenceService runs:
 #   kubectl apply -f examples/inference-service.yaml
@@ -19,8 +24,8 @@ spec:
     labels:
       networking.knative.dev/visibility: cluster-local
     maxReplicas: 2
-    minReplicas: 0
-    containerConcurrency: 2
+    minReplicas: 1  # keep model warm for sync requests; set to 0 to allow scale-to-zero
+    containerConcurrency: 1  # one inference at a time per GPU pod
     model:
       modelFormat:
         name: whisper
@@ -37,8 +42,8 @@ spec:
       runtime: whisper-runtime
       storageUri: pvc://<model-pvc-name>  # PVC containing model weights
     scaleMetric: concurrency
-    scaleTarget: 2
-    timeout: 300
+    scaleTarget: 1
+    timeout: 14400  # 4h — must cover the longest possible inference job
 ---
 apiVersion: serving.kserve.io/v1alpha1
 kind: ServingRuntime
@@ -61,80 +66,6 @@ spec:
         - mountPath: /mnt/models
           name: kserve-pvc-source
 
-    # ── kevent relay sidecar ──────────────────────────────────────────────────
-    - name: relay
-      image: ghcr.io/ia-generative/kevent-ai/relay:v0.5.4
-      imagePullPolicy: IfNotPresent
-      ports:
-        - name: http1
-          containerPort: 8080
-          protocol: TCP
-      env:
-        - name: SERVICE_TYPE
-          value: transcription
-        - name: INFERENCE_PORT
-          value: "9000"
-        - name: RESULT_TOPIC
-          value: jobs.whisper-large-v3.results
-        - name: KAFKA_BROKERS
-          value: "<kafka-bootstrap-address>"  # e.g. kafka-bootstrap.kafka.svc.cluster.local:9093
-        - name: KAFKA_SASL_MECHANISM
-          value: "SCRAM-SHA-512"
-        - name: KAFKA_TLS_ENABLED
-          value: "true"
-        - name: KAFKA_CA_CERT_PATH
-          value: "/etc/kafka-tls/ca.crt"
-        - name: KAFKA_SASL_USERNAME
-          valueFrom:
-            secretKeyRef:
-              name: <relay-secret-name>
-              key: username
-        - name: KAFKA_SASL_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: <relay-secret-name>
-              key: password
-        - name: S3_BUCKET
-          value: <s3-bucket-name>
-        - name: S3_ACCESS_KEY
-          valueFrom:
-            secretKeyRef:
-              name: <s3-secret-name>
-              key: access-key
-        - name: S3_SECRET_KEY
-          valueFrom:
-            secretKeyRef:
-              name: <s3-secret-name>
-              key: secret-key
-        - name: CONFIG_PATH
-          value: /etc/kevent/config.yaml
-        # Optional: enable AES-256-GCM encryption for S3 objects
-        - name: ENCRYPTION_KEY
-          valueFrom:
-            secretKeyRef:
-              name: kevent-encryption-key
-              key: ENCRYPTION_KEY
-              optional: true
-      volumeMounts:
-        - name: kevent-sidecar
-          mountPath: /etc/kevent/
-        - name: kafka-tls
-          mountPath: /etc/kafka-tls
-          readOnly: true
-      readinessProbe:
-        httpGet:
-          path: /health
-          port: 8080
-        initialDelaySeconds: 5
-        periodSeconds: 10
-      resources:
-        requests:
-          cpu: "100m"
-          memory: "128Mi"
-        limits:
-          cpu: "500m"
-          memory: "256Mi"
-
   protocolVersions:
     - v1
   supportedModelFormats:
@@ -146,9 +77,3 @@ spec:
     - name: kserve-pvc-source
       persistentVolumeClaim:
         claimName: <model-pvc-name>
-    - name: kevent-sidecar
-      configMap:
-        name: kevent-sidecar  # relay config.yaml, managed separately
-    - name: kafka-tls
-      secret:
-        secretName: <kafka-ca-secret-name>
