@@ -12,6 +12,7 @@ import (
 
 	"kevent/relay/internal/adapter"
 	"kevent/relay/internal/kafka"
+	"kevent/relay/internal/lifecycle"
 	"kevent/relay/internal/metrics"
 	"kevent/relay/internal/model"
 	"kevent/relay/internal/storage"
@@ -34,6 +35,7 @@ type Processor struct {
 	s3          objectStore
 	publisher   eventPublisher
 	resultTopic string
+	annotator   *lifecycle.PodAnnotator
 }
 
 func New(
@@ -41,12 +43,14 @@ func New(
 	s3 *storage.S3Client,
 	pub *kafka.Publisher,
 	resultTopic string,
+	annotator *lifecycle.PodAnnotator,
 ) *Processor {
 	return &Processor{
 		adapter:     adp,
 		s3:          s3,
 		publisher:   pub,
 		resultTopic: resultTopic,
+		annotator:   annotator,
 	}
 }
 
@@ -55,7 +59,18 @@ func New(
 // network) so the caller can exit 1 and let Knative retry the Job.
 // Inference errors are published as failed ResultEvents and return nil.
 func (p *Processor) Process(ctx context.Context, event *model.InputEvent) error {
-	return p.process(ctx, event)
+	if p.annotator != nil {
+		if err := p.annotator.SetDeletionCost(ctx, lifecycle.CostBusy); err != nil {
+			slog.Warn("failed to set pod deletion cost busy", "error", err)
+		}
+	}
+	err := p.process(ctx, event)
+	if p.annotator != nil {
+		if setErr := p.annotator.SetDeletionCost(context.Background(), lifecycle.CostIdle); setErr != nil {
+			slog.Warn("failed to set pod deletion cost idle", "error", setErr)
+		}
+	}
+	return err
 }
 
 // ParseInputEvent parses an InputEvent from raw bytes.
