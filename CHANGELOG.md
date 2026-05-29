@@ -16,6 +16,8 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Gateway
 
+### [v0.12.1] - 2026-05-29
+
 ### [v0.11.0] — 2026-05-27
 
 #### Added
