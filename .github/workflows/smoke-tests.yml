@@ -17,8 +17,9 @@ name: Smoke tests — dev
 #
 #   Secrets    (Settings → Environments → dev → Secrets)
 #     GATEWAY_URL            https://api.kevent-dev.example.com
-#     WHISPER_API_KEY        API key for audio endpoints (sent as 'apikey' header)
-#     RERANK_API_KEY         API key for rerank endpoint  (sent as 'apikey' header)
+#     WHISPER_API_KEY        Zitadel Bearer token for audio endpoints (Authorization: Bearer)
+#     RERANK_API_KEY         Zitadel Bearer token for rerank endpoint (Authorization: Bearer)
+#                            Note: rerank is not deployed in hprod — set SKIP_RERANK=1 in dev env vars
 
 on:
   # ── 1. Auto: fires when the dev deploy finishes ─────────────────────────────

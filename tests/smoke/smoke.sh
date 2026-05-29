@@ -11,8 +11,8 @@
 #   AUDIO_URL         URL of a short speech audio file (.mp3 / .wav / .m4a)
 #
 # Optional env vars:
-#   WHISPER_API_KEY   API key for audio endpoints (sent as 'apikey' header)
-#   RERANK_API_KEY    API key for rerank endpoint  (sent as 'apikey' header)
+#   WHISPER_API_KEY   Zitadel Bearer token for audio endpoints (sent as 'Authorization: Bearer' header)
+#   RERANK_API_KEY    Zitadel Bearer token for rerank endpoint  (sent as 'Authorization: Bearer' header)
 #   WHISPER_MODEL     Model name for Whisper (default: whisper-large-v3)
 #   RERANK_MODEL      Model name for the reranker (default: bge-reranker-v2-m3)
 #   RERANK_ENDPOINT   Rerank path (default: /rerank)
@@ -57,13 +57,13 @@ CURL_BASE=(-s --max-time 30 -H "Accept: application/json")
 
 curl_whisper() {
   local args=("${CURL_BASE[@]}")
-  [[ -n "$WHISPER_API_KEY" ]] && args+=(-H "apikey: ${WHISPER_API_KEY}")
+  [[ -n "$WHISPER_API_KEY" ]] && args+=(-H "Authorization: Bearer ${WHISPER_API_KEY}")
   curl "${args[@]}" "$@"
 }
 
 curl_rerank() {
   local args=("${CURL_BASE[@]}")
-  [[ -n "$RERANK_API_KEY" ]] && args+=(-H "apikey: ${RERANK_API_KEY}")
+  [[ -n "$RERANK_API_KEY" ]] && args+=(-H "Authorization: Bearer ${RERANK_API_KEY}")
   curl "${args[@]}" "$@"
 }
 

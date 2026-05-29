@@ -503,7 +503,7 @@ New `lifecycle.gc` config block:
 
 ## Relay
 
-### [v0.5.3] — 2026-05-28
+### [v0.5.4] — 2026-05-28
 
 #### Fixed
 
@@ -512,6 +512,13 @@ New `lifecycle.gc` config block:
 - **Liveness probe false positive during inference**: `/health` now returns 200 immediately when a job is in progress, skipping the upstream inference model health check. Previously the model's busy response caused repeated liveness failures, triggering a SIGTERM after `failureThreshold × periodSeconds` (~150 s with the default KServe probe config) while inference was still running.
 
 ---
+
+### [v0.5.3] — 2026-05-18
+
+Version bump aligned with gateway v0.11.0 release. No relay code changes.
+
+---
+
 
 ### [v0.5.2] — 2026-05-18
 

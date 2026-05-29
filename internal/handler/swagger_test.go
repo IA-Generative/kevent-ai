@@ -173,6 +173,188 @@ func TestDocsUI_NoSpecs(t *testing.T) {
 	}
 }
 
+// ── ApplyGatewayOverlay ────────────────────────────────────────────────────────
+
+func whisperSvc(ops map[string][]string) config.ServiceConfig {
+	return config.ServiceConfig{
+		Type:       "audio",
+		Model:      "whisper-large-v3",
+		Operations: ops,
+	}
+}
+
+func getProperties(t *testing.T, spec json.RawMessage, path, method string) map[string]any {
+	t.Helper()
+	var s map[string]any
+	if err := json.Unmarshal(spec, &s); err != nil {
+		t.Fatalf("unmarshal spec: %v", err)
+	}
+	paths, _ := s["paths"].(map[string]any)
+	item, _ := paths[path].(map[string]any)
+	op, _ := item[method].(map[string]any)
+	rb, _ := op["requestBody"].(map[string]any)
+	content, _ := rb["content"].(map[string]any)
+	for _, ct := range content {
+		ctMap, _ := ct.(map[string]any)
+		schema, _ := ctMap["schema"].(map[string]any)
+		if props, ok := schema["properties"].(map[string]any); ok {
+			return props
+		}
+		// $ref: resolve from components/schemas
+		if ref, ok := schema["$ref"].(string); ok {
+			const prefix = "#/components/schemas/"
+			name := ref[len(prefix):]
+			comps, _ := s["components"].(map[string]any)
+			schemas, _ := comps["schemas"].(map[string]any)
+			resolved, _ := schemas[name].(map[string]any)
+			props, _ := resolved["properties"].(map[string]any)
+			return props
+		}
+	}
+	return nil
+}
+
+func TestApplyGatewayOverlay_SingleModel_SingleOp(t *testing.T) {
+	svc := whisperSvc(map[string][]string{
+		"transcription": {"/v1/audio/transcriptions"},
+	})
+	result := ApplyGatewayOverlay(whisperFixture, svc, []string{"whisper-large-v3"})
+
+	props := getProperties(t, result, "/v1/audio/transcriptions", "post")
+	if props == nil {
+		t.Fatal("expected properties, got nil")
+	}
+	// model is always injected with default so it appears pre-filled in Swagger UI
+	modelField, ok := props["model"].(map[string]any)
+	if !ok {
+		t.Fatal("expected model field to be injected")
+	}
+	if modelField["default"] != "whisper-large-v3" {
+		t.Errorf("expected default=whisper-large-v3, got %v", modelField["default"])
+	}
+	// operation is not injected for single-operation service
+	if _, ok := props["operation"]; ok {
+		t.Error("operation field should not be injected for single-operation service")
+	}
+	if _, ok := props["file"]; !ok {
+		t.Error("original 'file' field must still be present after overlay")
+	}
+}
+
+func TestApplyGatewayOverlay_MultiModel_InjectsModelField(t *testing.T) {
+	svc := whisperSvc(map[string][]string{
+		"transcription": {"/v1/audio/transcriptions"},
+	})
+	// Two models exist for this type, but the spec is for whisper-large-v3 only.
+	models := []string{"whisper-large-v3", "whisper-large-v3-turbo"}
+	result := ApplyGatewayOverlay(whisperFixture, svc, models)
+
+	props := getProperties(t, result, "/v1/audio/transcriptions", "post")
+	if props == nil {
+		t.Fatal("expected properties, got nil")
+	}
+	modelField, ok := props["model"].(map[string]any)
+	if !ok {
+		t.Fatal("expected model field to be injected")
+	}
+	enum, _ := modelField["enum"].([]any)
+	if len(enum) != 1 {
+		t.Errorf("expected 1 enum value (this model only), got %d", len(enum))
+	}
+	if enum[0] != "whisper-large-v3" {
+		t.Errorf("expected enum[0] = whisper-large-v3, got %v", enum[0])
+	}
+}
+
+func TestApplyGatewayOverlay_MultiOp_InjectsOperationField(t *testing.T) {
+	svc := whisperSvc(map[string][]string{
+		"transcription": {"/v1/audio/transcriptions"},
+		"translation":   {"/v1/audio/translations"},
+	})
+	result := ApplyGatewayOverlay(whisperFixture, svc, []string{"whisper-large-v3"})
+
+	props := getProperties(t, result, "/v1/audio/transcriptions", "post")
+	if props == nil {
+		t.Fatal("expected properties, got nil")
+	}
+	opField, ok := props["operation"].(map[string]any)
+	if !ok {
+		t.Fatal("expected operation field to be injected")
+	}
+	enum, _ := opField["enum"].([]any)
+	if len(enum) != 2 {
+		t.Errorf("expected 2 enum values, got %d", len(enum))
+	}
+}
+
+func TestApplyGatewayOverlay_OnlyTouchesConfiguredPaths(t *testing.T) {
+	svc := whisperSvc(map[string][]string{
+		"transcription": {"/v1/audio/transcriptions"},
+		// /v1/audio/translations is NOT in Operations
+	})
+	models := []string{"whisper-large-v3", "whisper-large-v3-turbo"}
+	result := ApplyGatewayOverlay(whisperFixture, svc, models)
+
+	translationProps := getProperties(t, result, "/v1/audio/translations", "post")
+	if translationProps == nil {
+		t.Fatal("expected translation path to still exist")
+	}
+	if _, ok := translationProps["model"]; ok {
+		t.Error("model field must not be injected into non-configured path")
+	}
+}
+
+func TestApplyGatewayOverlay_InvalidJSON_ReturnsUnchanged(t *testing.T) {
+	bad := json.RawMessage(`not json`)
+	result := ApplyGatewayOverlay(bad, whisperSvc(nil), []string{"whisper-large-v3"})
+	if string(result) != string(bad) {
+		t.Error("invalid input should be returned unchanged")
+	}
+}
+
+func TestFetchSwaggerSpecs_OverlayApplied(t *testing.T) {
+	srv := serveFixture(t, http.StatusOK, whisperFixture)
+	defer srv.Close()
+
+	cfgs := []config.ServiceConfig{
+		{
+			Type:  "audio",
+			Model: "whisper-large-v3",
+			Operations: map[string][]string{
+				"transcription": {"/v1/audio/transcriptions"},
+				"translation":   {"/v1/audio/translations"},
+			},
+			SwaggerURL: srv.URL,
+		},
+		{
+			Type:       "audio",
+			Model:      "whisper-large-v3-turbo",
+			Operations: map[string][]string{"transcription": {"/v1/audio/transcriptions"}},
+			SwaggerURL: srv.URL,
+		},
+	}
+
+	specs := FetchSwaggerSpecs(cfgs)
+	if len(specs) != 2 {
+		t.Fatalf("expected 2 specs, got %d", len(specs))
+	}
+
+	// Both specs should have model field injected with their respective default values.
+	for _, spec := range specs {
+		props := getProperties(t, spec.Data, "/v1/audio/transcriptions", "post")
+		if props == nil {
+			t.Fatalf("nil properties for spec %s/%s", spec.Type, spec.Model)
+		}
+		modelField, ok := props["model"].(map[string]any)
+		if !ok {
+			t.Fatalf("model field not injected in spec %s/%s", spec.Type, spec.Model)
+		}
+		if modelField["default"] != spec.Model {
+			t.Errorf("spec %s/%s: expected default=%s, got %v", spec.Type, spec.Model, spec.Model, modelField["default"])
+		}
+	}
+}
+
 func contains(s, sub string) bool {
 	return len(s) >= len(sub) && (s == sub || len(s) > 0 && containsStr(s, sub))
 }
