@@ -1,0 +1,213 @@
+# Deployment standard pour le service de transcription Whisper.
+# Remplace l'InferenceService KServe + sidecar relay.
+#
+# Deux containers par pod :
+#   - whisper-api  : modèle d'inférence (GPU), port 9000
+#   - relay        : consumer Kafka pull, appelle localhost:9000
+#
+# Scaling : géré par KEDA (voir k8s/keda-transcription.yaml).
+# Sync path : le gateway proxie POST /v1/audio/transcriptions
+#             directement vers le Service ClusterIP :9000.
+#
+# Note scale-to-zero : si minReplicaCount KEDA = 0, le sync path
+# retourne 503 pendant le cold start (~30-60s). Comportement attendu.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kevent-relay
+  namespace: default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kevent-relay-pod-annotator
+  namespace: default
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kevent-relay-pod-annotator
+  namespace: default
+subjects:
+  - kind: ServiceAccount
+    name: kevent-relay
+    namespace: default
+roleRef:
+  kind: Role
+  name: kevent-relay-pod-annotator
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: whisper-large-v3
+  namespace: default
+  labels:
+    app: whisper-large-v3
+spec:
+  # Replicas managed by KEDA — do not set replicas here to avoid conflicts.
+  selector:
+    matchLabels:
+      app: whisper-large-v3
+  template:
+    metadata:
+      labels:
+        app: whisper-large-v3
+    spec:
+      serviceAccountName: kevent-relay
+      terminationGracePeriodSeconds: 3600  # max inference job duration
+      nodeSelector:
+        nvidia.com/mig.config: all-1g.10gb
+      containers:
+        # ── Inference model ──────────────────────────────────────────────────
+        - name: whisper-api
+          image: ghcr.io/ia-generative/whisper-api:latest-gpu
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9000
+              protocol: TCP
+          env:
+            - name: HF_HOME
+              value: /mnt/models
+            - name: WHISPER_DEVICE
+              value: cuda
+            - name: WHISPER_COMPUTE_TYPE
+              value: float16
+            - name: MODEL_NAME
+              value: whisper
+            - name: HTTP_PORT
+              value: "9000"
+            - name: WHISPER_NUM_WORKERS
+              value: "4"
+            - name: MODEL_DIR
+              value: /mnt/models/models/Systran/faster-whisper-large-v3
+          volumeMounts:
+            - name: model-pvc
+              mountPath: /mnt/models
+          resources:
+            requests:
+              cpu: "1"
+              memory: 16Gi
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "2"
+              memory: 32Gi
+              nvidia.com/gpu: "1"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 9000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+        # ── Relay consumer ───────────────────────────────────────────────────
+        - name: relay
+          image: ghcr.io/ia-generative/kevent-ai/relay:v0.6.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+          env:
+            - name: CONFIG_PATH
+              value: /etc/kevent/config.yaml
+            - name: INFERENCE_PORT
+              value: "9000"
+            - name: RESULT_TOPIC
+              value: jobs.whisper-large-v3.results
+            - name: KAFKA_INPUT_TOPIC
+              value: jobs.whisper-large-v3.input
+            - name: KAFKA_CONSUMER_GROUP
+              value: inference-whisper-large-v3
+            - name: KAFKA_BROKERS
+              value: "default-kafka-bootstrap.infra-kafka.svc.cluster.local:9093"
+            - name: KAFKA_SASL_MECHANISM
+              value: "SCRAM-SHA-512"
+            - name: KAFKA_TLS_ENABLED
+              value: "true"
+            - name: KAFKA_CA_CERT_PATH
+              value: /etc/kafka-tls/ca.crt
+            - name: KAFKA_SASL_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: kevent-relay-kafka
+                  key: username
+            - name: KAFKA_SASL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kevent-relay-kafka
+                  key: password
+            - name: S3_BUCKET
+              value: test-kevent-jobs
+            - name: S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: kevent-s3-credentials
+                  key: access-key
+            - name: S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: kevent-s3-credentials
+                  key: secret-key
+            - name: ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: kevent-encryption-key
+                  key: ENCRYPTION_KEY
+                  optional: true
+            - name: INFERENCE_TIMEOUT
+              value: "3600s"
+          volumeMounts:
+            - name: kevent-config
+              mountPath: /etc/kevent
+              readOnly: true
+            - name: kafka-tls
+              mountPath: /etc/kafka-tls
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+      volumes:
+        - name: model-pvc
+          persistentVolumeClaim:
+            claimName: whisper-1-claim
+        - name: kevent-config
+          configMap:
+            name: kevent-relay
+        - name: kafka-tls
+          secret:
+            secretName: kafka-cluster-ca-cert
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: whisper-large-v3
+  namespace: default
+spec:
+  type: ClusterIP
+  selector:
+    app: whisper-large-v3
+  ports:
+    - port: 9000
+      targetPort: 9000
+      protocol: TCP
