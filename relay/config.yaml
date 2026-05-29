@@ -12,6 +12,8 @@ kafka:
   tls:
     enabled:      ${KAFKA_TLS_ENABLED:-false}
     ca_cert_path: "${KAFKA_CA_CERT_PATH:-}"
+  input_topic:    "${KAFKA_INPUT_TOPIC}"
+  consumer_group: "${KAFKA_CONSUMER_GROUP}"
 
 encryption:
   # Must match the key configured on the gateway.

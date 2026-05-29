@@ -95,9 +95,11 @@ func (s ServiceConfig) Type() string {
 }
 
 type KafkaConfig struct {
-	Brokers []string   `yaml:"brokers"`
-	SASL    SASLConfig `yaml:"sasl"`
-	TLS     TLSConfig  `yaml:"tls"`
+	Brokers       []string   `yaml:"brokers"`
+	SASL          SASLConfig `yaml:"sasl"`
+	TLS           TLSConfig  `yaml:"tls"`
+	InputTopic    string     `yaml:"input_topic"`
+	ConsumerGroup string     `yaml:"consumer_group"`
 }
 
 type SASLConfig struct {
@@ -158,6 +160,12 @@ func (c *Config) validate() error {
 	}
 	if len(c.Kafka.Brokers) == 0 {
 		return fmt.Errorf("kafka.brokers is required")
+	}
+	if c.Kafka.InputTopic == "" {
+		return fmt.Errorf("kafka.input_topic is required (set KAFKA_INPUT_TOPIC env var)")
+	}
+	if c.Kafka.ConsumerGroup == "" {
+		return fmt.Errorf("kafka.consumer_group is required (set KAFKA_CONSUMER_GROUP env var)")
 	}
 	if c.S3.Endpoint == "" {
 		return fmt.Errorf("s3.endpoint is required")
