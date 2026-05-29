@@ -29,9 +29,6 @@ func GenerateSpec(reg *service.Registry, appVersion string) []byte {
 
 	if reg.HasSyncServices() {
 		paths["/v1/models"] = listModelsPathItem()
-		for p, item := range syncPathItems(reg) {
-			paths[p] = item
-		}
 	}
 
 	spec := map[string]any{
@@ -57,27 +54,11 @@ func GenerateSpec(reg *service.Registry, appVersion string) []byte {
 	return out
 }
 
-// specTags builds the OpenAPI tags array: one "Jobs" tag + one tag per sync service type.
-func specTags(reg *service.Registry) []any {
-	tags := []any{
+// specTags builds the OpenAPI tags array for the gateway spec.
+func specTags(_ *service.Registry) []any {
+	return []any{
 		map[string]any{"name": "Jobs", "description": "Async job submission and status"},
 	}
-	// Collect unique service types that have sync endpoints, in sorted order.
-	seen := map[string]bool{}
-	types := reg.Types()
-	sort.Strings(types)
-	for _, t := range types {
-		for _, def := range reg.All() {
-			if def.Type == t && len(def.Operations) > 0 && !seen[t] {
-				seen[t] = true
-				tags = append(tags, map[string]any{
-					"name":        t,
-					"description": fmt.Sprintf("Synchronous inference — %s services", t),
-				})
-			}
-		}
-	}
-	return tags
 }
 
 // NewDocsSpec returns a handler that serves the pre-generated OpenAPI spec.
