@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
+	"time"
 
 	kafkago "github.com/segmentio/kafka-go"
 
@@ -62,6 +65,10 @@ func main() {
 
 	annotator := lifecycle.New()
 	proc := relay.New(adp, s3Client, publisher, cfg.Service.ResultTopic, annotator)
+
+	inferenceHealthURL := strings.TrimRight(cfg.Inference.BaseURL, "/") + "/health"
+	healthClient := &http.Client{Timeout: cfg.Inference.HealthCheckTimeoutDuration()}
+	waitForInference(inferenceHealthURL, healthClient, cfg.Inference.ReadyTimeoutDuration(), cfg.Inference.ReadyIntervalDuration())
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
@@ -130,5 +137,27 @@ func serveHealth() {
 	})
 	if err := http.ListenAndServe(":8080", mux); err != nil {
 		slog.Error("health server stopped", "error", err)
+	}
+}
+
+func waitForInference(healthURL string, client *http.Client, timeout, interval time.Duration) {
+	slog.Info("waiting for inference service", "health_url", healthURL, "timeout", timeout)
+	deadline := time.Now().Add(timeout)
+	for {
+		resp, err := client.Get(healthURL)
+		if err == nil {
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				slog.Info("inference service ready")
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			slog.Error("inference service did not become ready within timeout", "health_url", healthURL)
+			os.Exit(1)
+		}
+		slog.Info("inference not ready yet, retrying", "health_url", healthURL, "interval", interval)
+		time.Sleep(interval)
 	}
 }
