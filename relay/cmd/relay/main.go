@@ -85,10 +85,10 @@ func main() {
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				slog.Info("relay shutting down")
-				break
+			} else {
+				slog.Error("kafka fetch error", "error", err)
 			}
-			slog.Error("kafka fetch error", "error", err)
-			os.Exit(1)
+			break
 		}
 
 		if err := handleMessage(proc, consumer, msg); err != nil {
