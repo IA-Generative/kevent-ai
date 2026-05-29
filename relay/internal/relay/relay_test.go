@@ -217,7 +217,7 @@ func TestProcess_InferenceFailure_PublishesFailureAndReturnsNil(t *testing.T) {
 }
 
 // TestProcess_Success_PublishesCompletedEvent verifies the happy path: a completed
-// ResultEvent is published with a non-empty result_ref.
+// ResultEvent is published with a non-empty result_ref and the input file is deleted.
 func TestProcess_Success_PublishesCompletedEvent(t *testing.T) {
 	s3 := &mockS3{getBody: "audio data"}
 	adp := &mockAdapter{result: []byte(`{"text":"hello"}`)}
@@ -236,6 +236,9 @@ func TestProcess_Success_PublishesCompletedEvent(t *testing.T) {
 	}
 	if pub.published[0].ResultRef == "" {
 		t.Error("expected non-empty result_ref")
+	}
+	if len(s3.deleted) != 1 || s3.deleted[0] != testEvent().InputRef {
+		t.Errorf("expected input file %q to be deleted, got %v", testEvent().InputRef, s3.deleted)
 	}
 }
 

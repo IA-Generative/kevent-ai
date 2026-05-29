@@ -172,11 +172,9 @@ func (p *Processor) process(ctx context.Context, event *model.InputEvent) error 
 	metrics.JobsTotal.WithLabelValues(event.ServiceType, "completed").Inc()
 	log.Info("job completed", "result_ref", resultKey)
 
-	go func() {
-		if err := p.s3.DeleteObject(context.Background(), event.InputRef); err != nil {
-			log.Error("failed to delete input file", "job_id", event.JobID, "input_ref", event.InputRef, "error", err)
-		}
-	}()
+	if err := p.s3.DeleteObject(context.Background(), event.InputRef); err != nil {
+		log.Error("failed to delete input file", "input_ref", event.InputRef, "error", err)
+	}
 
 	return nil
 }
