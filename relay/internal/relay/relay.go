@@ -28,8 +28,7 @@ type eventPublisher interface {
 	PublishResultEvent(ctx context.Context, topic string, event *model.ResultEvent) error
 }
 
-// Processor processes a single InputEvent as a one-shot Kubernetes Job
-// created by Knative JobSink.
+// Processor runs the full processing pipeline for a single InputEvent pulled from Kafka.
 type Processor struct {
 	adapter     adapter.Adapter
 	s3          objectStore
