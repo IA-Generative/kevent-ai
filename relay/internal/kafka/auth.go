@@ -35,6 +35,26 @@ func buildTransport(cfg config.KafkaConfig) (*kafkago.Transport, error) {
 	}, nil
 }
 
+// buildDialer returns a Dialer configured with SASL and/or TLS for Readers.
+// Returns kafkago.DefaultDialer when neither is configured.
+func buildDialer(cfg config.KafkaConfig) (*kafkago.Dialer, error) {
+	mechanism, err := buildSASL(cfg.SASL)
+	if err != nil {
+		return nil, err
+	}
+	tlsCfg, err := buildTLS(cfg.TLS)
+	if err != nil {
+		return nil, err
+	}
+	if mechanism == nil && tlsCfg == nil {
+		return kafkago.DefaultDialer, nil
+	}
+	return &kafkago.Dialer{
+		SASLMechanism: mechanism,
+		TLS:           tlsCfg,
+	}, nil
+}
+
 func buildSASL(cfg config.SASLConfig) (sasl.Mechanism, error) {
 	if cfg.Mechanism == "" {
 		return nil, nil
