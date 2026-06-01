@@ -20,21 +20,6 @@ var (
 		Buckets: []float64{.1, .5, 1, 5, 10, 30, 60, 120, 300},
 	}, []string{"mode", "service_type", "model"})
 
-	// SyncWaitDuration measures the time the gateway spends blocked on the Redis
-	// pub/sub notification in sync-over-Kafka mode.
-	SyncWaitDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "kevent_sync_wait_duration_seconds",
-		Help:    "Time spent waiting for sync-over-Kafka job results (Redis pub/sub).",
-		Buckets: []float64{.5, 1, 5, 10, 30, 60, 120, 300},
-	}, []string{"service_type", "model"})
-
-	// SyncJobsInFlight tracks the number of sync-over-Kafka connections that are
-	// currently open and waiting for relay results.
-	SyncJobsInFlight = promauto.NewGauge(prometheus.GaugeOpts{
-		Name: "kevent_sync_jobs_in_flight",
-		Help: "Number of sync-over-Kafka jobs currently waiting for results.",
-	})
-
 	// S3OperationDuration measures latency for each S3 operation (upload/get/delete).
 	S3OperationDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "kevent_s3_operation_duration_seconds",

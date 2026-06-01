@@ -2,7 +2,6 @@ package handler
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,62 +10,24 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"kevent/gateway/internal/guardrails"
 	"kevent/gateway/internal/llmproxy"
 	"kevent/gateway/internal/metrics"
-	"kevent/gateway/internal/model"
 	"kevent/gateway/internal/ratelimit"
 	"kevent/gateway/internal/service"
-	"kevent/gateway/internal/storage"
 )
-
-
-// s3Store is the subset of storage.S3Client used by SyncHandler.
-type s3Store interface {
-	Upload(ctx context.Context, key string, body io.Reader, size int64, contentType string) error
-	GetObject(ctx context.Context, key string) ([]byte, error)
-	DeleteObject(ctx context.Context, key string) error
-}
-
-// jobStore is the subset of storage.RedisClient used by SyncHandler.
-type jobStore interface {
-	SaveJob(ctx context.Context, job *model.Job) error
-	GetJob(ctx context.Context, id string) (*model.Job, error)
-	DeleteJob(ctx context.Context, id string) error
-	SubscribeJobDone(ctx context.Context, jobID string) storage.JobDoneSubscription
-}
-
-// eventProducer is the subset of kafka.Producer used by SyncHandler.
-type eventProducer interface {
-	PublishInputEvent(ctx context.Context, topic string, event *model.InputEvent) error
-}
-
-// reservedSyncFields are multipart form fields consumed by the gateway
-// and excluded from the params map forwarded to the inference API.
-var reservedSyncFields = map[string]bool{
-	"model": true, "file": true,
-}
 
 // SyncHandler handles OpenAI-compatible POST /v1/* requests.
 //
-// Routing strategy:
-//   - multipart/form-data + service has sync_topic configured → sync-over-Kafka:
-//     upload file to S3, publish to the priority sync topic, keep the connection
-//     open and wait for the result, then return it directly in the HTTP response.
-//   - application/json or no sync_topic configured → direct proxy to the inference
-//     backend (original behaviour).
+// All requests are routed directly to the inference backend:
+//   - multipart/form-data → reconstruct and proxy to inference_url
+//   - application/json    → proxy to inference_url (or LLM proxy handler)
 type SyncHandler struct {
 	registry       *service.Registry
-	s3             s3Store
-	redis          jobStore
-	producer       eventProducer
 	httpClient     *http.Client
 	consumerHeader string            // HTTP header identifying the API consumer (e.g. "X-Consumer-Username")
 	rateLimiter    ratelimit.Checker // nil = no rate limiting
@@ -77,24 +38,17 @@ type SyncHandler struct {
 
 func NewSyncHandler(
 	registry *service.Registry,
-	s3 s3Store,
-	redis jobStore,
-	producer eventProducer,
 	consumerHeader string,
 	rateLimiter ratelimit.Checker,
 	llm *llmproxy.Handler,
 ) *SyncHandler {
 	return &SyncHandler{
 		registry:       registry,
-		s3:             s3,
-		redis:          redis,
-		producer:       producer,
 		consumerHeader: consumerHeader,
 		rateLimiter:    rateLimiter,
 		llm:            llm,
 		piiChecker:     guardrails.New(),
-		// Generous timeout for direct-proxy path; Knative timeoutSeconds is the
-		// real ceiling for the sync-over-Kafka path (controlled by context).
+		// Generous timeout for direct-proxy path.
 		httpClient:   &http.Client{Timeout: 15 * time.Minute},
 		retryBackoff: 500 * time.Millisecond,
 	}
@@ -158,22 +112,18 @@ func (h *SyncHandler) handleMultipart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if def.SyncTopic != "" {
-		h.handleMultipartViaKafka(w, r, def)
-	} else {
-		bodyRC, contentType, err := reconstructMultipart(r)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to rebuild request: "+err.Error())
-			return
-		}
-		defer bodyRC.Close()
-		bodyBytes, err := io.ReadAll(bodyRC)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to read request body: "+err.Error())
-			return
-		}
-		h.proxyToInference(w, r, def, bodyBytes, contentType)
+	bodyRC, contentType, err := reconstructMultipart(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to rebuild request: "+err.Error())
+		return
 	}
+	defer bodyRC.Close()
+	bodyBytes, err := io.ReadAll(bodyRC)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to read request body: "+err.Error())
+		return
+	}
+	h.proxyToInference(w, r, def, bodyBytes, contentType)
 }
 
 func (h *SyncHandler) handleJSON(w http.ResponseWriter, r *http.Request) {
@@ -246,197 +196,6 @@ func (h *SyncHandler) handleJSON(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.proxyToInference(w, r, def, raw, r.Header.Get("Content-Type"))
-}
-
-// handleMultipartViaKafka uploads the file to S3, publishes to the priority sync
-// topic, waits for the result, and returns it in the HTTP response — keeping the
-// connection open throughout.
-func (h *SyncHandler) handleMultipartViaKafka(w http.ResponseWriter, r *http.Request, def *service.Def) {
-	start := time.Now()
-	metrics.SyncJobsInFlight.Inc()
-	defer func() {
-		metrics.SyncJobsInFlight.Dec()
-		metrics.RequestDuration.WithLabelValues("sync", def.Type, def.Model).Observe(time.Since(start).Seconds())
-	}()
-
-	file, header, err := r.FormFile("file")
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "field 'file' is required")
-		return
-	}
-	defer file.Close()
-
-	if err := h.registry.ValidateFileDef(def, header.Filename); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	// Collect extra form fields to forward to the inference API.
-	var params map[string]string
-	for k, values := range r.MultipartForm.Value {
-		if reservedSyncFields[k] || len(values) == 0 {
-			continue
-		}
-		if params == nil {
-			params = make(map[string]string)
-		}
-		params[k] = values[0]
-	}
-
-	consumerName := ""
-	if h.consumerHeader != "" {
-		consumerName = r.Header.Get(h.consumerHeader)
-	}
-
-	jobID := uuid.New().String()
-	ext := filepath.Ext(header.Filename)
-	inputRef := fmt.Sprintf("%s/input%s", jobID, ext)
-
-	if err := h.s3.Upload(r.Context(), inputRef, file, header.Size, header.Header.Get("Content-Type")); err != nil {
-		slog.ErrorContext(r.Context(), "s3 upload failed", "job_id", jobID, "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to store file")
-		return
-	}
-
-	now := time.Now().UTC()
-	if err := h.redis.SaveJob(r.Context(), &model.Job{
-		ID:           jobID,
-		ServiceType:  def.Type,
-		Model:        def.Model,
-		Status:       model.JobStatusPending,
-		InputRef:     inputRef,
-		ConsumerName: consumerName,
-		CreatedAt:    now,
-		UpdatedAt:    now,
-	}); err != nil {
-		slog.ErrorContext(r.Context(), "redis save failed", "job_id", jobID, "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to save job")
-		return
-	}
-
-	// Subscribe BEFORE publishing to Kafka — ensures we never miss the notification
-	// even if the relay processes the job before we start waiting.
-	sub := h.redis.SubscribeJobDone(r.Context(), jobID)
-	defer sub.Close()
-
-	event := &model.InputEvent{
-		JobID:        jobID,
-		ServiceType:  def.Type,
-		Model:        def.Model,
-		InputRef:     inputRef,
-		InferenceURL: r.URL.Path, // exact path the client called (e.g. /v1/audio/transcriptions)
-		Params:       params,
-		CreatedAt:    now,
-	}
-	if err := h.producer.PublishInputEvent(r.Context(), def.SyncTopic, event); err != nil {
-		slog.ErrorContext(r.Context(), "kafka publish failed", "job_id", jobID, "error", err)
-		// Clean up the orphaned S3 file and Redis record.
-		go func() {
-			ctx := context.Background()
-			if derr := h.s3.DeleteObject(ctx, inputRef); derr != nil {
-				slog.Error("failed to delete orphaned sync input", "job_id", jobID, "error", derr)
-			}
-			if derr := h.redis.DeleteJob(ctx, jobID); derr != nil {
-				slog.Error("failed to delete orphaned sync job", "job_id", jobID, "error", derr)
-			}
-		}()
-		writeError(w, http.StatusInternalServerError, "failed to enqueue job")
-		return
-	}
-
-	slog.InfoContext(r.Context(), "sync job enqueued",
-		"job_id", jobID, "model", def.Model, "topic", def.SyncTopic)
-	if consumerName != "" {
-		metrics.JobsByConsumerTotal.WithLabelValues("sync", def.Type, def.Model, consumerName).Inc()
-	}
-
-	// Cleanup fires on ALL return paths (success, business failure, S3 error, timeout).
-	// resultRef is empty until GetJob succeeds; on timeout the relay result file (if any)
-	// is left in S3 and collected by the bucket lifecycle rule.
-	var resultRef string
-	defer func() {
-		go func() {
-			ctx := context.Background()
-			if resultRef != "" {
-				if err := h.s3.DeleteObject(ctx, resultRef); err != nil {
-					slog.Error("failed to delete sync result", "job_id", jobID, "error", err)
-				}
-			}
-			if err := h.redis.DeleteJob(ctx, jobID); err != nil {
-				slog.Error("failed to delete sync job record", "job_id", jobID, "error", err)
-			}
-		}()
-	}()
-
-	// committed tracks whether we have already sent the 200 + headers to the
-	// client. Once committed, WriteHeader calls are no-ops in HTTP/1.1, so errors
-	// can only be reported in the body. For fast inferences (< 20 s) we stay
-	// uncommitted and return proper status codes. For longer ones, the first
-	// keepalive tick commits the stream so proxies (APISix/nginx) don't drop the
-	// idle connection ("upstream prematurely closed connection while reading
-	// response header from upstream").
-	flusher, canFlush := w.(http.Flusher)
-	committed := false
-	commit := func() {
-		if !committed {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			committed = true
-		}
-	}
-
-	// Wait for the relay to publish the result.
-	// Send a JSON-whitespace newline keepalive every 20 s to prevent proxy
-	// idle-connection timeouts during long inferences (OCR, large audio).
-	keepalive := time.NewTicker(20 * time.Second)
-	defer keepalive.Stop()
-	waitDone := make(chan error, 1)
-	waitStart := time.Now()
-	go func() { waitDone <- sub.Wait(r.Context()) }()
-
-waitLoop:
-	for {
-		select {
-		case err := <-waitDone:
-			metrics.SyncWaitDuration.WithLabelValues(def.Type, def.Model).Observe(time.Since(waitStart).Seconds())
-			if err != nil {
-				metrics.RequestsTotal.WithLabelValues("sync", def.Type, def.Model, "504").Inc()
-				writeError(w, http.StatusGatewayTimeout, "timed out waiting for result")
-				return
-			}
-			break waitLoop
-		case <-keepalive.C:
-			commit()
-			_, _ = w.Write([]byte("\n"))
-			if canFlush {
-				flusher.Flush()
-			}
-		}
-	}
-
-	job, err := h.redis.GetJob(r.Context(), jobID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to retrieve job")
-		return
-	}
-	resultRef = job.ResultRef
-
-	if job.Status == model.JobStatusFailed {
-		metrics.RequestsTotal.WithLabelValues("sync", def.Type, def.Model, "422").Inc()
-		writeError(w, http.StatusUnprocessableEntity, job.Error)
-		return
-	}
-
-	result, err := h.s3.GetObject(r.Context(), job.ResultRef)
-	if err != nil {
-		metrics.RequestsTotal.WithLabelValues("sync", def.Type, def.Model, "500").Inc()
-		writeError(w, http.StatusInternalServerError, "failed to retrieve result")
-		return
-	}
-
-	metrics.RequestsTotal.WithLabelValues("sync", def.Type, def.Model, "200").Inc()
-	commit()
-	_, _ = w.Write(result)
 }
 
 // proxyToInference forwards the request body directly to the inference backend.

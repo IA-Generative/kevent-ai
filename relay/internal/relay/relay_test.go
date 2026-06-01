@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -111,8 +109,8 @@ func (m *mockS3PutCounter) DeleteObject(_ context.Context, key string) error {
 	return nil
 }
 
-func newTestDispatcher(s3 objectStore, adp adapter.Adapter, pub eventPublisher) *Dispatcher {
-	return &Dispatcher{
+func newTestProcessor(s3 objectStore, adp adapter.Adapter, pub eventPublisher) *Processor {
+	return &Processor{
 		adapter:     adp,
 		s3:          s3,
 		publisher:   pub,
@@ -130,144 +128,27 @@ func testEvent() *model.InputEvent {
 	}
 }
 
-// ── decodeInputEvent tests ────────────────────────────────────────────────────
+// ── ParseInputEvent tests ─────────────────────────────────────────────────────
 
-// TestDecodeInputEvent_BinaryMode verifies that a plain JSON body (KafkaSource
-// binary mode, the default) is decoded correctly into an InputEvent.
-func TestDecodeInputEvent_BinaryMode(t *testing.T) {
-	body := `{"job_id":"abc-123","service_type":"transcription","model":"whisper-large-v3","input_ref":"abc-123/input.wav","created_at":"2026-03-13T13:00:00Z"}`
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-
-	event, err := decodeInputEvent(req)
+func TestParseInputEvent_Raw(t *testing.T) {
+	data := []byte(`{"job_id":"abc","service_type":"transcription","model":"whisper-large-v3","input_ref":"abc/input.wav","created_at":"2026-01-01T00:00:00Z"}`)
+	event, err := ParseInputEvent(data)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if event.JobID != "abc-123" {
-		t.Errorf("expected job_id abc-123, got %q", event.JobID)
+	if event.JobID != "abc" {
+		t.Errorf("expected job_id abc, got %q", event.JobID)
 	}
 }
 
-// TestDecodeInputEvent_StructuredCloudEvent verifies that a structured CloudEvent
-// body (Content-Type: application/cloudevents+json) is unwrapped and the
-// InputEvent is extracted from the "data" field.
-func TestDecodeInputEvent_StructuredCloudEvent(t *testing.T) {
-	body := `{
-		"specversion": "1.0",
-		"id": "550e8400-e29b-41d4-a716-446655440000",
-		"type": "dev.knative.kafka.event",
-		"source": "/apis/v1/namespaces/default/kafkasources/kevent-transcription-sync",
-		"time": "2026-03-13T13:00:00Z",
-		"datacontenttype": "application/json",
-		"data": {"job_id":"abc-123","service_type":"transcription","model":"whisper-large-v3","input_ref":"abc-123/input.wav","created_at":"2026-03-13T13:00:00Z"}
-	}`
-	req := httptest.NewRequest(http.MethodPost, "/sync", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/cloudevents+json")
-
-	event, err := decodeInputEvent(req)
+func TestParseInputEvent_StructuredCloudEvent(t *testing.T) {
+	data := []byte(`{"specversion":"1.0","type":"dev.knative.kafka.event","source":"/kafkasource","id":"123","data":{"job_id":"abc","service_type":"transcription","model":"whisper-large-v3","input_ref":"abc/input.wav","created_at":"2026-01-01T00:00:00Z"}}`)
+	event, err := ParseInputEvent(data)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if event.JobID != "abc-123" {
-		t.Errorf("expected job_id abc-123, got %q", event.JobID)
-	}
-	if event.Model != "whisper-large-v3" {
-		t.Errorf("expected model whisper-large-v3, got %q", event.Model)
-	}
-}
-
-// TestServeHTTP_Returns503WhenSyncActive verifies that the async handler defers
-// jobs with 503 while a sync job is in progress on the same pod.
-func TestServeHTTP_Returns503WhenSyncActive(t *testing.T) {
-	d := &Dispatcher{}
-	d.syncPriority.Store(1)
-
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"job_id":"async-1"}`))
-	w := httptest.NewRecorder()
-	d.ServeHTTP(w, req)
-
-	if w.Code != http.StatusServiceUnavailable {
-		t.Errorf("expected 503 Service Unavailable, got %d", w.Code)
-	}
-}
-
-// TestServeHTTP_ProcessesWhenIdle verifies that the async handler proceeds
-// normally (no 503) when no sync job is active.
-func TestServeHTTP_ProcessesWhenIdle(t *testing.T) {
-	d := &Dispatcher{} // syncPriority is 0 by default
-
-	// Empty job_id → 400 Bad Request, which proves the handler entered processing
-	// rather than returning 503.
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{}`))
-	w := httptest.NewRecorder()
-	d.ServeHTTP(w, req)
-
-	if w.Code == http.StatusServiceUnavailable {
-		t.Errorf("unexpected 503: async handler should not defer when sync is idle")
-	}
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("expected 400 (empty job_id), got %d", w.Code)
-	}
-}
-
-// TestServeHTTP_MethodNotAllowed verifies that non-POST requests are rejected.
-func TestServeHTTP_MethodNotAllowed(t *testing.T) {
-	d := &Dispatcher{}
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	w := httptest.NewRecorder()
-	d.ServeHTTP(w, req)
-
-	if w.Code != http.StatusMethodNotAllowed {
-		t.Errorf("expected 405, got %d", w.Code)
-	}
-}
-
-// TestServeHTTPSync_UnsetsFlagAfterReturn verifies that the syncPriority flag is
-// always cleared after ServeHTTPSync returns, even when the job fails.
-func TestServeHTTPSync_UnsetsFlagAfterReturn(t *testing.T) {
-	d := &Dispatcher{}
-
-	if d.syncPriority.Load() != 0 {
-		t.Fatal("syncPriority should be 0 initially")
-	}
-
-	// Invalid event (empty job_id) → serveHTTP returns 400, but the deferred
-	// Store(0) must still execute.
-	req := httptest.NewRequest(http.MethodPost, "/sync", strings.NewReader(`{}`))
-	w := httptest.NewRecorder()
-	d.ServeHTTPSync(w, req)
-
-	if d.syncPriority.Load() != 0 {
-		t.Error("syncPriority should be reset to 0 after ServeHTTPSync returns")
-	}
-}
-
-// TestServeHTTPSync_BlocksAsyncConcurrently verifies that async jobs receive 503
-// while a sync job holds the priority flag, and succeed once it is released.
-func TestServeHTTPSync_BlocksAsyncConcurrently(t *testing.T) {
-	d := &Dispatcher{}
-
-	// Manually set the flag to simulate a sync job in progress.
-	d.syncPriority.Store(1)
-
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"job_id":"async-1"}`))
-	w := httptest.NewRecorder()
-	d.ServeHTTP(w, req)
-
-	if w.Code != http.StatusServiceUnavailable {
-		t.Errorf("async should be deferred (503) while sync is active, got %d", w.Code)
-	}
-
-	// Release the flag — subsequent async requests must no longer get 503.
-	d.syncPriority.Store(0)
-
-	req2 := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{}`))
-	w2 := httptest.NewRecorder()
-	d.ServeHTTP(w2, req2)
-
-	if w2.Code == http.StatusServiceUnavailable {
-		t.Errorf("async should not be deferred after sync is done, got 503")
+	if event.JobID != "abc" {
+		t.Errorf("expected job_id abc, got %q", event.JobID)
 	}
 }
 
@@ -275,15 +156,15 @@ func TestServeHTTPSync_BlocksAsyncConcurrently(t *testing.T) {
 
 // TestProcess_S3NotFound_PublishesFailureAndReturnsNil verifies that a permanent
 // S3 NoSuchKey error is treated as a permanent failure: a ResultEvent with status
-// "failed" is published, nil is returned (no KafkaSource retry), and the input
+// "failed" is published, nil is returned (no retry), and the input
 // file is NOT re-queued.
 func TestProcess_S3NotFound_PublishesFailureAndReturnsNil(t *testing.T) {
 	noSuchKey := &s3types.NoSuchKey{}
 	s3 := &mockS3{getErr: fmt.Errorf("getting S3 object %q: %w", "job-1/input.wav", noSuchKey)}
 	pub := &mockPublisher{}
 
-	d := newTestDispatcher(s3, &mockAdapter{}, pub)
-	err := d.process(context.Background(), testEvent())
+	p := newTestProcessor(s3, &mockAdapter{}, pub)
+	err := p.process(context.Background(), testEvent())
 	if err != nil {
 		t.Fatalf("expected nil (permanent failure, no retry), got: %v", err)
 	}
@@ -299,13 +180,13 @@ func TestProcess_S3NotFound_PublishesFailureAndReturnsNil(t *testing.T) {
 }
 
 // TestProcess_S3TransientError_ReturnsError verifies that a non-404 S3 error is
-// treated as transient: process() returns an error so KafkaSource retries.
+// treated as transient: process() returns an error so the Job exits 1.
 func TestProcess_S3TransientError_ReturnsError(t *testing.T) {
 	s3 := &mockS3{getErr: errors.New("connection refused")}
 	pub := &mockPublisher{}
 
-	d := newTestDispatcher(s3, &mockAdapter{}, pub)
-	err := d.process(context.Background(), testEvent())
+	p := newTestProcessor(s3, &mockAdapter{}, pub)
+	err := p.process(context.Background(), testEvent())
 	if err == nil {
 		t.Fatal("expected error for transient S3 failure, got nil")
 	}
@@ -316,14 +197,14 @@ func TestProcess_S3TransientError_ReturnsError(t *testing.T) {
 
 // TestProcess_InferenceFailure_PublishesFailureAndReturnsNil verifies that when
 // the adapter returns an error (model/file invalid), a failure ResultEvent is
-// published and nil is returned so KafkaSource does not retry.
+// published and nil is returned so the Job does not get retried.
 func TestProcess_InferenceFailure_PublishesFailureAndReturnsNil(t *testing.T) {
 	s3 := &mockS3{getBody: "audio data"}
 	adp := &mockAdapter{err: errors.New("unsupported format")}
 	pub := &mockPublisher{}
 
-	d := newTestDispatcher(s3, adp, pub)
-	err := d.process(context.Background(), testEvent())
+	p := newTestProcessor(s3, adp, pub)
+	err := p.process(context.Background(), testEvent())
 	if err != nil {
 		t.Fatalf("expected nil (business failure, no retry), got: %v", err)
 	}
@@ -336,14 +217,14 @@ func TestProcess_InferenceFailure_PublishesFailureAndReturnsNil(t *testing.T) {
 }
 
 // TestProcess_Success_PublishesCompletedEvent verifies the happy path: a completed
-// ResultEvent is published with a non-empty result_ref.
+// ResultEvent is published with a non-empty result_ref and the input file is deleted.
 func TestProcess_Success_PublishesCompletedEvent(t *testing.T) {
 	s3 := &mockS3{getBody: "audio data"}
 	adp := &mockAdapter{result: []byte(`{"text":"hello"}`)}
 	pub := &mockPublisher{}
 
-	d := newTestDispatcher(s3, adp, pub)
-	err := d.process(context.Background(), testEvent())
+	p := newTestProcessor(s3, adp, pub)
+	err := p.process(context.Background(), testEvent())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -356,18 +237,21 @@ func TestProcess_Success_PublishesCompletedEvent(t *testing.T) {
 	if pub.published[0].ResultRef == "" {
 		t.Error("expected non-empty result_ref")
 	}
+	if len(s3.deleted) != 1 || s3.deleted[0] != testEvent().InputRef {
+		t.Errorf("expected input file %q to be deleted, got %v", testEvent().InputRef, s3.deleted)
+	}
 }
 
 // TestProcess_S3NotFound_PublishFails_ReturnsError verifies that if publishing
 // the permanent-failure event itself fails (Kafka down), process() returns an
-// error so KafkaSource keeps the message and retries later.
+// error so the Job is retried later.
 func TestProcess_S3NotFound_PublishFails_ReturnsError(t *testing.T) {
 	noSuchKey := &s3types.NoSuchKey{}
 	s3 := &mockS3{getErr: fmt.Errorf("getting S3 object: %w", noSuchKey)}
 	pub := &mockPublisher{err: errors.New("kafka unavailable")}
 
-	d := newTestDispatcher(s3, &mockAdapter{}, pub)
-	err := d.process(context.Background(), testEvent())
+	p := newTestProcessor(s3, &mockAdapter{}, pub)
+	err := p.process(context.Background(), testEvent())
 	if err == nil {
 		t.Fatal("expected error when publish of permanent failure fails, got nil")
 	}
@@ -376,7 +260,7 @@ func TestProcess_S3NotFound_PublishFails_ReturnsError(t *testing.T) {
 // TestProcess_InferenceTransientError_RetriesOnce verifies that a transient
 // inference failure (e.g. network glitch, endpoint restart) triggers one
 // immediate retry. The second attempt succeeds and a completed ResultEvent is
-// published — no KafkaSource retry needed.
+// published — no retry needed.
 func TestProcess_InferenceTransientError_RetriesOnce(t *testing.T) {
 	s3 := &mockS3{getBody: "audio data"}
 	calls := 0
@@ -389,8 +273,8 @@ func TestProcess_InferenceTransientError_RetriesOnce(t *testing.T) {
 	}}
 	pub := &mockPublisher{}
 
-	d := newTestDispatcher(s3, adp, pub)
-	err := d.process(context.Background(), testEvent())
+	p := newTestProcessor(s3, adp, pub)
+	err := p.process(context.Background(), testEvent())
 	if err != nil {
 		t.Fatalf("expected nil after successful retry, got: %v", err)
 	}
@@ -415,8 +299,8 @@ func TestProcess_InferencePermanentError_NoRetry(t *testing.T) {
 	}
 	pub := &mockPublisher{}
 
-	d := newTestDispatcher(s3, &mockAdapter{}, pub)
-	err := d.process(context.Background(), testEvent())
+	p := newTestProcessor(s3, &mockAdapter{}, pub)
+	err := p.process(context.Background(), testEvent())
 	if err != nil {
 		t.Fatalf("expected nil for not-found (permanent failure), got: %v", err)
 	}
@@ -429,8 +313,7 @@ func TestProcess_InferencePermanentError_NoRetry(t *testing.T) {
 }
 
 // TestProcess_S3PutTransientError_RetriesOnce verifies that a transient S3
-// PutObject failure triggers one immediate retry before returning an error to
-// KafkaSource.
+// PutObject failure triggers one immediate retry before returning an error.
 func TestProcess_S3PutTransientError_RetriesOnce(t *testing.T) {
 	putCalls := 0
 	s3 := &mockS3PutCounter{
@@ -446,8 +329,8 @@ func TestProcess_S3PutTransientError_RetriesOnce(t *testing.T) {
 	adp := &mockAdapter{result: []byte(`{"text":"hello"}`)}
 	pub := &mockPublisher{}
 
-	d := newTestDispatcher(s3, adp, pub)
-	err := d.process(context.Background(), testEvent())
+	p := newTestProcessor(s3, adp, pub)
+	err := p.process(context.Background(), testEvent())
 	if err != nil {
 		t.Fatalf("expected nil after successful s3 put retry, got: %v", err)
 	}

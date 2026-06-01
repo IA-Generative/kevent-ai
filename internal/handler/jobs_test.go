@@ -23,6 +23,16 @@ import (
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
+type mockProducer struct {
+	publishErr error
+	published  bool
+}
+
+func (m *mockProducer) PublishInputEvent(_ context.Context, _ string, _ *model.InputEvent) error {
+	m.published = true
+	return m.publishErr
+}
+
 type mockJobS3 struct {
 	uploadErr   error
 	uploaded    bool

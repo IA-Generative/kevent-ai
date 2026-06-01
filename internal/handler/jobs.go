@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"path/filepath"
@@ -19,6 +20,18 @@ import (
 	"kevent/gateway/internal/ratelimit"
 	"kevent/gateway/internal/service"
 )
+
+// s3Store is the subset of storage.S3Client used by JobHandler.
+type s3Store interface {
+	Upload(ctx context.Context, key string, body io.Reader, size int64, contentType string) error
+	GetObject(ctx context.Context, key string) ([]byte, error)
+	DeleteObject(ctx context.Context, key string) error
+}
+
+// eventProducer is the subset of kafka.Producer used by JobHandler.
+type eventProducer interface {
+	PublishInputEvent(ctx context.Context, topic string, event *model.InputEvent) error
+}
 
 // asyncJobStore is the subset of storage.RedisClient used by JobHandler.
 type asyncJobStore interface {
@@ -233,7 +246,7 @@ func (h *JobHandler) Submit(w http.ResponseWriter, r *http.Request) {
 	// Step 3 — publish the input event to the model's Kafka topic.
 	// When the priority header is present and the service has a priority_topic,
 	// route to that topic so the relay processes it with elevated priority
-	// (defers normal async jobs via the syncPriority flag, same as sync-over-Kafka).
+	// (processed via a dedicated KafkaSource → JobSink, independently of the async queue).
 
 	topic := def.InputTopic
 	mode := "async"

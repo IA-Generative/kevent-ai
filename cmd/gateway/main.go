@@ -97,7 +97,7 @@ func buildRouter(
 	r.Post("/-/jobs/purge", jobHandler.AdminPurge)
 
 	if reg.HasSyncServices() {
-		syncHandler := handler.NewSyncHandler(reg, s3Client, redisClient, producer, cfg.Server.ConsumerHeader, rl, llmHandler)
+		syncHandler := handler.NewSyncHandler(reg, cfg.Server.ConsumerHeader, rl, llmHandler)
 		r.Get("/v1/models", handler.ListModels(reg))
 		// Register each configured path exactly. Chi handles {model} parameter
 		// patterns natively. Single-segment paths (e.g. /rerank) are reachable

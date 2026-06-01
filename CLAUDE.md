@@ -38,7 +38,7 @@ git checkout -b release/vX.Y.Z
 #    - helm/gateway/values.yaml  → image.tag
 #    - helm/gateway/Chart.yaml   → version + appVersion
 #    - CHANGELOG.md              → new section
-#    - k8s/inference-transcription.yaml → relay image tag (relay releases only)
+#    - k8s/deployment-transcription.yaml → relay image tag (relay releases only)
 
 # 3. Commit, push and open a PR → main
 git add ... && git commit -m "chore(release): gateway vX.Y.Z"
@@ -217,7 +217,7 @@ kubectl get secret kevent-relay-kafka -n default \
 | `values.yaml` | Helm values for production deployment |
 | `helm/gateway/` | Helm chart — generates ConfigMap, Secret, Deployment, Ingress |
 | `k8s/kafka-users.yaml` | Strimzi KafkaUser ACLs (apply in `infra-kafka` namespace) |
-| `k8s/inference-transcription.yaml` | KServe InferenceService + ServingRuntime for Whisper |
+| `k8s/deployment-transcription.yaml` | Deployment + Service + RBAC for whisper-large-v3 |
 | `internal/service/registry.go` | Config-driven service registry (routing, default model, operations map) |
 | `internal/handler/docs.go` | Dynamic OpenAPI spec generator + Swagger UI handler |
 | `internal/kafka/auth.go` | SASL/TLS dialer+transport construction for gateway |
@@ -242,5 +242,5 @@ helm upgrade --install kevent-gateway ./helm/gateway -f values.yaml
 kubectl apply -f k8s/kafka-users.yaml -n infra-kafka
 
 # Apply InferenceService + ServingRuntime
-kubectl apply -f k8s/inference-transcription.yaml
+kubectl apply -f k8s/deployment-transcription.yaml
 ```

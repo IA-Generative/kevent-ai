@@ -28,19 +28,6 @@ var (
 		Buckets: prometheus.ExponentialBuckets(1024, 4, 10),
 	}, []string{"service_type"})
 
-	// SyncPriority mirrors the relay's internal syncPriority counter.
-	// Non-zero means at least one sync job is in progress on this pod.
-	SyncPriority = promauto.NewGauge(prometheus.GaugeOpts{
-		Name: "kevent_relay_sync_priority",
-		Help: "Number of sync jobs currently in progress (non-zero defers async jobs).",
-	})
-
-	// DeferredTotal counts async jobs returned with 503 due to sync priority.
-	DeferredTotal = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "kevent_relay_deferred_total",
-		Help: "Total number of async jobs deferred because a sync job was in progress.",
-	})
-
 	// S3OperationDuration measures S3 latency per operation (get/put/delete).
 	S3OperationDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "kevent_relay_s3_operation_duration_seconds",
@@ -59,17 +46,4 @@ var (
 		Name: "kevent_relay_kafka_publish_errors_total",
 		Help: "Total number of Kafka result-event publish errors.",
 	})
-
-	// ProxyRequestsTotal counts sync-direct requests proxied to the local model.
-	ProxyRequestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "kevent_relay_proxy_requests_total",
-		Help: "Total number of sync-direct requests proxied to the local inference model.",
-	}, []string{"service_type", "status"})
-
-	// ProxyDuration measures the duration of sync-direct proxy requests.
-	ProxyDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "kevent_relay_proxy_duration_seconds",
-		Help:    "Sync-direct proxy request duration in seconds.",
-		Buckets: []float64{.1, .5, 1, 5, 10, 30, 60, 120, 300},
-	}, []string{"service_type"})
 )

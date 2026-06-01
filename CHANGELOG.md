@@ -16,6 +16,23 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Gateway
 
+### [v0.13.0] — 2026-06-01
+
+#### Removed
+
+**Sync-over-Kafka path** (`internal/handler/sync.go`, `internal/config/`, `internal/metrics/`)
+- `sync_topic` config field removed — all `POST /v1/*` requests now always use direct proxy to `inference_url`, regardless of content type
+- `syncPriority` mechanism removed — the relay no longer acts as a Knative sidecar with priority deferral; it is now a standalone Kafka pull consumer (see relay v0.6.0)
+- Associated Prometheus counters for sync-over-Kafka removed
+
+Sync routing is now always:
+
+| Request | Path |
+|---|---|
+| Any `POST /v1/*` | Direct proxy to `inference_url` |
+
+---
+
 ### [v0.12.1] - 2026-05-29
 
 ### [v0.11.0] — 2026-05-27
