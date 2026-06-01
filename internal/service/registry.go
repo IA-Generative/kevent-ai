@@ -25,7 +25,6 @@ type Def struct {
 	InferenceURL     string              // primary backend URL (derived from Backends; kept for compatibility)
 	Backends         []Backend           // ordered list of backends; always non-empty when InferenceURL != ""
 	Operations       map[string][]string // operation name → URL paths (all indexed; first used for async)
-	SyncTopic        string              // Kafka topic for priority sync-over-Kafka jobs (overrides direct proxy)
 	PriorityTopic    string              // Kafka topic for high-priority async jobs (SA accounts)
 	InferenceHeaders map[string]string   // headers injected on every sync-direct proxy request to the backend
 	Provider         string
@@ -175,7 +174,6 @@ func NewRegistry(cfgs []config.ServiceConfig) *Registry {
 			InferenceURL:     primaryURL,
 			Backends:         backends,
 			Operations:       cfg.Operations,
-			SyncTopic:        cfg.SyncTopic,
 			PriorityTopic:    cfg.PriorityTopic,
 			InferenceHeaders: cfg.InferenceHeaders,
 			Provider:         cfg.Provider,
@@ -195,9 +193,9 @@ func NewRegistry(cfgs []config.ServiceConfig) *Registry {
 		}
 
 		// Build the sync routing index — one entry per configured path across all operations.
-		// Index when either a direct proxy backend or a sync Kafka topic is configured.
+		// Index when a direct proxy backend is configured.
 		hasBackend := cfg.InferenceURL != "" || len(cfg.Backends) > 0
-		if cfg.Model != "" && (hasBackend || cfg.SyncTopic != "") {
+		if cfg.Model != "" && hasBackend {
 			for _, paths := range cfg.Operations {
 				for _, path := range paths {
 					if path == "" {
@@ -510,12 +508,12 @@ func (r *Registry) All() []*Def {
 }
 
 // HasKafkaServices reports whether any service has Kafka topics configured
-// (input_topic, result_topic, or sync_topic). Used to conditionally initialise
+// (input_topic, result_topic, or priority_topic). Used to conditionally initialise
 // the Kafka producer and consumer manager at startup.
 func (r *Registry) HasKafkaServices() bool {
 	for _, models := range r.byTypeModel {
 		for _, d := range models {
-			if d.InputTopic != "" || d.ResultTopic != "" || d.SyncTopic != "" || d.PriorityTopic != "" {
+			if d.InputTopic != "" || d.ResultTopic != "" || d.PriorityTopic != "" {
 				return true
 			}
 		}

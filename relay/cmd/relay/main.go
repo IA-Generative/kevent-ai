@@ -2,33 +2,28 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus/promhttp"
+	kafkago "github.com/segmentio/kafka-go"
 
 	"kevent/relay/internal/adapter"
 	"kevent/relay/internal/config"
 	"kevent/relay/internal/kafka"
 	"kevent/relay/internal/lifecycle"
-	"kevent/relay/internal/metrics"
 	"kevent/relay/internal/relay"
 	"kevent/relay/internal/storage"
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}))
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
 	cfgPath := "config.yaml"
@@ -42,17 +37,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	slog.Info("sidecar starting",
-		"result_topic", cfg.Service.ResultTopic,
-		"inference_base_url", cfg.Inference.BaseURL,
-	)
-
 	s3Client, err := storage.NewS3Client(cfg.S3, cfg.Encryption)
 	if err != nil {
 		slog.Error("failed to initialise S3 client", "error", err)
 		os.Exit(1)
 	}
-	slog.Info("S3 storage initialised", "encryption", cfg.Encryption.Key != "")
 
 	publisher, err := kafka.NewPublisher(cfg.Kafka)
 	if err != nil {
@@ -61,6 +50,13 @@ func main() {
 	}
 	defer publisher.Close()
 
+	consumer, err := kafka.NewConsumer(cfg.Kafka)
+	if err != nil {
+		slog.Error("failed to initialise Kafka consumer", "error", err)
+		os.Exit(1)
+	}
+	defer consumer.Close()
+
 	adp, err := adapter.New(cfg)
 	if err != nil {
 		slog.Error("failed to initialise adapter", "error", err)
@@ -68,118 +64,84 @@ func main() {
 	}
 
 	annotator := lifecycle.New()
-	if annotator != nil {
-		if err := annotator.SetDeletionCost(context.Background(), lifecycle.CostIdle); err != nil {
-			slog.Warn("failed to initialise pod deletion cost annotation", "error", err)
-		}
-	}
-	disp := relay.New(adp, s3Client, publisher, cfg.Service.ResultTopic, annotator)
+	proc := relay.New(adp, s3Client, publisher, cfg.Service.ResultTopic, annotator)
 
 	inferenceHealthURL := strings.TrimRight(cfg.Inference.BaseURL, "/") + "/health"
 	healthClient := &http.Client{Timeout: cfg.Inference.HealthCheckTimeoutDuration()}
-
 	waitForInference(inferenceHealthURL, healthClient, cfg.Inference.ReadyTimeoutDuration(), cfg.Inference.ReadyIntervalDuration())
 
-	mux := http.NewServeMux()
-	mux.Handle("/metrics", promhttp.Handler())
-	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
-		// When a job is in progress the inference model is busy. Probing it
-		// would either block or return a non-200 "busy" status, which would
-		// look like a failing liveness probe and cause Kubernetes to SIGTERM
-		// the pod mid-inference. Skip the upstream check while processing.
-		if disp.ActiveJobs() > 0 {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		resp, err := healthClient.Get(inferenceHealthURL)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+
+	go serveHealth()
+
+	slog.Info("relay consumer started",
+		"topic", cfg.Kafka.InputTopic,
+		"consumer_group", cfg.Kafka.ConsumerGroup,
+	)
+
+	for {
+		msg, err := consumer.FetchMessage(ctx)
 		if err != nil {
-			http.Error(w, "inference not ready: "+err.Error(), http.StatusServiceUnavailable)
-			return
+			if errors.Is(err, context.Canceled) {
+				slog.Info("relay shutting down")
+			} else {
+				slog.Error("kafka fetch error", "error", err)
+			}
+			break
 		}
-		io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			http.Error(w, fmt.Sprintf("inference not ready: status %d", resp.StatusCode), http.StatusServiceUnavailable)
-			return
+
+		if err := handleMessage(proc, consumer, msg); err != nil {
+			slog.Error("fatal job error, exiting for Kafka redeliver", "error", err)
+			os.Exit(1)
 		}
-		w.WriteHeader(http.StatusOK)
-	})
 
-	// /sync — priority CloudEvent handler for sync-over-Kafka jobs.
-	// Sets syncPriority flag so async jobs on the same pod are deferred (503).
-	mux.HandleFunc("/sync", disp.ServeHTTPSync)
-
-	// / — async CloudEvent handler for KafkaSource (always POSTs to exactly "/").
-	// Any other path (e.g. /v1/audio/transcriptions) is a direct inference request
-	// from the gateway sync-direct path; proxy it straight to the local model.
-	inferenceProxy := newInferenceProxy(cfg.Inference.BaseURL)
-	// Derive service type from result_topic ("jobs.<type>.results") so no
-	// additional SERVICE_TYPE env var is required in the ServingRuntime.
-	serviceType := cfg.Service.Type()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" {
-			start := time.Now()
-			rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-			inferenceProxy.ServeHTTP(rec, r)
-			metrics.ProxyRequestsTotal.WithLabelValues(serviceType, fmt.Sprintf("%d", rec.status)).Inc()
-			metrics.ProxyDuration.WithLabelValues(serviceType).Observe(time.Since(start).Seconds())
-			return
+		// After completing a job, honour a pending shutdown signal.
+		if ctx.Err() != nil {
+			slog.Info("relay shutting down after job completion")
+			break
 		}
-		disp.ServeHTTP(w, r)
-	})
-
-	srv := &http.Server{
-		Addr:        ":8080",
-		Handler:     mux,
-		ReadTimeout: cfg.Server.ReadTimeoutDuration(),
-		// WriteTimeout désactivé : le handler bloque pendant toute la durée de
-		// l'inférence. Le timeout est géré par Knative via
-		// spec.template.spec.timeoutSeconds sur le Service.
-		WriteTimeout: 0,
-		IdleTimeout:  cfg.Server.IdleTimeoutDuration(),
 	}
-
-	serverErr := make(chan error, 1)
-	go func() {
-		slog.Info("server listening", "addr", srv.Addr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			serverErr <- err
-		}
-	}()
-
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-
-	select {
-	case err := <-serverErr:
-		slog.Error("server error", "error", err)
-	case sig := <-quit:
-		slog.Info("shutdown signal received", "signal", sig)
-	}
-
-	slog.Info("shutting down…")
-
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeoutDuration())
-	defer cancel()
-
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		slog.Error("server forced to shutdown", "error", err)
-	}
-
-	// Wait for in-flight inference jobs to complete before exiting.
-	// The inference HTTP call runs with context.WithoutCancel so it outlives
-	// the HTTP server shutdown; we must not exit the process before result
-	// publishing and Redis updates finish or Kubernetes will kill them mid-flight.
-	disp.WaitIdle()
-
-	slog.Info("server stopped")
 }
 
-// waitForInference polls the inference service's /health endpoint until it
-// returns 200 or the configured deadline is exceeded. Exits the process on
-// timeout so Kubernetes restarts the pod.
+// handleMessage processes one Kafka message.
+// Returns an error only for transient infra failures that warrant pod restart.
+// Malformed/invalid messages are skipped (committed without processing).
+func handleMessage(proc *relay.Processor, consumer *kafka.Consumer, msg kafkago.Message) error {
+	event, err := relay.ParseInputEvent(msg.Value)
+	if err != nil || event.JobID == "" {
+		slog.Error("skipping unparseable message", "error", err, "offset", msg.Offset, "partition", msg.Partition)
+		// Use Background context: upstream ctx may be cancelled (SIGTERM).
+		return consumer.CommitMessages(context.Background(), msg)
+	}
+
+	slog.Info("processing job", "job_id", event.JobID, "service_type", event.ServiceType, "offset", msg.Offset)
+
+	// Use Background context so SIGTERM does not interrupt an in-flight inference job.
+	if err := proc.Process(context.Background(), event); err != nil {
+		return err // transient infra error — caller will os.Exit(1)
+	}
+
+	if err := consumer.CommitMessages(context.Background(), msg); err != nil {
+		return err
+	}
+
+	slog.Info("job committed", "job_id", event.JobID)
+	return nil
+}
+
+func serveHealth() {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	if err := http.ListenAndServe(":8080", mux); err != nil {
+		slog.Error("health server stopped", "error", err)
+	}
+}
+
 func waitForInference(healthURL string, client *http.Client, timeout, interval time.Duration) {
-	slog.Info("waiting for inference service", "health_url", healthURL, "timeout", timeout, "interval", interval)
+	slog.Info("waiting for inference service", "health_url", healthURL, "timeout", timeout)
 	deadline := time.Now().Add(timeout)
 	for {
 		resp, err := client.Get(healthURL)
@@ -192,33 +154,10 @@ func waitForInference(healthURL string, client *http.Client, timeout, interval t
 			}
 		}
 		if time.Now().After(deadline) {
-			slog.Error("inference service did not become ready within timeout", "health_url", healthURL, "timeout", timeout)
+			slog.Error("inference service did not become ready within timeout", "health_url", healthURL)
 			os.Exit(1)
 		}
 		slog.Info("inference not ready yet, retrying", "health_url", healthURL, "interval", interval)
 		time.Sleep(interval)
 	}
-}
-
-// newInferenceProxy returns a reverse proxy that forwards requests to the local
-// inference model (base_url). Used for sync-direct requests that arrive on paths
-// other than "/" (which is reserved for async CloudEvents from KafkaSource).
-func newInferenceProxy(baseURL string) *httputil.ReverseProxy {
-	target, err := url.Parse(baseURL)
-	if err != nil || target.Host == "" {
-		slog.Error("invalid inference base_url — cannot start proxy", "url", baseURL, "error", err)
-		os.Exit(1)
-	}
-	return httputil.NewSingleHostReverseProxy(target)
-}
-
-// statusRecorder wraps http.ResponseWriter to capture the written status code.
-type statusRecorder struct {
-	http.ResponseWriter
-	status int
-}
-
-func (r *statusRecorder) WriteHeader(code int) {
-	r.status = code
-	r.ResponseWriter.WriteHeader(code)
 }

@@ -66,9 +66,9 @@ type ServerConfig struct {
 	// PriorityHeader is the HTTP header injected by APISIX on SA consumer
 	// requests to signal high-priority processing. When a request carries this
 	// header and the service has a priority_topic configured, the job is
-	// published to that topic instead of input_topic. The relay processes
-	// priority-topic jobs via POST /sync, which defers normal async jobs
-	// (identical mechanism to sync-over-Kafka priority).
+	// published to that topic instead of input_topic. A dedicated KafkaSource
+	// routes this topic to a JobSink, processing these jobs independently of
+	// the async queue.
 	PriorityHeader string `yaml:"priority_header"`
 	// ConsumerHeader is the HTTP header used to identify the API consumer.
 	// Typically set by APISIX after authentication (e.g. "X-Consumer-Username").
@@ -201,10 +201,6 @@ type ServiceConfig struct {
 	// Async / Kafka mode.
 	InputTopic string `yaml:"input_topic"`
 	ResultTopic string `yaml:"result_topic"`
-	// SyncTopic is the dedicated Kafka topic for priority (sync-over-Kafka) jobs.
-	// When set, POST /v1/* multipart requests are routed through Kafka instead of
-	// proxied directly, giving them priority over async jobs via a second KafkaSource.
-	SyncTopic string `yaml:"sync_topic"`
 	// PriorityTopic is the Kafka topic for high-priority async jobs (e.g. SA accounts).
 	// When set and the server.priority_header is present on the request, the job is
 	// published here instead of input_topic. A dedicated KafkaSource routes this topic
@@ -305,7 +301,7 @@ func (c *Config) applyDefaults() {
 		c.Server.ReadTimeout = 120 * time.Second
 	}
 	// WriteTimeout has no default: 0 means no timeout, which is correct for a
-	// gateway that handles long-running sync-over-Kafka jobs (OCR, large audio).
+	// gateway that handles long-running direct-proxy jobs (OCR, large audio).
 	// Set explicitly in config if a hard limit is desired.
 	if c.Server.IdleTimeout == 0 {
 		c.Server.IdleTimeout = 120 * time.Second
@@ -354,7 +350,7 @@ func (c *Config) validate() error {
 		if (svc.InputTopic == "") != (svc.ResultTopic == "") {
 			return fmt.Errorf("service %q: input_topic and result_topic must both be set or both be empty", svc.Type)
 		}
-		if svc.InputTopic != "" || svc.ResultTopic != "" || svc.SyncTopic != "" || svc.PriorityTopic != "" {
+		if svc.InputTopic != "" || svc.ResultTopic != "" || svc.PriorityTopic != "" {
 			needsKafka = true
 		}
 	}

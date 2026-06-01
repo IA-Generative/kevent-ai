@@ -18,40 +18,21 @@ func baseServiceConfig() config.ServiceConfig {
 		InferenceURL:  "http://inference.svc.cluster.local",
 		InputTopic:    "jobs.whisper-large-v3.input",
 		ResultTopic:   "jobs.whisper-large-v3.results",
-		SyncTopic:     "jobs.whisper-large-v3.sync",
 		AcceptedExts:  []string{".mp3", ".wav"},
 		MaxFileSizeMB: 100,
 	}
 }
 
-// TestDef_SyncTopicPopulated verifies that SyncTopic from config is exposed in the Def.
-func TestDef_SyncTopicPopulated(t *testing.T) {
-	reg := service.NewRegistry([]config.ServiceConfig{baseServiceConfig()})
-
-	def, err := reg.RouteSync("/v1/audio/transcriptions", "whisper-large-v3")
-	if err != nil {
-		t.Fatalf("RouteSync failed: %v", err)
-	}
-
-	if def.SyncTopic != "jobs.whisper-large-v3.sync" {
-		t.Errorf("expected SyncTopic %q, got %q", "jobs.whisper-large-v3.sync", def.SyncTopic)
-	}
-}
-
-// TestRegistry_IndexedWithoutInferenceURL verifies that a service configured with
-// only a sync_topic (no inference_url) is still indexed for sync routing.
-func TestRegistry_IndexedWithoutInferenceURL(t *testing.T) {
+// TestRegistry_NotIndexedWithoutInferenceURL verifies that a service configured without
+// inference_url is not indexed for sync routing (direct proxy path required).
+func TestRegistry_NotIndexedWithoutInferenceURL(t *testing.T) {
 	cfg := baseServiceConfig()
-	cfg.InferenceURL = "" // no direct proxy — only Kafka sync path
+	cfg.InferenceURL = "" // no direct proxy backend
 
 	reg := service.NewRegistry([]config.ServiceConfig{cfg})
 
-	def, err := reg.RouteSync("/v1/audio/transcriptions", "whisper-large-v3")
-	if err != nil {
-		t.Fatalf("service with only SyncTopic should be routable: %v", err)
-	}
-	if def.SyncTopic == "" {
-		t.Error("SyncTopic should be set")
+	if reg.HasSyncServices() {
+		t.Error("service without inference_url should not be indexed for sync routing")
 	}
 }
 
@@ -102,7 +83,6 @@ func TestRegistry_MultipleServices(t *testing.T) {
 			InferenceURL: "http://ocr.svc.cluster.local",
 			InputTopic:   "jobs.llava.input",
 			ResultTopic:  "jobs.llava.results",
-			// No SyncTopic — JSON-based, uses direct proxy
 		},
 	}
 	reg := service.NewRegistry(cfgs)
@@ -111,16 +91,16 @@ func TestRegistry_MultipleServices(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RouteSync failed: %v", err)
 	}
-	if def.SyncTopic != "" {
-		t.Errorf("OCR should have empty SyncTopic, got %q", def.SyncTopic)
+	if def.Model != "llava-v1.6-mistral-7b" {
+		t.Errorf("expected llava-v1.6-mistral-7b, got %q", def.Model)
 	}
 
 	def2, err := reg.RouteSync("/v1/audio/transcriptions", "whisper-large-v3")
 	if err != nil {
 		t.Fatalf("RouteSync failed: %v", err)
 	}
-	if def2.SyncTopic == "" {
-		t.Error("transcription should have non-empty SyncTopic")
+	if def2.Model != "whisper-large-v3" {
+		t.Errorf("expected whisper-large-v3, got %q", def2.Model)
 	}
 }
 
@@ -129,7 +109,6 @@ func TestRegistry_MultipleServices(t *testing.T) {
 func TestRouteSync_PatternPath_ModelInURL(t *testing.T) {
 	cfg := baseServiceConfig()
 	cfg.Operations = map[string][]string{"infer": {"/v2/models/{model}/infer"}}
-	cfg.SyncTopic = ""
 
 	reg := service.NewRegistry([]config.ServiceConfig{cfg})
 
@@ -147,7 +126,6 @@ func TestRouteSync_PatternPath_ModelInURL(t *testing.T) {
 func TestRouteSync_PatternPath_SuffixSeparator(t *testing.T) {
 	cfg := baseServiceConfig()
 	cfg.Operations = map[string][]string{"predict": {"/v1/models/{model}:predict"}}
-	cfg.SyncTopic = ""
 
 	reg := service.NewRegistry([]config.ServiceConfig{cfg})
 
@@ -165,7 +143,6 @@ func TestRouteSync_PatternPath_SuffixSeparator(t *testing.T) {
 func TestRouteSync_PatternPath_UnknownModelReturnsError(t *testing.T) {
 	cfg := baseServiceConfig()
 	cfg.Operations = map[string][]string{"infer": {"/v2/models/{model}/infer"}}
-	cfg.SyncTopic = ""
 
 	reg := service.NewRegistry([]config.ServiceConfig{cfg})
 
@@ -204,19 +181,6 @@ func TestSyncPathPrefixes(t *testing.T) {
 	}
 	if _, ok := prefixSet["/v2"]; !ok {
 		t.Error("expected /v2 prefix")
-	}
-}
-
-// TestRouteAsync_SyncTopicPreserved verifies that RouteAsync also exposes SyncTopic.
-func TestRouteAsync_SyncTopicPreserved(t *testing.T) {
-	reg := service.NewRegistry([]config.ServiceConfig{baseServiceConfig()})
-
-	def, err := reg.RouteAsync("transcription", "whisper-large-v3")
-	if err != nil {
-		t.Fatalf("RouteAsync failed: %v", err)
-	}
-	if def.SyncTopic != "jobs.whisper-large-v3.sync" {
-		t.Errorf("expected SyncTopic in RouteAsync result, got %q", def.SyncTopic)
 	}
 }
 
@@ -339,7 +303,6 @@ func TestRouteSync_Wildcard_ExactPathTakesPrecedence(t *testing.T) {
 			Model:        "whisper-large-v3",
 			Provider:     "",
 			InferenceURL: "http://whisper.svc",
-			SyncTopic:    "jobs.whisper.sync",
 			Operations:   map[string][]string{"transcription": {"/v1/audio/transcriptions"}},
 		},
 		wildcardLLMConfig("gpt-4o", false),

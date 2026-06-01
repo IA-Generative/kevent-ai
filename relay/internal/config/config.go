@@ -15,7 +15,6 @@ type Config struct {
 	S3         S3Config         `yaml:"s3"`
 	Encryption EncryptionConfig `yaml:"encryption"`
 	Inference  InferenceConfig  `yaml:"inference"`
-	Server     ServerConfig     `yaml:"server"`
 }
 
 // InferenceConfig holds the local inference endpoint configuration.
@@ -34,12 +33,6 @@ type InferenceConfig struct {
 	ReadyInterval      string            `yaml:"ready_interval"`
 	HealthCheckTimeout string            `yaml:"health_check_timeout"`
 	ExtraFields        map[string]string `yaml:"extra_fields"`
-}
-
-type ServerConfig struct {
-	ReadTimeout     string `yaml:"read_timeout"`
-	IdleTimeout     string `yaml:"idle_timeout"`
-	ShutdownTimeout string `yaml:"shutdown_timeout"`
 }
 
 // TimeoutDuration returns the configured inference timeout.
@@ -82,33 +75,6 @@ func (c InferenceConfig) HealthCheckTimeoutDuration() time.Duration {
 	return 2 * time.Second
 }
 
-// ReadTimeoutDuration returns the HTTP server read timeout.
-// Invalid or absent values fall back to 30 seconds.
-func (c ServerConfig) ReadTimeoutDuration() time.Duration {
-	if d, err := time.ParseDuration(c.ReadTimeout); err == nil && d > 0 {
-		return d
-	}
-	return 30 * time.Second
-}
-
-// IdleTimeoutDuration returns the HTTP server idle connection timeout.
-// Invalid or absent values fall back to 120 seconds.
-func (c ServerConfig) IdleTimeoutDuration() time.Duration {
-	if d, err := time.ParseDuration(c.IdleTimeout); err == nil && d > 0 {
-		return d
-	}
-	return 120 * time.Second
-}
-
-// ShutdownTimeoutDuration returns how long to wait for graceful shutdown.
-// Invalid or absent values fall back to 30 seconds.
-func (c ServerConfig) ShutdownTimeoutDuration() time.Duration {
-	if d, err := time.ParseDuration(c.ShutdownTimeout); err == nil && d > 0 {
-		return d
-	}
-	return 30 * time.Second
-}
-
 type EncryptionConfig struct {
 	Key string `yaml:"key"`
 }
@@ -129,9 +95,11 @@ func (s ServiceConfig) Type() string {
 }
 
 type KafkaConfig struct {
-	Brokers []string   `yaml:"brokers"`
-	SASL    SASLConfig `yaml:"sasl"`
-	TLS     TLSConfig  `yaml:"tls"`
+	Brokers       []string   `yaml:"brokers"`
+	SASL          SASLConfig `yaml:"sasl"`
+	TLS           TLSConfig  `yaml:"tls"`
+	InputTopic    string     `yaml:"input_topic"`
+	ConsumerGroup string     `yaml:"consumer_group"`
 }
 
 type SASLConfig struct {
@@ -192,6 +160,12 @@ func (c *Config) validate() error {
 	}
 	if len(c.Kafka.Brokers) == 0 {
 		return fmt.Errorf("kafka.brokers is required")
+	}
+	if c.Kafka.InputTopic == "" {
+		return fmt.Errorf("kafka.input_topic is required (set KAFKA_INPUT_TOPIC env var)")
+	}
+	if c.Kafka.ConsumerGroup == "" {
+		return fmt.Errorf("kafka.consumer_group is required (set KAFKA_CONSUMER_GROUP env var)")
 	}
 	if c.S3.Endpoint == "" {
 		return fmt.Errorf("s3.endpoint is required")

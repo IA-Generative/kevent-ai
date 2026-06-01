@@ -3,7 +3,6 @@ package handler_test
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -22,77 +21,9 @@ import (
 	"kevent/gateway/internal/llmproxy"
 	"kevent/gateway/internal/llmproxy/provider"
 	"kevent/gateway/internal/metrics"
-	"kevent/gateway/internal/model"
 	"kevent/gateway/internal/ratelimit"
 	"kevent/gateway/internal/service"
-	"kevent/gateway/internal/storage"
 )
-
-// ── Mocks ────────────────────────────────────────────────────────────────────
-
-type mockS3 struct {
-	uploadErr error
-	getResult []byte
-	getErr    error
-	uploaded  bool
-}
-
-func (m *mockS3) Upload(_ context.Context, _ string, _ io.Reader, _ int64, _ string) error {
-	m.uploaded = true
-	return m.uploadErr
-}
-func (m *mockS3) GetObject(_ context.Context, _ string) ([]byte, error) {
-	return m.getResult, m.getErr
-}
-func (m *mockS3) DeleteObject(_ context.Context, _ string) error { return nil }
-
-type mockSub struct{ ch chan struct{} }
-
-func (s *mockSub) Wait(ctx context.Context) error {
-	select {
-	case <-s.ch:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-func (s *mockSub) Close() {}
-
-type mockRedis struct {
-	saveErr error
-	job     *model.Job
-	getErr  error
-	sub     *mockSub
-	notified bool
-}
-
-func (m *mockRedis) SaveJob(_ context.Context, _ *model.Job) error { return m.saveErr }
-func (m *mockRedis) GetJob(_ context.Context, _ string) (*model.Job, error) {
-	return m.job, m.getErr
-}
-func (m *mockRedis) DeleteJob(_ context.Context, _ string) error { return nil }
-func (m *mockRedis) SubscribeJobDone(_ context.Context, _ string) storage.JobDoneSubscription {
-	return m.sub
-}
-
-type mockProducer struct {
-	publishErr error
-	published  bool
-	// When set, signals the mock subscription on publish so Wait unblocks.
-	sub *mockSub
-}
-
-func (m *mockProducer) PublishInputEvent(_ context.Context, _ string, _ *model.InputEvent) error {
-	m.published = true
-	if m.sub != nil {
-		// Signal immediately so the handler's Wait unblocks in tests.
-		select {
-		case m.sub.ch <- struct{}{}:
-		default:
-		}
-	}
-	return m.publishErr
-}
 
 // mockRateLimiter is a configurable Checker stub for testing.
 type mockRateLimiter struct {
@@ -106,7 +37,7 @@ func (m *mockRateLimiter) Check(_ context.Context, _ *http.Request, _ string) (r
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-func buildRegistry(syncTopic string) *service.Registry {
+func buildRegistry() *service.Registry {
 	cfgs := []config.ServiceConfig{
 		{
 			Type:  "transcription",
@@ -117,7 +48,6 @@ func buildRegistry(syncTopic string) *service.Registry {
 			InferenceURL:  "http://inference.example.com",
 			InputTopic:    "jobs.whisper-large-v3.input",
 			ResultTopic:   "jobs.whisper-large-v3.results",
-			SyncTopic:     syncTopic,
 			AcceptedExts:  []string{".mp3", ".wav"},
 			MaxFileSizeMB: 100,
 		},
@@ -142,7 +72,7 @@ func multipartRequest(t *testing.T, path, modelName string, fileContent []byte) 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 // TestSyncHandler_JSONAlwaysUsesDirectProxy verifies that JSON requests always go
-// through the direct proxy, even when sync_topic is configured.
+// through the direct proxy.
 func TestSyncHandler_JSONAlwaysUsesDirectProxy(t *testing.T) {
 	upstreamCalled := false
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -159,13 +89,12 @@ func TestSyncHandler_JSONAlwaysUsesDirectProxy(t *testing.T) {
 			"chat": {"/v1/chat/completions"},
 		},
 		InferenceURL: upstream.URL,
-		SyncTopic:    "jobs.llava.sync", // set, but JSON → direct proxy
 		InputTopic:   "jobs.llava.input",
 		ResultTopic:  "jobs.llava.results",
 	}}
 	reg := service.NewRegistry(cfgs)
 
-	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, nil)
+	h := handler.NewSyncHandler(reg, "", nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
 		strings.NewReader(`{"model":"llava","messages":[]}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -178,9 +107,9 @@ func TestSyncHandler_JSONAlwaysUsesDirectProxy(t *testing.T) {
 	}
 }
 
-// TestSyncHandler_MultipartNoSyncTopic_UsesDirectProxy verifies that a multipart
-// request for a service without sync_topic is proxied directly.
-func TestSyncHandler_MultipartNoSyncTopic_UsesDirectProxy(t *testing.T) {
+// TestSyncHandler_MultipartUsesDirectProxy verifies that multipart requests are
+// proxied directly to the inference backend.
+func TestSyncHandler_MultipartUsesDirectProxy(t *testing.T) {
 	upstreamCalled := false
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamCalled = true
@@ -195,182 +124,44 @@ func TestSyncHandler_MultipartNoSyncTopic_UsesDirectProxy(t *testing.T) {
 			"transcription": {"/v1/audio/transcriptions"},
 		},
 		InferenceURL: upstream.URL,
-		SyncTopic:    "", // empty → direct proxy
 		InputTopic:   "jobs.whisper-large-v3.input",
 		ResultTopic:  "jobs.whisper-large-v3.results",
 		AcceptedExts: []string{".mp3", ".wav"},
 	}}
 	reg := service.NewRegistry(cfgs)
 
-	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, nil)
+	h := handler.NewSyncHandler(reg, "", nil, nil)
 	req := multipartRequest(t, "/v1/audio/transcriptions", "whisper-large-v3", []byte("fake audio"))
 	w := httptest.NewRecorder()
 
 	h.ServeHTTP(w, req)
 
 	if !upstreamCalled {
-		t.Error("multipart with no sync_topic should proxy to upstream, but upstream was not called")
-	}
-}
-
-// TestSyncHandler_MultipartWithSyncTopic_UsesKafka verifies that a multipart
-// request for a service with sync_topic goes through S3 + Kafka, not direct proxy.
-func TestSyncHandler_MultipartWithSyncTopic_UsesKafka(t *testing.T) {
-	upstreamCalled := false
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		upstreamCalled = true
-	}))
-	defer upstream.Close()
-
-	sub := &mockSub{ch: make(chan struct{}, 1)}
-	s3 := &mockS3{getResult: []byte(`{"text":"transcribed"}`)}
-	redis := &mockRedis{
-		sub: sub,
-		job: &model.Job{
-			ID:        "test-job",
-			Status:    model.JobStatusCompleted,
-			ResultRef: "test-job/result.json",
-		},
-	}
-	prod := &mockProducer{sub: sub} // signals sub.ch on publish
-
-	reg := buildRegistry("jobs.whisper-large-v3.sync")
-	h := handler.NewSyncHandler(reg, s3, redis, prod, "", nil, nil)
-
-	req := multipartRequest(t, "/v1/audio/transcriptions", "whisper-large-v3", []byte("fake audio"))
-	w := httptest.NewRecorder()
-
-	h.ServeHTTP(w, req)
-
-	if upstreamCalled {
-		t.Error("multipart with sync_topic should NOT proxy directly to upstream")
-	}
-	if !s3.uploaded {
-		t.Error("file should have been uploaded to S3")
-	}
-	if !prod.published {
-		t.Error("InputEvent should have been published to Kafka sync topic")
-	}
-	if w.Code != http.StatusOK {
-		t.Errorf("expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-	if !strings.Contains(w.Body.String(), "transcribed") {
-		t.Errorf("expected result in response body, got: %s", w.Body.String())
-	}
-}
-
-// TestSyncHandler_S3UploadFailure verifies that an S3 upload error returns 500.
-func TestSyncHandler_S3UploadFailure(t *testing.T) {
-	sub := &mockSub{ch: make(chan struct{}, 1)}
-	s3 := &mockS3{uploadErr: fmt.Errorf("s3 unavailable")}
-	redis := &mockRedis{sub: sub}
-	prod := &mockProducer{}
-
-	reg := buildRegistry("jobs.whisper-large-v3.sync")
-	h := handler.NewSyncHandler(reg, s3, redis, prod, "", nil, nil)
-
-	req := multipartRequest(t, "/v1/audio/transcriptions", "whisper-large-v3", []byte("audio"))
-	w := httptest.NewRecorder()
-
-	h.ServeHTTP(w, req)
-
-	if w.Code != http.StatusInternalServerError {
-		t.Errorf("expected 500 on S3 failure, got %d", w.Code)
-	}
-	if prod.published {
-		t.Error("Kafka publish should not happen after S3 upload failure")
-	}
-}
-
-// TestSyncHandler_KafkaPublishFailure verifies that a Kafka publish error returns 500.
-func TestSyncHandler_KafkaPublishFailure(t *testing.T) {
-	sub := &mockSub{ch: make(chan struct{}, 1)}
-	s3 := &mockS3{}
-	redis := &mockRedis{sub: sub}
-	prod := &mockProducer{publishErr: fmt.Errorf("kafka unavailable")}
-
-	reg := buildRegistry("jobs.whisper-large-v3.sync")
-	h := handler.NewSyncHandler(reg, s3, redis, prod, "", nil, nil)
-
-	req := multipartRequest(t, "/v1/audio/transcriptions", "whisper-large-v3", []byte("audio"))
-	w := httptest.NewRecorder()
-
-	h.ServeHTTP(w, req)
-
-	if w.Code != http.StatusInternalServerError {
-		t.Errorf("expected 500 on Kafka failure, got %d", w.Code)
-	}
-}
-
-// TestSyncHandler_ClientDisconnect verifies that a context cancellation (client
-// disconnect) while waiting for the result returns an appropriate error.
-func TestSyncHandler_ClientDisconnect(t *testing.T) {
-	sub := &mockSub{ch: make(chan struct{})} // channel never signalled
-	s3 := &mockS3{}
-	redis := &mockRedis{sub: sub}
-	prod := &mockProducer{} // does not signal sub
-
-	reg := buildRegistry("jobs.whisper-large-v3.sync")
-	h := handler.NewSyncHandler(reg, s3, redis, prod, "", nil, nil)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-
-	req := multipartRequest(t, "/v1/audio/transcriptions", "whisper-large-v3", []byte("audio")).
-		WithContext(ctx)
-	w := httptest.NewRecorder()
-
-	h.ServeHTTP(w, req)
-
-	if w.Code != http.StatusGatewayTimeout {
-		t.Errorf("expected 504 on client timeout, got %d", w.Code)
-	}
-}
-
-// TestSyncHandler_InferenceFailure verifies that a failed job (status=failed) returns 422.
-func TestSyncHandler_InferenceFailure(t *testing.T) {
-	sub := &mockSub{ch: make(chan struct{}, 1)}
-	s3 := &mockS3{}
-	redis := &mockRedis{
-		sub: sub,
-		job: &model.Job{
-			ID:     "test-job",
-			Status: model.JobStatusFailed,
-			Error:  "inference error: GPU OOM",
-		},
-	}
-	prod := &mockProducer{sub: sub}
-
-	reg := buildRegistry("jobs.whisper-large-v3.sync")
-	h := handler.NewSyncHandler(reg, s3, redis, prod, "", nil, nil)
-
-	req := multipartRequest(t, "/v1/audio/transcriptions", "whisper-large-v3", []byte("audio"))
-	w := httptest.NewRecorder()
-
-	h.ServeHTTP(w, req)
-
-	if w.Code != http.StatusUnprocessableEntity {
-		t.Errorf("expected 422 for failed job, got %d", w.Code)
+		t.Error("multipart request should proxy to upstream, but upstream was not called")
 	}
 }
 
 // TestSyncHandler_MissingModelField_SingleModel verifies that when only one model
 // is registered for a path, omitting the "model" field auto-selects that model.
 func TestSyncHandler_MissingModelField_SingleModel(t *testing.T) {
-	sub := &mockSub{ch: make(chan struct{}, 1)}
-	s3 := &mockS3{getResult: []byte(`{"text":"ok"}`)}
-	redis := &mockRedis{
-		sub: sub,
-		job: &model.Job{
-			ID:        "test-job",
-			Status:    model.JobStatusCompleted,
-			ResultRef: "test-job/result.json",
-		},
-	}
-	prod := &mockProducer{sub: sub}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"text":"ok"}`))
+	}))
+	defer upstream.Close()
 
-	reg := buildRegistry("jobs.whisper-large-v3.sync")
-	h := handler.NewSyncHandler(reg, s3, redis, prod, "", nil, nil)
+	cfgs := []config.ServiceConfig{{
+		Type:  "transcription",
+		Model: "whisper-large-v3",
+		Operations: map[string][]string{
+			"transcription": {"/v1/audio/transcriptions"},
+		},
+		InferenceURL:  upstream.URL,
+		AcceptedExts:  []string{".mp3", ".wav"},
+		MaxFileSizeMB: 100,
+	}}
+	reg := service.NewRegistry(cfgs)
+	h := handler.NewSyncHandler(reg, "", nil, nil)
 
 	body := &bytes.Buffer{}
 	mw := multipart.NewWriter(body)
@@ -403,7 +194,6 @@ func TestSyncHandler_MissingModelField_MultipleModels(t *testing.T) {
 			InferenceURL: "http://inference.example.com",
 			InputTopic:   "jobs.whisper-large-v3.input",
 			ResultTopic:  "jobs.whisper-large-v3.results",
-			SyncTopic:    "jobs.whisper-large-v3.sync",
 		},
 		{
 			Type:  "transcription",
@@ -414,11 +204,10 @@ func TestSyncHandler_MissingModelField_MultipleModels(t *testing.T) {
 			InferenceURL: "http://inference-turbo.example.com",
 			InputTopic:   "jobs.whisper-turbo.input",
 			ResultTopic:  "jobs.whisper-turbo.results",
-			SyncTopic:    "jobs.whisper-turbo.sync",
 		},
 	}
 	reg := service.NewRegistry(cfgs)
-	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, nil)
+	h := handler.NewSyncHandler(reg, "", nil, nil)
 
 	body := &bytes.Buffer{}
 	mw := multipart.NewWriter(body)
@@ -439,8 +228,8 @@ func TestSyncHandler_MissingModelField_MultipleModels(t *testing.T) {
 
 // TestSyncHandler_UnknownModel verifies that an unknown model returns 400.
 func TestSyncHandler_UnknownModel(t *testing.T) {
-	reg := buildRegistry("jobs.whisper-large-v3.sync")
-	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, nil)
+	reg := buildRegistry()
+	h := handler.NewSyncHandler(reg, "", nil, nil)
 
 	req := multipartRequest(t, "/v1/audio/transcriptions", "unknown-model", []byte("audio"))
 	w := httptest.NewRecorder()
@@ -455,8 +244,8 @@ func TestSyncHandler_UnknownModel(t *testing.T) {
 // TestSyncHandler_UnsupportedContentType verifies that unsupported content types
 // return 415.
 func TestSyncHandler_UnsupportedContentType(t *testing.T) {
-	reg := buildRegistry("")
-	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, nil)
+	reg := buildRegistry()
+	h := handler.NewSyncHandler(reg, "", nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions",
 		strings.NewReader("plain text body"))
@@ -509,7 +298,7 @@ func TestSyncHandler_MultiBackend_PrimaryFails_FallbackUsed(t *testing.T) {
 		{URL: primary.URL, Weight: 100},
 		{URL: fallback.URL, Weight: 10},
 	})
-	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, nil)
+	h := handler.NewSyncHandler(reg, "", nil, nil)
 
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, jsonRequest("/v1/chat/completions"))
@@ -536,7 +325,7 @@ func TestSyncHandler_MultiBackend_NetworkError_FallbackUsed(t *testing.T) {
 		{URL: "http://127.0.0.1:1", Weight: 100}, // unreachable
 		{URL: fallback.URL, Weight: 10},
 	})
-	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, nil)
+	h := handler.NewSyncHandler(reg, "", nil, nil)
 
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, jsonRequest("/v1/chat/completions"))
@@ -563,7 +352,7 @@ func TestSyncHandler_MultiBackend_AllFail_Returns502(t *testing.T) {
 		{URL: primary.URL, Weight: 100},
 		{URL: secondary.URL, Weight: 10},
 	})
-	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, nil)
+	h := handler.NewSyncHandler(reg, "", nil, nil)
 
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, jsonRequest("/v1/chat/completions"))
@@ -591,7 +380,7 @@ func TestSyncHandler_MultiBackend_WeightZero_UsedAsFallback(t *testing.T) {
 		{URL: primary.URL, Weight: 100},
 		{URL: fallback.URL, Weight: 0}, // fallback-only
 	})
-	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, nil)
+	h := handler.NewSyncHandler(reg, "", nil, nil)
 
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, jsonRequest("/v1/chat/completions"))
@@ -621,7 +410,7 @@ func TestSyncHandler_MultiBackend_4xx_NotRetried(t *testing.T) {
 		{URL: primary.URL, Weight: 100},
 		{URL: fallback.URL, Weight: 10},
 	})
-	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, nil)
+	h := handler.NewSyncHandler(reg, "", nil, nil)
 
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, jsonRequest("/v1/chat/completions"))
@@ -653,7 +442,7 @@ func TestSyncHandler_BackwardCompat_SingleInferenceURL(t *testing.T) {
 		InferenceURL: upstream.URL, // legacy single-URL config
 	}}
 	reg := service.NewRegistry(cfgs)
-	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, nil)
+	h := handler.NewSyncHandler(reg, "", nil, nil)
 
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, jsonRequest("/v1/chat/completions"))
@@ -696,7 +485,7 @@ func TestSyncHandler_Retry_SucceedsAfterFailure(t *testing.T) {
 	defer upstream.Close()
 
 	reg := buildRetryRegistry(upstream.URL, 2) // 2 retries = 3 total attempts
-	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, nil).
+	h := handler.NewSyncHandler(reg, "", nil, nil).
 		WithRetryBackoff(5 * time.Millisecond)
 
 	w := httptest.NewRecorder()
@@ -721,7 +510,7 @@ func TestSyncHandler_Retry_ExhaustsAllAttempts(t *testing.T) {
 	defer upstream.Close()
 
 	reg := buildRetryRegistry(upstream.URL, 1) // 1 retry = 2 total attempts
-	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, nil).
+	h := handler.NewSyncHandler(reg, "", nil, nil).
 		WithRetryBackoff(5 * time.Millisecond)
 
 	w := httptest.NewRecorder()
@@ -745,7 +534,7 @@ func TestSyncHandler_Retry_NoRetryOn4xx(t *testing.T) {
 	defer upstream.Close()
 
 	reg := buildRetryRegistry(upstream.URL, 3)
-	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, nil).
+	h := handler.NewSyncHandler(reg, "", nil, nil).
 		WithRetryBackoff(5 * time.Millisecond)
 
 	w := httptest.NewRecorder()
@@ -802,7 +591,7 @@ func TestSyncHandler_Guardrails_PII_Blocked(t *testing.T) {
 	defer backend.Close()
 
 	reg := buildLLMRegistry(backend.URL, true)
-	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, buildLLMHandler(backend.URL))
+	h := handler.NewSyncHandler(reg, "", nil, buildLLMHandler(backend.URL))
 
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, piiJSONRequest("Mon email est alice@example.com"))
@@ -829,7 +618,7 @@ func TestSyncHandler_Guardrails_PII_Disabled_AllowsThrough(t *testing.T) {
 	defer backend.Close()
 
 	reg := buildLLMRegistry(backend.URL, false) // PII disabled
-	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, buildLLMHandler(backend.URL))
+	h := handler.NewSyncHandler(reg, "", nil, buildLLMHandler(backend.URL))
 
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, piiJSONRequest("Mon email est alice@example.com"))
@@ -850,7 +639,7 @@ func TestSyncHandler_Guardrails_NoPII_PassesThrough(t *testing.T) {
 	defer backend.Close()
 
 	reg := buildLLMRegistry(backend.URL, true) // PII enabled
-	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, buildLLMHandler(backend.URL))
+	h := handler.NewSyncHandler(reg, "", nil, buildLLMHandler(backend.URL))
 
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, piiJSONRequest("Quelle est la capitale de la France ?"))
@@ -869,7 +658,7 @@ func TestSyncHandler_Guardrails_PII_MetricIncremented(t *testing.T) {
 	defer backend.Close()
 
 	reg := buildLLMRegistry(backend.URL, true)
-	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, buildLLMHandler(backend.URL))
+	h := handler.NewSyncHandler(reg, "", nil, buildLLMHandler(backend.URL))
 
 	counter := metrics.GuardrailsPiiBlockedTotal.WithLabelValues("llm", "gpt-4o")
 	before := testutil.ToFloat64(counter)
@@ -892,7 +681,7 @@ func TestSyncHandler_Guardrails_ConsumerHeader_LoggedOnBlock(t *testing.T) {
 	defer backend.Close()
 
 	reg := buildLLMRegistry(backend.URL, true)
-	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "X-Consumer-Username", nil, buildLLMHandler(backend.URL))
+	h := handler.NewSyncHandler(reg, "X-Consumer-Username", nil, buildLLMHandler(backend.URL))
 
 	req := piiJSONRequest("Tel: 0612345678")
 	req.Header.Set("X-Consumer-Username", "alice")
@@ -932,7 +721,7 @@ func TestSyncHandler_RateLimitHeaders_SetOnAllowedRequest(t *testing.T) {
 		Remaining:  9,
 		ResetAfter: 30 * time.Second,
 	}}
-	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", rl, nil)
+	h := handler.NewSyncHandler(reg, "", rl, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions",
 		strings.NewReader(`{"model":"whisper-large-v3"}`))
@@ -981,7 +770,7 @@ func TestSyncHandler_RateLimitHeaders_SetOnRejectedRequest(t *testing.T) {
 		Remaining:  0,
 		ResetAfter: 45 * time.Second,
 	}}
-	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", rl, nil)
+	h := handler.NewSyncHandler(reg, "", rl, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions",
 		strings.NewReader(`{"model":"whisper-large-v3"}`))
@@ -1025,7 +814,7 @@ func TestSyncHandler_RateLimitHeaders_AbsentWhenNoLimiter(t *testing.T) {
 	}}
 	reg := service.NewRegistry(cfgs)
 
-	h := handler.NewSyncHandler(reg, &mockS3{}, &mockRedis{}, &mockProducer{}, "", nil, nil) // nil limiter
+	h := handler.NewSyncHandler(reg, "", nil, nil) // nil limiter
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions",
 		strings.NewReader(`{"model":"whisper-large-v3"}`))
