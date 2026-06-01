@@ -27,7 +27,7 @@ helm upgrade --install kevent-gateway ./helm/gateway -f values.yaml
 
 ```yaml
 image:
-  tag: "v0.5.3"
+  tag: "v0.13.0"
 
 config:
   s3:
@@ -47,7 +47,7 @@ secrets:
 
 ## Redis HA
 
-The chart deploys Redis with Redis-HA (HAProxy front-end) by default. Redis is required for job state and sync-over-Kafka pub/sub.
+The chart deploys Redis with Redis-HA (HAProxy front-end) by default. Redis is required for job state, rate limiting, and result caching.
 
 ## ConfigMap hot reload
 
@@ -90,18 +90,19 @@ kubectl apply -f examples/kafka-users.yaml -n <kafka-namespace>
 
 See `examples/kafka-users.yaml` in the repository root. Adjust the `strimzi.io/cluster` label and namespace to match your Strimzi installation.
 
-## Apply KafkaSources
+## Deploy relay (Deployment + KEDA)
+
+The relay runs as a standalone Deployment alongside the inference container. Apply the manifests from the repository:
 
 ```bash
-kubectl apply -f examples/kafka-sources.yaml
+# ConfigMap
+kubectl apply -f k8s/relay-cm.yaml
+
+# Deployment (2 containers: inference model + relay)
+kubectl apply -f k8s/deployment-transcription.yaml
+
+# KEDA ScaledObject (scales on Kafka consumer lag)
+kubectl apply -f k8s/keda-transcription.yaml
 ```
 
-See `examples/kafka-sources.yaml` in the repository root. Replace the `<placeholder>` values (broker address, secret names, InferenceService name) before applying.
-
-## Apply InferenceService
-
-```bash
-kubectl apply -f examples/inference-service.yaml
-```
-
-See `examples/inference-service.yaml` in the repository root. Replace all `<placeholder>` values (model PVC, image, broker address, secret names) before applying.
+The KEDA ScaledObject uses `lagThreshold: 1` and `minReplicaCount: 0` — pods scale to zero when no jobs are pending. Replace the `<placeholder>` values (broker address, secret names, image tags) before applying.

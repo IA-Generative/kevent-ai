@@ -15,17 +15,9 @@ GET /jobs/{service_type}/{job_id}
 
 ---
 
-## Sync-over-Kafka mode
-
-`POST /v1/*` multipart with `sync_topic` configured. The connection stays open; result is returned inline.
-
-![Sync-over-Kafka flow](sync-kafka-flow.drawio.png)
-
----
-
 ## Sync direct proxy mode
 
-`POST /v1/*` JSON body, or multipart without `sync_topic`.
+`POST /v1/*` — any content type (JSON or multipart).
 
 ```
 Client

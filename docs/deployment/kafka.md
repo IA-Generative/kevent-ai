@@ -1,4 +1,4 @@
-# Kafka & SASL configuration
+# Kafka configuration
 
 ## Broker
 
@@ -37,46 +37,44 @@ See `examples/kafka-users.yaml` in the repository root for the full manifest.
 ### `kevent-relay`
 
 - Read on `jobs.*` topics
-- Write on `jobs.*` topics
-- Read + Describe + **Delete** on `inference-*` groups
+- Write on `jobs.*` topics (result events)
 
-!!! warning "Delete ACL required"
-    The `Delete` ACL on `inference-*` groups is required by the Knative controller for ConsumerGroup finalization. Without it, KafkaSources will fail to clean up.
+## Topic naming
+
+| Topic | Producer | Consumer |
+|---|---|---|
+| `jobs.{model}.input` | Gateway (async submit) | Relay pull consumer |
+| `jobs.{model}.priority` | Gateway (priority submit) | Relay pull consumer (dedicated deployment) |
+| `jobs.{model}.results` | Relay | Gateway ConsumerManager |
+
+## Relay consumer configuration
+
+The relay is configured via `relay/config.yaml` (or the `kevent-relay` ConfigMap in Kubernetes). Key Kafka fields:
+
+```yaml
+kafka:
+  brokers:
+    - "kafka-bootstrap.<kafka-namespace>.svc.cluster.local:9093"
+  input_topic: "jobs.whisper-large-v3.input"
+  consumer_group: "kevent-relay-whisper"
+  sasl:
+    mechanism: "SCRAM-SHA-512"
+    username: "${KAFKA_USERNAME}"
+    password: "${KAFKA_PASSWORD}"
+  tls:
+    enabled: true
+    ca_cert_path: "/etc/ssl/certs/kafka-ca.crt"
+```
+
+For priority routing, deploy a second relay instance with `input_topic: jobs.{model}.priority` and a distinct `consumer_group`.
 
 ## Secret hygiene
 
-Strimzi-generated secrets must not have trailing newlines in values. The Knative KafkaSource controller does exact string comparison on `sasl-type` — a `\n` suffix causes:
-
-```
-[protocol SASL_SSL] unsupported SASL mechanism
-```
-
-Verify:
+Strimzi-generated secrets must not have trailing newlines in values. Verify:
 
 ```bash
 kubectl get secret kevent-relay-kafka -n default \
   -o jsonpath='{.data.sasl-type}' | base64 -d | xxd
 ```
 
-The output must end with `5332 302d 3531 32` (`S` `C` `R` `A` `M` `-` `S` `H` `A` `-` `5` `1` `2`) — no `0a` byte at the end.
-
-## KafkaSources
-
-Each service type requires two KafkaSources in the InferenceService namespace:
-
-| Source | Topic | Relay endpoint | Purpose |
-|---|---|---|---|
-| `kafka-source-{model}` | `jobs.{model}.input` | `POST /` | Normal async jobs |
-| `kafka-source-{model}-sync` | `jobs.{model}.sync` | `POST /sync` | Sync-over-Kafka (priority) |
-| `kafka-source-{model}-priority` | `jobs.{model}.priority` | `POST /sync` | SA priority async jobs |
-
-The `sync` and `priority` sources route to `POST /sync`, which sets `syncPriority++` and defers normal async processing.
-
-## Topic naming
-
-| Topic | Producer | Consumer |
-|---|---|---|
-| `jobs.{model}.input` | Gateway (async submit) | Relay via KafkaSource |
-| `jobs.{model}.sync` | Gateway (sync-over-Kafka) | Relay via KafkaSource |
-| `jobs.{model}.priority` | Gateway (priority submit) | Relay via KafkaSource |
-| `jobs.{model}.results` | Relay | Gateway ConsumerManager |
+The output must end with `5332 302d 3531 32` (`SCRAM-SHA-512`) — no `0a` byte at the end.
