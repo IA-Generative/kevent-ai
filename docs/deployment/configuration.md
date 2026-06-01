@@ -218,7 +218,7 @@ services:
     # Async routing
     input_topic: "jobs.whisper.input"
     result_topic: "jobs.whisper.results"
-    priority_topic: "jobs.whisper.priority"   # optional
+
 
     # File validation
     accepted_exts: [".mp3", ".wav", ".m4a", ".ogg", ".flac"]
@@ -268,7 +268,6 @@ services:
 | `backends` | no | `[]` | List of backends with weighted routing. Takes precedence over `inference_url` when set. |
 | `input_topic` | no | `""` | Kafka input topic for async jobs |
 | `result_topic` | no | `""` | Kafka result topic for async jobs |
-| `priority_topic` | no | `""` | Kafka topic for priority async jobs |
 | `accepted_exts` | no | any | Allowed file extensions (e.g. `.mp3`) |
 | `max_file_size_mb` | no | `100` | Max upload size in MB |
 | `inference_headers` | no | `{}` | HTTP headers injected on every sync-direct / LLM proxy request |

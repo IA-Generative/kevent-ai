@@ -132,13 +132,6 @@ services:
     # Async / Kafka — topics named after the model
     input_topic: jobs.whisper-large-v3.input
     result_topic: jobs.whisper-large-v3.results
-    # Sync-over-Kafka: priority topic consumed by a dedicated KafkaSource → /sync
-    # Leave empty to fall back to direct proxy (inference_url).
-    sync_topic: jobs.whisper-large-v3.sync
-    # Priority async: SA accounts are routed here when server.priority_header is set.
-    # A dedicated KafkaSource routes this topic to POST /sync on the relay so normal
-    # async jobs are deferred for its duration. Leave empty to disable.
-    priority_topic: jobs.whisper-large-v3.input.priority
     accepted_exts: [".mp3", ".wav", ".m4a", ".ogg", ".flac"]
     max_file_size_mb: 500
 
