@@ -1,5 +1,5 @@
 site_name: kevent-ai
-site_description: AI inference job gateway for Kubernetes/Knative
+site_description: AI inference job gateway for Kubernetes
 site_url: https://ia-generative.github.io/kevent-ai/
 repo_url: https://github.com/IA-Generative/kevent-ai
 repo_name: IA-Generative/kevent-ai
@@ -85,7 +85,6 @@ nav:
       - Gateway — High Error Rate: runbooks/KeventGatewayHighErrorRate.md
       - Gateway — Kafka Publish Errors: runbooks/KeventGatewayKafkaPublishErrors.md
       - Gateway — S3 Errors: runbooks/KeventGatewayS3Errors.md
-      - Gateway — Sync Jobs In-Flight High: runbooks/KeventGatewaySyncJobsInFlightHigh.md
       - Gateway — Rate Limit High Rejection Rate: runbooks/KeventGatewayRateLimitHighRejectionRate.md
       - Gateway — Rate Limit Errors: runbooks/KeventGatewayRateLimitErrors.md
       - Relay — Inference Slow: runbooks/KeventRelayInferenceSlow.md

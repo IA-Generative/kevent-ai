@@ -1,27 +1,17 @@
 # Priority routing
 
-Priority routing lets SA (service account) consumers preempt normal async jobs, ensuring low-latency processing for premium workloads.
+Priority routing lets SA (service account) consumers bypass the normal async queue, ensuring low-latency processing for premium workloads.
 
 ## How it works
 
-### Gateway side
-
-When a request carries the priority header (configurable via `server.priority_header`), the gateway publishes the `InputEvent` to the `priority_topic` instead of the normal `input_topic`.
+When a request carries the priority header (`server.priority_header`), the gateway publishes the `InputEvent` to `priority_topic` instead of `input_topic`.
 
 ```
-Normal async:   Kafka jobs.<model>.input    → relay POST /
-Priority async: Kafka jobs.<model>.priority → relay POST /sync
+Normal async:   jobs.<model>.input    → relay consumer group (standard)
+Priority async: jobs.<model>.priority → relay consumer group (dedicated deployment)
 ```
 
-### Relay side
-
-The relay's `POST /sync` handler sets `syncPriority++` for the duration of the job. Concurrent `POST /` (normal async) handlers check this counter:
-
-- `syncPriority > 0` → return `503 Service Unavailable`
-- KafkaSource retries after `backoffDelay`
-- Once the priority job finishes, `syncPriority--` and async jobs resume
-
-This works across pod scale-out: each pod independently tracks its own priority state. No shared state across pods is needed.
+A dedicated relay Deployment — configured to consume `priority_topic` with its own consumer group — processes priority jobs independently of the normal async queue. Because each relay is a long-running pull consumer, there is no shared `syncPriority` flag: isolation is achieved at the Kafka consumer group level.
 
 ## Configuration
 
@@ -32,34 +22,12 @@ server:
 services:
   - type: audio
     model: "whisper-large-v3"
+    input_topic: jobs.whisper-large-v3.input
     priority_topic: jobs.whisper-large-v3.priority   # omit to disable priority routing
-    ...
+    result_topic: jobs.whisper-large-v3.results
 ```
 
-### Knative KafkaSource for priority
-
-Add a KafkaSource routing the priority topic to `POST /sync` on the relay:
-
-```yaml
-apiVersion: sources.knative.dev/v1beta1
-kind: KafkaSource
-metadata:
-  name: kafka-source-whisper-priority
-spec:
-  topics:
-    - jobs.whisper-large-v3.priority
-  consumerGroup: kevent-relay-priority
-  sink:
-    ref:
-      apiVersion: serving.knative.dev/v1
-      kind: Service
-      name: kevent-transcription
-  delivery:
-    backoffDelay: PT2S
-    backoffPolicy: exponential
-  extensions:
-    path: /sync
-```
+Deploy a second relay instance with `kafka.input_topic: jobs.whisper-large-v3.priority` and a distinct `kafka.consumer_group` to consume priority jobs.
 
 ## Consumer identification and isolation
 

@@ -3,7 +3,7 @@
 kevent-ai consists of two independent components deployed separately:
 
 - **Gateway** — HTTP server that accepts requests, routes them, and returns results
-- **Relay** — sidecar that runs inside each Knative InferenceService pod, consuming Kafka jobs
+- **Relay** — standalone Kafka pull consumer deployed alongside the inference pod, processing async jobs
 
 ## Infrastructure dependencies
 
@@ -25,12 +25,15 @@ kevent-ai consists of two independent components deployed separately:
 
 ### Relay
 
-- Runs as a sidecar container in the InferenceService pod
-- Consumes `InputEvent` from Kafka via KafkaSource (Knative Eventing)
+- Runs as a separate container in the inference Deployment (not a sidecar)
+- Pulls `InputEvent` messages from Kafka via a long-running consumer loop (kafka-go Reader, manual commit)
+- Waits for the local inference service to be ready before consuming
 - Downloads input from S3
-- Calls the local inference model on `127.0.0.1:9000`
+- Calls the local inference model
 - Uploads results to S3
 - Publishes `ResultEvent` to Kafka
+- Annotates pod with `pod-deletion-cost` during active inference to prevent eviction
+- Scaled by KEDA on Kafka consumer lag (`lagThreshold: 1`, `minReplicaCount: 0`)
 
 ## Data flow
 
@@ -39,10 +42,6 @@ See [Request flows](request-flows.md) for detailed sequence diagrams for each mo
 ## Service registry
 
 The gateway is entirely config-driven. See [Service registry](service-registry.md).
-
-## Priority mechanism
-
-High-priority consumers can preempt async jobs. See [Priority routing](priority.md).
 
 ## LLM proxy
 

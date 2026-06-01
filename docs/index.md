@@ -32,10 +32,9 @@ curl -X POST https://your-gateway/v1/chat/completions \
 | **Sync** | `POST /v1/*` | Low-latency, OpenAI-compatible clients |
 | **LLM proxy** | `POST /v1/*` (JSON + `provider` set) | LLM APIs: OpenAI, Anthropic, vLLM, Ollama |
 
-Sync mode has two sub-modes depending on config:
+Sync mode routing:
 
-- **Direct proxy** — HTTP proxy to `inference_url` (JSON or multipart without `sync_topic`)
-- **Sync-over-Kafka** — priority Kafka round-trip with keep-alive response (multipart + `sync_topic`)
+- **Direct proxy** — HTTP proxy to `inference_url` (JSON or multipart)
 - **LLM proxy** — provider translation, response caching, consumer metrics (JSON + `provider` in config)
 
 ## Components
@@ -47,7 +46,7 @@ Two independent Go binaries, two Docker images:
 | **Gateway** | `ghcr.io/ia-generative/kevent-ai/gateway` | `cmd/gateway/main.go` |
 | **Relay** | `ghcr.io/ia-generative/kevent-ai/relay` | `relay/cmd/relay/main.go` |
 
-The **relay** runs as a sidecar in each Knative InferenceService pod. It consumes Kafka jobs, calls the local model, and publishes results.
+The **relay** runs as a standalone Kubernetes Deployment alongside the inference pod. It pulls jobs from Kafka via a long-running consumer loop, calls the local inference model, and publishes results. Autoscaling is handled by KEDA on Kafka consumer lag.
 
 ## Key features
 
@@ -57,9 +56,12 @@ The **relay** runs as a sidecar in each Knative InferenceService pod. It consume
 - Consumer tracking — link jobs to API consumers via a configurable header
 - **LLM proxy** — built-in OpenAI/Anthropic/Ollama/passthrough proxy with response caching and consumer token metrics
 - **Rate limiting** — per-consumer Redis fixed-window limits, configurable per service type and user type
-- Prometheus metrics — requests, latency, tokens, cache hits, rate limits, top-N consumer usage
+- **PII guardrails** — blocks LLM requests containing email, phone, IBAN, credit card, or SIREN/SIRET numbers
+- **Audit trail** — structured per-request logs for LLM requests (opt-in)
+- Prometheus metrics — requests, latency, tokens, cache hits, rate limits, top-N consumer usage, PII blocks
 - OpenAPI 3.0 spec generated at runtime from the live registry
 - AES-256-GCM at-rest encryption for S3 objects
+- KEDA autoscaling — relay scales on Kafka consumer lag, scale-to-zero supported
 
 ## Links
 

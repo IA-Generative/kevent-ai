@@ -28,7 +28,7 @@ Leave empty in deployments without upstream authentication — no behaviour chan
 
 ### `priority_header`
 
-When set and a request carries this header, the job is published to `services[].priority_topic` instead of `input_topic`. The relay processes priority-topic jobs via `POST /sync`, which sets `syncPriority++` and defers normal async jobs for its duration.
+When set and a request carries this header, the job is published to `services[].priority_topic` instead of `input_topic`. A dedicated relay Deployment consuming the priority topic processes these jobs independently of the normal async queue.
 
 Leave empty to disable priority routing.
 
@@ -214,7 +214,6 @@ services:
       translation:
         - "/v1/audio/translations"
     inference_url: "http://backend:80"     # base URL; original path appended
-    sync_topic: "jobs.whisper.sync"        # omit → direct proxy for multipart
 
     # Async routing
     input_topic: "jobs.whisper.input"
@@ -267,7 +266,6 @@ services:
 | `operations` | no | `{}` | Map of operation name → URL paths |
 | `inference_url` | no | `""` | Backend base URL for direct proxy (single backend, legacy — use `backends` for multi-backend) |
 | `backends` | no | `[]` | List of backends with weighted routing. Takes precedence over `inference_url` when set. |
-| `sync_topic` | no | `""` | Priority Kafka topic for sync-over-Kafka |
 | `input_topic` | no | `""` | Kafka input topic for async jobs |
 | `result_topic` | no | `""` | Kafka result topic for async jobs |
 | `priority_topic` | no | `""` | Kafka topic for priority async jobs |
@@ -313,7 +311,7 @@ On network error or 5xx, the next backend is tried. On 4xx (including 401), the 
 
 ### `inference_headers`
 
-Arbitrary HTTP headers injected on every request forwarded to the inference backend. Only applies to the **sync-direct proxy** and **LLM proxy** flows. Has no effect on async or sync-over-Kafka jobs.
+Arbitrary HTTP headers injected on every request forwarded to the inference backend. Only applies to the **sync-direct proxy** and **LLM proxy** flows. Has no effect on async jobs.
 
 - Header values support `${VAR}` / `${VAR:-default}` env expansion.
 - Config headers **override** any header with the same name sent by the client.
