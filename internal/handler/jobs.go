@@ -28,11 +28,6 @@ type s3Store interface {
 	DeleteObject(ctx context.Context, key string) error
 }
 
-// eventProducer is the subset of kafka.Producer used by JobHandler.
-type eventProducer interface {
-	PublishInputEvent(ctx context.Context, topic string, event *model.InputEvent) error
-}
-
 // asyncJobStore is the subset of storage.RedisClient used by JobHandler.
 type asyncJobStore interface {
 	SaveJob(ctx context.Context, job *model.Job) error
@@ -55,7 +50,6 @@ type JobHandler struct {
 	registry       *service.Registry
 	store          s3Store           // reuses the interface defined in sync.go
 	redis          asyncJobStore
-	producer       eventProducer     // reuses the interface defined in sync.go
 	priorityHeader string            // HTTP header that triggers high-priority routing (e.g. "X-Priority")
 	consumerHeader string            // HTTP header identifying the API consumer (e.g. "X-Consumer-Username")
 	rateLimiter    ratelimit.Checker // nil = no rate limiting
@@ -66,13 +60,12 @@ func NewJobHandler(
 	registry *service.Registry,
 	store s3Store,
 	redis asyncJobStore,
-	producer eventProducer,
 	priorityHeader string,
 	consumerHeader string,
 	rateLimiter ratelimit.Checker,
 	lifecycle config.LifecycleConfig,
 ) *JobHandler {
-	return &JobHandler{registry, store, redis, producer, priorityHeader, consumerHeader, rateLimiter, lifecycle}
+	return &JobHandler{registry, store, redis, priorityHeader, consumerHeader, rateLimiter, lifecycle}
 }
 
 // submitResponse is the 202 body returned after a successful job submission.
@@ -223,6 +216,11 @@ func (h *JobHandler) Submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	mode := "async"
+	if h.priorityHeader != "" && r.Header.Get(h.priorityHeader) != "" && def.PriorityTopic != "" {
+		mode = "async-priority"
+	}
+
 	now := time.Now().UTC()
 	job := &model.Job{
 		ID:           jobID,
@@ -230,51 +228,18 @@ func (h *JobHandler) Submit(w http.ResponseWriter, r *http.Request) {
 		Model:        def.Model,
 		Status:       model.JobStatusPending,
 		InputRef:     inputRef,
+		InferenceURL: inferenceURL,
+		Params:       params,
 		CallbackURL:  callbackURL,
 		ConsumerName: consumerName,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
 
-	// Step 2 — persist the job record in Redis.
+	// Step 2 — persist the job record in Redis (also enqueues to relay:<model>:pending).
 	if err := h.redis.SaveJob(r.Context(), job); err != nil {
 		slog.ErrorContext(r.Context(), "redis save failed", "job_id", jobID, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to save job")
-		return
-	}
-
-	// Step 3 — publish the input event to the model's Kafka topic.
-	// When the priority header is present and the service has a priority_topic,
-	// route to that topic so the relay processes it with elevated priority
-	// (processed via a dedicated KafkaSource → JobSink, independently of the async queue).
-
-	topic := def.InputTopic
-	mode := "async"
-	if h.priorityHeader != "" && r.Header.Get(h.priorityHeader) != "" && def.PriorityTopic != "" {
-		topic = def.PriorityTopic
-		mode = "async-priority"
-	}
-
-	event := &model.InputEvent{
-		JobID:        jobID,
-		ServiceType:  serviceType,
-		Model:        def.Model,
-		InputRef:     inputRef,
-		InferenceURL: inferenceURL,
-		Params:       params,
-		CreatedAt:    now,
-	}
-	if err := h.producer.PublishInputEvent(r.Context(), topic, event); err != nil {
-		slog.ErrorContext(r.Context(), "kafka publish failed", "job_id", jobID, "error", err)
-		// Mark the job as failed so the client can react instead of polling forever.
-		_ = h.redis.UpdateJobResult(r.Context(), jobID, model.JobStatusFailed, "", "failed to enqueue")
-		// Clean up the orphaned S3 input file — it will never be consumed.
-		go func() {
-			if derr := h.store.DeleteObject(context.Background(), inputRef); derr != nil {
-				slog.Error("failed to delete orphaned input after publish failure", "job_id", jobID, "error", derr)
-			}
-		}()
-		writeError(w, http.StatusInternalServerError, "failed to enqueue job, please retry")
 		return
 	}
 
@@ -284,7 +249,6 @@ func (h *JobHandler) Submit(w http.ResponseWriter, r *http.Request) {
 		"model", def.Model,
 		"file", header.Filename,
 		"mode", mode,
-		"topic", topic,
 	)
 
 	metrics.RequestsTotal.WithLabelValues(mode, serviceType, def.Model, "202").Inc()

@@ -23,16 +23,6 @@ import (
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
-type mockProducer struct {
-	publishErr error
-	published  bool
-}
-
-func (m *mockProducer) PublishInputEvent(_ context.Context, _ string, _ *model.InputEvent) error {
-	m.published = true
-	return m.publishErr
-}
-
 type mockJobS3 struct {
 	uploadErr   error
 	uploaded    bool
@@ -150,8 +140,8 @@ func submitReq(t *testing.T, serviceType, modelName, operation, filename string,
 	return req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 }
 
-func newAsyncHandler(reg *service.Registry, s3 *mockJobS3, store *mockAsyncStore, prod *mockProducer) *handler.JobHandler {
-	return handler.NewJobHandler(reg, s3, store, prod, "", "", nil, config.LifecycleConfig{})
+func newAsyncHandler(reg *service.Registry, s3 *mockJobS3, store *mockAsyncStore) *handler.JobHandler {
+	return handler.NewJobHandler(reg, s3, store, "", "", nil, config.LifecycleConfig{})
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -161,11 +151,10 @@ func newAsyncHandler(reg *service.Registry, s3 *mockJobS3, store *mockAsyncStore
 func TestSubmit_InvalidOperation_NoSideEffects(t *testing.T) {
 	s3 := &mockJobS3{}
 	store := &mockAsyncStore{}
-	prod := &mockProducer{}
 
 	req := submitReq(t, "transcription", "faster-whisper", "translations", "audio.wav", []byte("data"))
 	w := httptest.NewRecorder()
-	newAsyncHandler(multiOpRegistry(), s3, store, prod).Submit(w, req)
+	newAsyncHandler(multiOpRegistry(), s3, store).Submit(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d: %s", w.Code, w.Body.String())
@@ -175,9 +164,6 @@ func TestSubmit_InvalidOperation_NoSideEffects(t *testing.T) {
 	}
 	if store.saved {
 		t.Error("Redis save must not be called when operation is invalid")
-	}
-	if prod.published {
-		t.Error("Kafka publish must not be called when operation is invalid")
 	}
 }
 
@@ -189,7 +175,7 @@ func TestSubmit_MultipleOperations_MissingField(t *testing.T) {
 
 	req := submitReq(t, "transcription", "faster-whisper", "", "audio.wav", []byte("data"))
 	w := httptest.NewRecorder()
-	newAsyncHandler(multiOpRegistry(), s3, store, &mockProducer{}).Submit(w, req)
+	newAsyncHandler(multiOpRegistry(), s3, store).Submit(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d: %s", w.Code, w.Body.String())
@@ -202,15 +188,14 @@ func TestSubmit_MultipleOperations_MissingField(t *testing.T) {
 	}
 }
 
-// TestSubmit_NominalPath verifies the full success path: S3 → Redis → Kafka → 202.
+// TestSubmit_NominalPath verifies the full success path: S3 → Redis → 202.
 func TestSubmit_NominalPath(t *testing.T) {
 	s3 := &mockJobS3{}
 	store := &mockAsyncStore{}
-	prod := &mockProducer{}
 
 	req := submitReq(t, "transcription", "faster-whisper", "", "audio.wav", []byte("data"))
 	w := httptest.NewRecorder()
-	newAsyncHandler(singleOpRegistry(), s3, store, prod).Submit(w, req)
+	newAsyncHandler(singleOpRegistry(), s3, store).Submit(w, req)
 
 	if w.Code != http.StatusAccepted {
 		t.Errorf("expected 202, got %d: %s", w.Code, w.Body.String())
@@ -221,9 +206,6 @@ func TestSubmit_NominalPath(t *testing.T) {
 	if !store.saved {
 		t.Error("Redis save should have been called")
 	}
-	if !prod.published {
-		t.Error("Kafka publish should have been called")
-	}
 }
 
 // TestSubmit_SingleOperation_AutoSelect verifies that omitting the operation
@@ -231,7 +213,7 @@ func TestSubmit_NominalPath(t *testing.T) {
 func TestSubmit_SingleOperation_AutoSelect(t *testing.T) {
 	req := submitReq(t, "transcription", "faster-whisper", "", "audio.wav", []byte("data"))
 	w := httptest.NewRecorder()
-	newAsyncHandler(singleOpRegistry(), &mockJobS3{}, &mockAsyncStore{}, &mockProducer{}).Submit(w, req)
+	newAsyncHandler(singleOpRegistry(), &mockJobS3{}, &mockAsyncStore{}).Submit(w, req)
 
 	if w.Code != http.StatusAccepted {
 		t.Errorf("expected 202 when operation auto-selected, got %d: %s", w.Code, w.Body.String())
@@ -246,7 +228,7 @@ func TestSubmit_UnknownServiceType(t *testing.T) {
 
 	req := submitReq(t, "unknown-type", "faster-whisper", "", "audio.wav", []byte("data"))
 	w := httptest.NewRecorder()
-	newAsyncHandler(singleOpRegistry(), s3, store, &mockProducer{}).Submit(w, req)
+	newAsyncHandler(singleOpRegistry(), s3, store).Submit(w, req)
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("expected 404, got %d", w.Code)
@@ -276,7 +258,7 @@ func TestSubmit_MissingFile(t *testing.T) {
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 
 	w := httptest.NewRecorder()
-	newAsyncHandler(singleOpRegistry(), s3, store, &mockProducer{}).Submit(w, req)
+	newAsyncHandler(singleOpRegistry(), s3, store).Submit(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 for missing file, got %d", w.Code)
@@ -294,7 +276,7 @@ func TestSubmit_InvalidExtension(t *testing.T) {
 
 	req := submitReq(t, "transcription", "faster-whisper", "", "document.pdf", []byte("data"))
 	w := httptest.NewRecorder()
-	newAsyncHandler(singleOpRegistry(), s3, store, &mockProducer{}).Submit(w, req)
+	newAsyncHandler(singleOpRegistry(), s3, store).Submit(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 for invalid extension, got %d: %s", w.Code, w.Body.String())
@@ -308,24 +290,20 @@ func TestSubmit_InvalidExtension(t *testing.T) {
 }
 
 // TestSubmit_S3Failure verifies that an S3 upload error returns 500 without
-// writing to Redis or publishing to Kafka.
+// writing to Redis.
 func TestSubmit_S3Failure(t *testing.T) {
 	s3 := &mockJobS3{uploadErr: fmt.Errorf("s3 unavailable")}
 	store := &mockAsyncStore{}
-	prod := &mockProducer{}
 
 	req := submitReq(t, "transcription", "faster-whisper", "", "audio.wav", []byte("data"))
 	w := httptest.NewRecorder()
-	newAsyncHandler(singleOpRegistry(), s3, store, prod).Submit(w, req)
+	newAsyncHandler(singleOpRegistry(), s3, store).Submit(w, req)
 
 	if w.Code != http.StatusInternalServerError {
 		t.Errorf("expected 500 on S3 failure, got %d", w.Code)
 	}
 	if store.saved {
 		t.Error("Redis save must not be called after S3 failure")
-	}
-	if prod.published {
-		t.Error("Kafka publish must not be called after S3 failure")
 	}
 }
 
@@ -347,8 +325,8 @@ func listReq(t *testing.T, consumer string) *http.Request {
 	return req
 }
 
-func newHandlerWithConsumer(reg *service.Registry, s3 *mockJobS3, store *mockAsyncStore, prod *mockProducer) *handler.JobHandler {
-	return handler.NewJobHandler(reg, s3, store, prod, "", "X-Consumer-Username", nil, config.LifecycleConfig{})
+func newHandlerWithConsumer(reg *service.Registry, s3 *mockJobS3, store *mockAsyncStore) *handler.JobHandler {
+	return handler.NewJobHandler(reg, s3, store, "", "X-Consumer-Username", nil, config.LifecycleConfig{})
 }
 
 // ── GetStatus tests ───────────────────────────────────────────────────────────
@@ -371,7 +349,7 @@ func TestGetStatus_Pending_HasQueuePosition(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	newHandlerWithConsumer(singleOpRegistry(), &mockJobS3{}, store, &mockProducer{}).
+	newHandlerWithConsumer(singleOpRegistry(), &mockJobS3{}, store).
 		GetStatus(w, statusReq(t, "transcription", "abc"))
 
 	if w.Code != http.StatusOK {
@@ -406,7 +384,7 @@ func TestGetStatus_Completed_NoQueuePosition(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	newHandlerWithConsumer(singleOpRegistry(), &mockJobS3{}, store, &mockProducer{}).
+	newHandlerWithConsumer(singleOpRegistry(), &mockJobS3{}, store).
 		GetStatus(w, statusReq(t, "transcription", "abc"))
 
 	if w.Code != http.StatusOK {
@@ -426,7 +404,7 @@ func TestGetStatus_NotFound(t *testing.T) {
 	store := &mockAsyncStore{getJobErr: fmt.Errorf("job not found")}
 
 	w := httptest.NewRecorder()
-	newHandlerWithConsumer(singleOpRegistry(), &mockJobS3{}, store, &mockProducer{}).
+	newHandlerWithConsumer(singleOpRegistry(), &mockJobS3{}, store).
 		GetStatus(w, statusReq(t, "transcription", "unknown"))
 
 	if w.Code != http.StatusNotFound {
@@ -458,7 +436,7 @@ func TestListJobs_PendingJobsHaveQueuePosition(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	newHandlerWithConsumer(singleOpRegistry(), &mockJobS3{}, store, &mockProducer{}).
+	newHandlerWithConsumer(singleOpRegistry(), &mockJobS3{}, store).
 		ListJobs(w, listReq(t, "consumer-a"))
 
 	if w.Code != http.StatusOK {
@@ -496,7 +474,7 @@ func TestListJobs_MissingConsumerHeader(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/jobs", nil)
 
 	w := httptest.NewRecorder()
-	newHandlerWithConsumer(singleOpRegistry(), &mockJobS3{}, store, &mockProducer{}).
+	newHandlerWithConsumer(singleOpRegistry(), &mockJobS3{}, store).
 		ListJobs(w, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -531,7 +509,7 @@ func TestCancel_Pending_Success(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	newAsyncHandler(singleOpRegistry(), s3, store, &mockProducer{}).
+	newAsyncHandler(singleOpRegistry(), s3, store).
 		Cancel(w, cancelReq(t, "transcription", "job-1"))
 
 	if w.Code != http.StatusNoContent {
@@ -562,7 +540,7 @@ func TestCancel_Processing_Returns409(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	newAsyncHandler(singleOpRegistry(), &mockJobS3{}, store, &mockProducer{}).
+	newAsyncHandler(singleOpRegistry(), &mockJobS3{}, store).
 		Cancel(w, cancelReq(t, "transcription", "job-2"))
 
 	if w.Code != http.StatusConflict {
@@ -585,7 +563,7 @@ func TestCancel_Completed_Returns409(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	newAsyncHandler(singleOpRegistry(), &mockJobS3{}, store, &mockProducer{}).
+	newAsyncHandler(singleOpRegistry(), &mockJobS3{}, store).
 		Cancel(w, cancelReq(t, "transcription", "job-3"))
 
 	if w.Code != http.StatusConflict {
@@ -608,7 +586,7 @@ func TestCancel_Failed_Returns409(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	newAsyncHandler(singleOpRegistry(), &mockJobS3{}, store, &mockProducer{}).
+	newAsyncHandler(singleOpRegistry(), &mockJobS3{}, store).
 		Cancel(w, cancelReq(t, "transcription", "job-4"))
 
 	if w.Code != http.StatusConflict {
@@ -624,7 +602,7 @@ func TestCancel_NotFound_Returns404(t *testing.T) {
 	store := &mockAsyncStore{getJobErr: fmt.Errorf("not found")}
 
 	w := httptest.NewRecorder()
-	newAsyncHandler(singleOpRegistry(), &mockJobS3{}, store, &mockProducer{}).
+	newAsyncHandler(singleOpRegistry(), &mockJobS3{}, store).
 		Cancel(w, cancelReq(t, "transcription", "missing-id"))
 
 	if w.Code != http.StatusNotFound {
@@ -652,7 +630,7 @@ func purgeReq(t *testing.T, olderThan, limit string) *http.Request {
 // TestAdminPurge_MissingOlderThan_Returns400 verifies that omitting older_than returns 400.
 func TestAdminPurge_MissingOlderThan_Returns400(t *testing.T) {
 	w := httptest.NewRecorder()
-	newAsyncHandler(singleOpRegistry(), &mockJobS3{}, &mockAsyncStore{}, &mockProducer{}).
+	newAsyncHandler(singleOpRegistry(), &mockJobS3{}, &mockAsyncStore{}).
 		AdminPurge(w, purgeReq(t, "", ""))
 
 	if w.Code != http.StatusBadRequest {
@@ -663,7 +641,7 @@ func TestAdminPurge_MissingOlderThan_Returns400(t *testing.T) {
 // TestAdminPurge_InvalidDuration_Returns400 verifies that a malformed duration returns 400.
 func TestAdminPurge_InvalidDuration_Returns400(t *testing.T) {
 	w := httptest.NewRecorder()
-	newAsyncHandler(singleOpRegistry(), &mockJobS3{}, &mockAsyncStore{}, &mockProducer{}).
+	newAsyncHandler(singleOpRegistry(), &mockJobS3{}, &mockAsyncStore{}).
 		AdminPurge(w, purgeReq(t, "not-a-duration", ""))
 
 	if w.Code != http.StatusBadRequest {
@@ -674,7 +652,7 @@ func TestAdminPurge_InvalidDuration_Returns400(t *testing.T) {
 // TestAdminPurge_InvalidLimit_Returns400 verifies that a non-integer limit returns 400.
 func TestAdminPurge_InvalidLimit_Returns400(t *testing.T) {
 	w := httptest.NewRecorder()
-	newAsyncHandler(singleOpRegistry(), &mockJobS3{}, &mockAsyncStore{}, &mockProducer{}).
+	newAsyncHandler(singleOpRegistry(), &mockJobS3{}, &mockAsyncStore{}).
 		AdminPurge(w, purgeReq(t, "2h", "abc"))
 
 	if w.Code != http.StatusBadRequest {
@@ -687,7 +665,7 @@ func TestAdminPurge_InvalidLimit_Returns400(t *testing.T) {
 func TestAdminPurge_Empty_NoJobs(t *testing.T) {
 	store := &mockAsyncStore{staleJobs: nil}
 	w := httptest.NewRecorder()
-	newAsyncHandler(singleOpRegistry(), &mockJobS3{}, store, &mockProducer{}).
+	newAsyncHandler(singleOpRegistry(), &mockJobS3{}, store).
 		AdminPurge(w, purgeReq(t, "2h", ""))
 
 	if w.Code != http.StatusOK {
@@ -718,7 +696,7 @@ func TestAdminPurge_WithJobs_PurgesAndCleansS3(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	newAsyncHandler(singleOpRegistry(), s3, store, &mockProducer{}).
+	newAsyncHandler(singleOpRegistry(), s3, store).
 		AdminPurge(w, purgeReq(t, "2h", ""))
 
 	if w.Code != http.StatusOK {
@@ -757,7 +735,7 @@ func TestAdminPurge_Truncated_LimitRespected(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	newAsyncHandler(singleOpRegistry(), &mockJobS3{}, store, &mockProducer{}).
+	newAsyncHandler(singleOpRegistry(), &mockJobS3{}, store).
 		AdminPurge(w, purgeReq(t, "1h", "2"))
 
 	if w.Code != http.StatusOK {
@@ -775,32 +753,20 @@ func TestAdminPurge_Truncated_LimitRespected(t *testing.T) {
 	}
 }
 
-// TestGetStatus_KafkaFailure verifies that a Kafka publish error returns 500,
-// marks the job as failed in Redis, and cleans up the orphaned S3 input file.
-func TestSubmit_KafkaFailure(t *testing.T) {
+// TestSubmit_RedisSaveFailure verifies that a Redis save error returns 500
+// without returning a successful response to the client.
+func TestSubmit_RedisSaveFailure(t *testing.T) {
 	s3 := &mockJobS3{}
-	store := &mockAsyncStore{}
-	prod := &mockProducer{publishErr: fmt.Errorf("kafka unavailable")}
+	store := &mockAsyncStore{saveErr: fmt.Errorf("redis unavailable")}
 
 	req := submitReq(t, "transcription", "faster-whisper", "", "audio.wav", []byte("data"))
 	w := httptest.NewRecorder()
-	newAsyncHandler(singleOpRegistry(), s3, store, prod).Submit(w, req)
+	newAsyncHandler(singleOpRegistry(), s3, store).Submit(w, req)
 
 	if w.Code != http.StatusInternalServerError {
-		t.Errorf("expected 500 on Kafka failure, got %d", w.Code)
+		t.Errorf("expected 500 on Redis save failure, got %d", w.Code)
 	}
-	if !store.saved {
-		t.Error("Redis save should have been called before Kafka publish")
-	}
-	if !store.updateCalled {
-		t.Error("job should be marked failed in Redis after Kafka failure")
-	}
-	// DeleteObject runs in a goroutine — give it a moment.
-	time.Sleep(20 * time.Millisecond)
-	s3.mu.Lock()
-	deleted := len(s3.deletedKeys) > 0
-	s3.mu.Unlock()
-	if !deleted {
-		t.Error("orphaned S3 input file should be deleted after Kafka failure")
+	if !s3.uploaded {
+		t.Error("S3 upload should have been called before Redis save")
 	}
 }

@@ -132,6 +132,7 @@ func (r *RedisClient) SaveJob(ctx context.Context, job *model.Job) error {
 			})
 			pipe.Expire(ctx, consumerKey(job.ConsumerName), ttl)
 		}
+		pipe.RPush(ctx, "relay:"+job.Model+":pending", job.ID)
 		return nil
 	})
 
