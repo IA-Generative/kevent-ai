@@ -105,35 +105,31 @@ func main() {
 
 	slog.Info("relay started", "model", cfg.Model)
 
-	for {
-		jobID, err := q.Pop(ctx)
-		if errors.Is(err, context.Canceled) {
-			slog.Info("relay shutting down")
-			break
-		}
-		if err != nil {
-			slog.Error("queue pop error", "error", err)
-			os.Exit(1)
-		}
+	// Pop blocks until a job is available or the context is cancelled (SIGTERM).
+	// One pod = one job: after processing, the pod exits so KEDA creates a fresh
+	// pod for the next job rather than reusing this one.
+	jobID, err := q.Pop(ctx)
+	if errors.Is(err, context.Canceled) {
+		slog.Info("relay shutting down (no job received)")
+		return
+	}
+	if err != nil {
+		slog.Error("queue pop error", "error", err)
+		os.Exit(1)
+	}
 
-		job, err := s.GetJob(ctx, jobID)
-		if err != nil {
-			slog.Error("failed to get job from Redis", "job_id", jobID, "error", err)
-			os.Exit(1)
-		}
+	job, err := s.GetJob(ctx, jobID)
+	if err != nil {
+		slog.Error("failed to get job from Redis", "job_id", jobID, "error", err)
+		os.Exit(1)
+	}
 
-		slog.Info("processing job", "job_id", jobID, "service_type", job.ServiceType)
+	slog.Info("processing job", "job_id", jobID, "service_type", job.ServiceType)
 
-		// Use Background so a SIGTERM does not interrupt an in-flight inference job.
-		if err := proc.Process(context.Background(), job); err != nil {
-			slog.Error("fatal job error, exiting", "job_id", jobID, "error", err)
-			os.Exit(1)
-		}
-
-		if ctx.Err() != nil {
-			slog.Info("relay shutting down after job completion")
-			break
-		}
+	// Use Background so a SIGTERM does not interrupt an in-flight inference job.
+	if err := proc.Process(context.Background(), job); err != nil {
+		slog.Error("fatal job error, exiting", "job_id", jobID, "error", err)
+		os.Exit(1)
 	}
 }
 
