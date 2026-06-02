@@ -104,9 +104,6 @@ data:
         input_topic:       {{ .inputTopic }}
         result_topic:      {{ .resultTopic }}
         {{- end }}
-        {{- if .syncTopic }}
-        sync_topic:        {{ .syncTopic }}
-        {{- end }}
         accepted_exts:     {{ .acceptedExts | toJson }}
         max_file_size_mb:  {{ .maxFileSizeMB }}
     {{- end }}
