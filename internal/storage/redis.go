@@ -441,7 +441,7 @@ func (s *jobDoneSub) Wait(ctx context.Context) error {
 func (s *jobDoneSub) Close() { _ = s.pubsub.Close() }
 
 // SubscribeJobDone creates a subscription for the given job's completion channel.
-// Must be called BEFORE publishing the job to Kafka to avoid missing the notification.
+// Must be called BEFORE the job is published to the relay queue to avoid missing the notification.
 func (r *RedisClient) SubscribeJobDone(ctx context.Context, jobID string) JobDoneSubscription {
 	ps := r.client.Subscribe(ctx, "job:"+jobID+":done")
 	return &jobDoneSub{ch: ps.Channel(), pubsub: ps}

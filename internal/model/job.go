@@ -32,8 +32,8 @@ type Job struct {
 	QueuePosition *int64 `json:"queue_position,omitempty"`
 }
 
-// InputEvent is published to the model-specific input Kafka topic.
-// KServe (or an inference worker) consumes this to trigger processing.
+// InputEvent is pushed to the model-specific Redis relay queue.
+// The relay consumes this to trigger processing.
 type InputEvent struct {
 	JobID        string            `json:"job_id"`
 	ServiceType  string            `json:"service_type"`
@@ -44,7 +44,7 @@ type InputEvent struct {
 	CreatedAt    time.Time         `json:"created_at"`
 }
 
-// ResultEvent is consumed from the service-specific result Kafka topic.
+// ResultEvent is published to the jobs:{model}:completed Redis pub/sub channel.
 // The inference worker publishes this when processing completes (or fails).
 type ResultEvent struct {
 	JobID       string    `json:"job_id"`

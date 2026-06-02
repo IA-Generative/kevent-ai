@@ -32,16 +32,12 @@ s3:
   bucket: my-bucket
 redis:
   addr: "localhost:6379"
-kafka:
-  brokers:
-    - "localhost:9092"
 services:
   - type: transcription
-    input_topic: jobs.input
-    result_topic: jobs.results
+    inference_url: "http://inference.svc"
 `
 
-// syncOnlyValid has a service without Kafka topics (direct proxy only).
+// syncOnlyValid has a service with only a direct proxy backend (no async file upload).
 const syncOnlyValid = `
 s3:
   endpoint: https://s3.example.com
@@ -90,9 +86,6 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.Server.IdleTimeout != 120*time.Second {
 		t.Errorf("IdleTimeout: expected 120s, got %v", cfg.Server.IdleTimeout)
 	}
-	if cfg.Kafka.ConsumerGroup != "kevent-gateway" {
-		t.Errorf("ConsumerGroup: expected kevent-gateway, got %q", cfg.Kafka.ConsumerGroup)
-	}
 	if cfg.Lifecycle.JobTTL.GlobalDuration() != 0 {
 		t.Errorf("lifecycle.job_ttl.global: expected 0 (unset), got %v", cfg.Lifecycle.JobTTL.GlobalDuration())
 	}
@@ -121,13 +114,9 @@ lifecycle:
 server:
   addr: ":9090"
   read_timeout: 30s
-kafka:
-  brokers: ["localhost:9092"]
-  consumer_group: my-group
 services:
   - type: transcription
-    input_topic: jobs.input
-    result_topic: jobs.results
+    inference_url: "http://inference.svc"
     max_file_size_mb: 200
 `)
 	cfg, err := config.Load(path)
@@ -139,9 +128,6 @@ services:
 	}
 	if cfg.Server.ReadTimeout != 30*time.Second {
 		t.Errorf("explicit read_timeout should not be overridden, got %v", cfg.Server.ReadTimeout)
-	}
-	if cfg.Kafka.ConsumerGroup != "my-group" {
-		t.Errorf("explicit consumer_group should not be overridden, got %q", cfg.Kafka.ConsumerGroup)
 	}
 	if cfg.Lifecycle.JobTTL.GlobalDuration() != 48*time.Hour {
 		t.Errorf("explicit lifecycle.job_ttl.global should not be overridden, got %v", cfg.Lifecycle.JobTTL.GlobalDuration())
@@ -165,12 +151,9 @@ s3:
   bucket: ${TEST_BUCKET}
 redis:
   addr: "localhost:6379"
-kafka:
-  brokers: ["localhost:9092"]
 services:
   - type: t
-    input_topic: j.in
-    result_topic: j.out
+    inference_url: "http://svc"
 `)
 	cfg, err := config.Load(path)
 	if err != nil {
@@ -190,12 +173,9 @@ s3:
   bucket: ${UNSET_KEVENT_VAR:-fallback-bucket}
 redis:
   addr: "localhost:6379"
-kafka:
-  brokers: ["localhost:9092"]
 services:
   - type: t
-    input_topic: j.in
-    result_topic: j.out
+    inference_url: "http://svc"
 `)
 	cfg, err := config.Load(path)
 	if err != nil {
@@ -215,12 +195,9 @@ s3:
   bucket: ${KEVENT_TEST_VAR:-fallback}
 redis:
   addr: "localhost:6379"
-kafka:
-  brokers: ["localhost:9092"]
 services:
   - type: t
-    input_topic: j.in
-    result_topic: j.out
+    inference_url: "http://svc"
 `)
 	cfg, err := config.Load(path)
 	if err != nil {
@@ -330,66 +307,10 @@ services:
 	}
 }
 
-func TestLoad_Validate_InputTopicWithoutResultTopic(t *testing.T) {
-	path := writeConfig(t, `
-s3:
-  endpoint: https://s3.example.com
-  region: us-east-1
-  bucket: my-bucket
-redis:
-  addr: "localhost:6379"
-services:
-  - type: transcription
-    input_topic: jobs.input
-`)
-	_, err := config.Load(path)
-	if err == nil {
-		t.Error("expected error: input_topic set without result_topic")
-	}
-}
-
-func TestLoad_Validate_ResultTopicWithoutInputTopic(t *testing.T) {
-	path := writeConfig(t, `
-s3:
-  endpoint: https://s3.example.com
-  region: us-east-1
-  bucket: my-bucket
-redis:
-  addr: "localhost:6379"
-services:
-  - type: transcription
-    result_topic: jobs.results
-`)
-	_, err := config.Load(path)
-	if err == nil {
-		t.Error("expected error: result_topic set without input_topic")
-	}
-}
-
-func TestLoad_Validate_KafkaTopicsWithoutBrokers(t *testing.T) {
-	path := writeConfig(t, `
-s3:
-  endpoint: https://s3.example.com
-  region: us-east-1
-  bucket: my-bucket
-redis:
-  addr: "localhost:6379"
-services:
-  - type: transcription
-    input_topic: jobs.input
-    result_topic: jobs.results
-`)
-	_, err := config.Load(path)
-	if err == nil {
-		t.Error("expected error: kafka topics configured without kafka.brokers")
-	}
-}
-
-func TestLoad_Validate_SyncOnlyServiceNoBrokersOK(t *testing.T) {
-	// A service with only inference_url (no Kafka topics) does not require brokers.
+func TestLoad_Validate_SyncOnlyService(t *testing.T) {
 	path := writeConfig(t, syncOnlyValid)
 	_, err := config.Load(path)
 	if err != nil {
-		t.Errorf("sync-only service (no Kafka topics) should not require brokers, got: %v", err)
+		t.Errorf("sync-only service should load successfully, got: %v", err)
 	}
 }

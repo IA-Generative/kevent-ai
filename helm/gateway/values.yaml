@@ -41,25 +41,6 @@ s3:
   #   Le Secret doit contenir les clés S3_ACCESS_KEY et S3_SECRET_KEY.
   existingSecret: ""
 
-# ── Kafka ─────────────────────────────────────────────────────────────────────
-kafka:
-  brokers: "kafka:9092"
-  sasl:
-    enabled: false
-    mechanism: SCRAM-SHA-512
-    username: kevent-gateway
-    # Option A : fournir le mot de passe directement (crée un Secret dans le cluster)
-    password: ""
-    # Option B : référencer un Secret existant (ex: copie du secret Strimzi kevent-gateway)
-    #   Le Secret doit contenir la clé KAFKA_SASL_PASSWORD.
-    existingSecret: ""
-    secretKey: ""
-  tls:
-    enabled: false
-    # Secret contenant la CA du cluster Strimzi (clé : ca.crt).
-    # À créer dans le namespace du gateway depuis default-cluster-ca-cert (infra-kafka).
-    existingCACertSecret: "kafka-cluster-ca-cert"
-
 # ── Chiffrement at-rest (S3) ──────────────────────────────────────────────────
 # Clé AES-256-GCM partagée entre le gateway et tous les relay sidecars.
 # Générer : openssl rand -hex 32
@@ -71,7 +52,7 @@ encryption:
   existingSecret: ""
 
 # ── Services d'inférence enregistrés ─────────────────────────────────────────
-# Chaque service peut opérer en mode async (Kafka) et/ou sync (proxy OpenAI).
+# Chaque service peut opérer en mode async (Redis queue) et/ou sync (proxy OpenAI).
 #
 # Champs sync (optionnels) :
 #   model        — valeur du champ "model" dans le payload OpenAI, utilisée pour
@@ -83,8 +64,8 @@ encryption:
 #   inferenceURL — URL de base du relay Knative ; le chemin de la requête
 #                  d'origine y est appendé automatiquement
 #
-# Champs async (Kafka) — topics nommés d'après le modèle :
-#   inputTopic / resultTopic / acceptedExts / maxFileSizeMB
+# Champs async (Redis queue) :
+#   acceptedExts / maxFileSizeMB
 #   En async, spécifier l'opération via le champ de formulaire "operation"
 #   si le modèle en propose plusieurs.
 services:
@@ -98,12 +79,6 @@ services:
       translation:
         - "/v1/audio/translations"
     inferenceURL: "http://kevent-transcription-predictor.default.svc.cluster.local"
-    # Async / Kafka
-    inputTopic: "jobs.whisper-large-v3.input"
-    resultTopic: "jobs.whisper-large-v3.results"
-    # Priority topic for sync-over-Kafka: POST /v1/* multipart requests are routed
-    # here instead of proxied directly. Leave empty to use direct proxy (inferenceURL).
-    syncTopic: "jobs.whisper-large-v3.sync"
     acceptedExts: [".mp3", ".wav", ".m4a", ".ogg", ".flac"]
     maxFileSizeMB: 500
 
@@ -115,9 +90,6 @@ services:
         - "/v1/ocr"
         - "/v1/vision/ocr"
     inferenceURL: "http://kevent-ocr-predictor.default.svc.cluster.local"
-    # Async / Kafka
-    inputTopic: "jobs.llava-v1.6-mistral-7b.input"
-    resultTopic: "jobs.llava-v1.6-mistral-7b.results"
     acceptedExts: [".pdf", ".jpg", ".jpeg", ".png", ".tiff", ".bmp"]
     maxFileSizeMB: 50
 

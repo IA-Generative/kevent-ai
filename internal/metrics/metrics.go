@@ -33,19 +33,6 @@ var (
 		Help: "Total number of S3 operation errors.",
 	}, []string{"operation"})
 
-	// KafkaPublishDuration measures Kafka WriteMessages latency per topic.
-	KafkaPublishDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "kevent_kafka_publish_duration_seconds",
-		Help:    "Kafka publish duration in seconds.",
-		Buckets: prometheus.DefBuckets,
-	}, []string{"topic"})
-
-	// KafkaPublishErrorsTotal counts Kafka publish failures per topic.
-	KafkaPublishErrorsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "kevent_kafka_publish_errors_total",
-		Help: "Total number of Kafka publish errors.",
-	}, []string{"topic"})
-
 	// RedisOperationDuration measures latency for each Redis operation.
 	RedisOperationDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "kevent_redis_operation_duration_seconds",

@@ -46,8 +46,6 @@ func buildRegistry() *service.Registry {
 				"transcription": {"/v1/audio/transcriptions"},
 			},
 			InferenceURL:  "http://inference.example.com",
-			InputTopic:    "jobs.whisper-large-v3.input",
-			ResultTopic:   "jobs.whisper-large-v3.results",
 			AcceptedExts:  []string{".mp3", ".wav"},
 			MaxFileSizeMB: 100,
 		},
@@ -89,8 +87,6 @@ func TestSyncHandler_JSONAlwaysUsesDirectProxy(t *testing.T) {
 			"chat": {"/v1/chat/completions"},
 		},
 		InferenceURL: upstream.URL,
-		InputTopic:   "jobs.llava.input",
-		ResultTopic:  "jobs.llava.results",
 	}}
 	reg := service.NewRegistry(cfgs)
 
@@ -124,8 +120,6 @@ func TestSyncHandler_MultipartUsesDirectProxy(t *testing.T) {
 			"transcription": {"/v1/audio/transcriptions"},
 		},
 		InferenceURL: upstream.URL,
-		InputTopic:   "jobs.whisper-large-v3.input",
-		ResultTopic:  "jobs.whisper-large-v3.results",
 		AcceptedExts: []string{".mp3", ".wav"},
 	}}
 	reg := service.NewRegistry(cfgs)
@@ -192,8 +186,6 @@ func TestSyncHandler_MissingModelField_MultipleModels(t *testing.T) {
 				"transcription": {"/v1/audio/transcriptions"},
 			},
 			InferenceURL: "http://inference.example.com",
-			InputTopic:   "jobs.whisper-large-v3.input",
-			ResultTopic:  "jobs.whisper-large-v3.results",
 		},
 		{
 			Type:  "transcription",
@@ -202,8 +194,6 @@ func TestSyncHandler_MissingModelField_MultipleModels(t *testing.T) {
 				"transcription": {"/v1/audio/transcriptions"},
 			},
 			InferenceURL: "http://inference-turbo.example.com",
-			InputTopic:   "jobs.whisper-turbo.input",
-			ResultTopic:  "jobs.whisper-turbo.results",
 		},
 	}
 	reg := service.NewRegistry(cfgs)

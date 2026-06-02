@@ -160,8 +160,8 @@ func (h *JobHandler) Submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Sync-direct services have no Kafka topics and cannot be used asynchronously.
-	if def.InputTopic == "" {
+	// Sync-direct services do not accept file uploads and cannot be used asynchronously.
+	if !def.SupportsAsync {
 		writeError(w, http.StatusMethodNotAllowed, fmt.Sprintf("service %q only supports sync requests (POST /v1/*)", def.Model))
 		return
 	}
@@ -217,7 +217,7 @@ func (h *JobHandler) Submit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mode := "async"
-	if h.priorityHeader != "" && r.Header.Get(h.priorityHeader) != "" && def.PriorityTopic != "" {
+	if h.priorityHeader != "" && r.Header.Get(h.priorityHeader) != "" {
 		mode = "async-priority"
 	}
 

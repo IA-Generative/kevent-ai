@@ -49,11 +49,9 @@ func callListModels(t *testing.T, reg *service.Registry) modelsResponse {
 
 func TestListModels_Capabilities_AsyncOnly(t *testing.T) {
 	reg := service.NewRegistry([]config.ServiceConfig{{
-		Type:        "transcription",
-		Model:       "whisper-large-v3",
-		InputTopic:  "jobs.whisper.input",
-		ResultTopic: "jobs.whisper.results",
-		AcceptedExts: []string{".mp3", ".wav"},
+		Type:          "transcription",
+		Model:         "whisper-large-v3",
+		AcceptedExts:  []string{".mp3", ".wav"},
 		MaxFileSizeMB: 100,
 		Operations: map[string][]string{
 			"transcription": {"/v1/audio/transcriptions"},
@@ -80,7 +78,7 @@ func TestListModels_Capabilities_AsyncOnly(t *testing.T) {
 		t.Errorf("expected service_type='transcription', got %q", m.ServiceType)
 	}
 	if !m.Capabilities.SupportsAsync {
-		t.Error("expected supports_async=true for Kafka-based service")
+		t.Error("expected supports_async=true for async file-upload service")
 	}
 	if m.Capabilities.SupportsSync {
 		t.Error("expected supports_sync=false (no inference_url or backends)")
@@ -132,7 +130,7 @@ func TestListModels_Capabilities_SyncLLM(t *testing.T) {
 		t.Error("expected supports_streaming=true (has provider)")
 	}
 	if m.Capabilities.SupportsAsync {
-		t.Error("expected supports_async=false (no Kafka topics)")
+		t.Error("expected supports_async=false (no accepted_exts configured)")
 	}
 }
 
@@ -203,8 +201,6 @@ func TestListModels_EmptyRegistry_ReturnsEmptyList(t *testing.T) {
 	reg := service.NewRegistry([]config.ServiceConfig{{
 		Type:         "transcription",
 		Model:        "whisper",
-		InputTopic:   "jobs.whisper.input",
-		ResultTopic:  "jobs.whisper.results",
 		InferenceURL: "http://inference.example.com",
 	}})
 

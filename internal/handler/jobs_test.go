@@ -94,8 +94,6 @@ func multiOpRegistry() *service.Registry {
 			"transcription": {"/v1/audio/transcriptions"},
 			"translation":   {"/v1/audio/translations"},
 		},
-		InputTopic:    "jobs.faster-whisper.input",
-		ResultTopic:   "jobs.faster-whisper.results",
 		AcceptedExts:  []string{".mp3", ".wav"},
 		MaxFileSizeMB: 100,
 	}})
@@ -109,8 +107,6 @@ func singleOpRegistry() *service.Registry {
 		Operations: map[string][]string{
 			"transcription": {"/v1/audio/transcriptions"},
 		},
-		InputTopic:    "jobs.faster-whisper.input",
-		ResultTopic:   "jobs.faster-whisper.results",
 		AcceptedExts:  []string{".mp3", ".wav"},
 		MaxFileSizeMB: 100,
 	}})
