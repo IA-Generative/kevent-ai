@@ -396,9 +396,10 @@ func TestSyncHandler_MultiBackend_4xx_NotRetried(t *testing.T) {
 	}))
 	defer fallback.Close()
 
+	// fallback weight=0 ensures primary is always selected first (deterministic).
 	reg := buildMultiBackendRegistry([]config.BackendConfig{
 		{URL: primary.URL, Weight: 100},
-		{URL: fallback.URL, Weight: 10},
+		{URL: fallback.URL, Weight: 0},
 	})
 	h := handler.NewSyncHandler(reg, "", nil, nil)
 
