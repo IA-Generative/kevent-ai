@@ -5,8 +5,7 @@ API Gateway pour les services d'inférence KServe. Plusieurs modes de fonctionne
 | Mode | Endpoints | Quand l'utiliser |
 |---|---|---|
 | **Async** (Kafka) | `POST /jobs/{service_type}`, `GET /jobs/{service_type}/{id}`, `GET /jobs` | Fichiers lourds, traitements longs (>30s), besoin de webhook |
-| **Sync-over-Kafka** | `POST /v1/*` multipart + `sync_topic` configuré | Latence maîtrisée, priorité sur les jobs async, fichiers lourds |
-| **Sync direct proxy** | `POST /v1/*` (JSON ou multipart sans `sync_topic`) | Intégration SDK OpenAI, services sans Kafka (reranker, embeddings…) |
+| **Sync direct proxy** | `POST /v1/*` (JSON ou multipart) | Intégration SDK OpenAI, services sans Kafka (reranker, embeddings…) |
 | **LLM proxy** | `POST /v1/*` JSON + `provider` configuré | Proxying LLM (OpenAI, Anthropic, Ollama, vLLM) avec cache et métriques |
 
 ## Architecture
@@ -24,7 +23,7 @@ POST /jobs/{service_type} (multipart: file, model, operation?)
   └─ 3. InputEvent → Kafka (jobs.<model>.input)
                           │
                           ▼
-                    KafkaSource → POST / → Relay sidecar
+                    Relay Deployment (pull consumer, scalé par KEDA)
                                               │
                                               ├─ Download fichier S3
                                               ├─ POST multipart → modèle GPU (127.0.0.1:9000/<inference_url>)
@@ -44,32 +43,7 @@ GET /jobs/{service_type}/{id}  →  { status, result (inline JSON) }
 
 ### Mode sync (proxy OpenAI-compatible)
 
-Deux chemins selon la configuration :
-
-**A — Sync-over-Kafka** (`sync_topic` configuré, requête `multipart/form-data`) :
-```
-Client  POST /v1/audio/transcriptions  (multipart)
-  │
-  ▼
-Gateway
-  ├─ Upload fichier → S3
-  ├─ Subscribe Redis pub/sub  job:<id>:done
-  └─ InputEvent → Kafka (jobs.<model>.sync)   ← topic prioritaire
-                          │
-                    KafkaSource → POST /sync → Relay sidecar
-                                                    │
-                                                    ├─ syncPriority=1 (reporte les jobs async)
-                                                    ├─ Traitement (S3 → modèle → S3)
-                                                    └─ ResultEvent → jobs.<model>.results
-                                                                          │
-                                                               Gateway ConsumerManager
-                                                                    └─ Notify Redis pub/sub
-                                                                              │
-Gateway (débloqué)  ◀────────────────────────────────────────────────────────┘
-  └─ Fetch résultat S3 → HTTP 200 au client
-```
-
-**B — Direct proxy** (requête `application/json`, ou `multipart` sans `sync_topic`, ou service sans topics Kafka) :
+**Direct proxy** (requête `application/json` ou `multipart/form-data`, service sans topics Kafka) :
 ```
 Client  POST /v1/*
   │
@@ -80,7 +54,7 @@ Gateway → HTTP proxy → inference_url + chemin d'origine → modèle GPU
 Client
 ```
 
-**C — LLM proxy** (requête `application/json` + service avec `provider` configuré) :
+**LLM proxy** (requête `application/json` + service avec `provider` configuré) :
 ```
 Client  POST /v1/chat/completions  {"model": "my-alias", ...}
   │
@@ -106,8 +80,8 @@ Gateway — LLM proxy
 
 | Composant | Rôle | Requis |
 |---|---|---|
-| **Kafka** | Bus d'événements (mode async + sync-over-Kafka) — port 9093, SASL_SSL + SCRAM-SHA-512 | Seulement si des services configurent `input_topic` ou `sync_topic` |
-| **Redis** | État des jobs et pub/sub pour le mode sync-over-Kafka (TTL configurable) | Toujours |
+| **Kafka** | Bus d'événements (mode async) — port 9093, SASL_SSL + SCRAM-SHA-512 | Seulement si des services configurent `input_topic` |
+| **Redis** | État des jobs (TTL configurable) | Toujours |
 | **S3** | Stockage fichiers d'entrée et résultats | Toujours |
 
 ---
@@ -126,10 +100,10 @@ Gateway — LLM proxy
 go build -ldflags "-X main.version=v0.4.11" -o gateway ./cmd/gateway
 CONFIG_PATH=/etc/kevent/config.yaml ./gateway
 
-# Relay sidecar
+# Relay
 cd relay
 go build -o relay ./cmd/relay
-RESULT_TOPIC=jobs.whisper-large-v3.results ./relay
+CONFIG_PATH=/etc/relay/config.yaml ./relay
 ```
 
 ### Docker
@@ -164,14 +138,14 @@ server:
   # Laisser vide en l'absence d'auth en amont.
   consumer_header: "${CONSUMER_HEADER:-}"
   # priority_header: header HTTP pour le routage prioritaire (ex: "X-Priority").
-  # Si présent et que le service a un priority_topic, le job est routé vers ce topic.
+  # Si présent, peut être utilisé pour du routage prioritaire applicatif.
   priority_header: "${PRIORITY_HEADER:-}"
   # user_type_header: header HTTP pour le type d'utilisateur (ex: "X-User-Type" → "sa" | "user").
   # Utilisé pour le rate limiting et le labelling des métriques LLM.
   user_type_header: "${USER_TYPE_HEADER:-}"
 
 kafka:
-  # Optionnel si aucun service ne configure de topic Kafka (sync-direct uniquement).
+  # Optionnel si aucun service ne configure de topic Kafka.
   brokers:
     - "kafka:9093"
   consumer_group: "kevent-gateway"
@@ -230,7 +204,6 @@ services:
     inference_url: "http://kevent-transcription-predictor.default.svc.cluster.local"
     input_topic: jobs.whisper-large-v3.input
     result_topic: jobs.whisper-large-v3.results
-    sync_topic: jobs.whisper-large-v3.sync   # active le mode sync-over-Kafka pour les multipart
     accepted_exts: [".mp3", ".wav", ".m4a", ".ogg", ".flac"]
     max_file_size_mb: 500
 
@@ -296,8 +269,6 @@ services:
 | `inference_url` | URL de base du backend pour le direct proxy. Le chemin de la requête d'origine y est appendé. |
 | `input_topic` | Topic Kafka pour les jobs async en entrée. Optionnel — absent = service sync-direct uniquement. |
 | `result_topic` | Topic Kafka pour les résultats. Doit être absent si `input_topic` est absent (les deux vont de pair). |
-| `sync_topic` | Topic Kafka prioritaire pour le sync-over-Kafka (optionnel). |
-| `priority_topic` | Topic Kafka pour les jobs prioritaires (SA/comptes de service). Optionnel — si absent, le routing prioritaire est désactivé pour ce service. |
 | `accepted_exts` | Extensions acceptées. Vide ou absent = toutes les extensions acceptées. |
 | `max_file_size_mb` | Taille max du fichier. Absent ou 0 = 100 MB par défaut. |
 | `inference_url` | URL de base du backend (un seul backend, legacy). Ignoré si `backends` est défini. |
@@ -317,14 +288,13 @@ services:
 | `model` | Surcharge `backend_model` pour ce backend uniquement — utile pour les déploiements canary. |
 | `headers` | Headers HTTP injectés sur les requêtes vers ce backend. Surchargent `inference_headers`. |
 
-### Relay sidecar (`relay/config.yaml`)
+### Relay (`relay/config.yaml`)
 
 ```yaml
-service:
-  result_topic: "${RESULT_TOPIC}"   # ex: jobs.whisper-large-v3.results
-
 kafka:
   brokers: ["${KAFKA_BROKERS:-kafka:9092}"]
+  input_topic: "${KAFKA_INPUT_TOPIC}"       # ex: jobs.whisper-large-v3.input
+  consumer_group: "${KAFKA_CONSUMER_GROUP}" # ex: kevent-relay-whisper
   sasl:
     mechanism: "${KAFKA_SASL_MECHANISM:-}"
     username:  "${KAFKA_SASL_USERNAME:-}"
@@ -375,11 +345,13 @@ inference:
 | `PRIORITY_HEADER` | _(vide)_ | Header HTTP pour le routing prioritaire (ex: `X-Priority`) |
 | `USER_TYPE_HEADER` | _(vide)_ | Header HTTP pour le type d'utilisateur (ex: `X-User-Type`) — rate limiting + métriques LLM |
 
-### Variables d'environnement (relay sidecar)
+### Variables d'environnement (relay)
 
 | Variable | Valeur par défaut | Description |
 |---|---|---|
-| `RESULT_TOPIC` | — | Topic Kafka résultats (**requis**) |
+| `CONFIG_PATH` | `config.yaml` | Chemin vers le fichier de configuration |
+| `KAFKA_INPUT_TOPIC` | — | Topic Kafka d'entrée (**requis**, ou défini dans config.yaml) |
+| `KAFKA_CONSUMER_GROUP` | — | Consumer group Kafka (**requis**, ou défini dans config.yaml) |
 | `INFERENCE_PORT` | `9000` | Port du serveur de modèle local |
 | `KAFKA_BROKERS` | `kafka:9092` | Brokers Kafka |
 | `KAFKA_SASL_MECHANISM` | _(vide)_ | Mécanisme SASL |
@@ -395,7 +367,7 @@ inference:
 
 ## Kafka — authentification SASL/TLS
 
-Le gateway et le relay sidecar supportent tous deux SASL (PLAIN, SCRAM-SHA-256, SCRAM-SHA-512) et TLS avec CA personnalisée, configurés via `config.yaml`.
+Le gateway et le relay supportent tous deux SASL (PLAIN, SCRAM-SHA-256, SCRAM-SHA-512) et TLS avec CA personnalisée, configurés via `config.yaml`.
 
 En production (Strimzi) le cluster tourne sur le port **9093** (`SASL_SSL`). Les credentials sont injectés depuis des Secrets Kubernetes.
 
@@ -414,8 +386,6 @@ En production (Strimzi) le cluster tourne sur le port **9093** (`SASL_SSL`). Les
 |---|---|---|---|
 | `jobs.*` | topic | prefix | `Read`, `Write`, `Create`, `Describe` |
 | `inference-*` | group | prefix | `Read`, `Describe`, `Delete` |
-
-> `Delete` sur le group est requis par le contrôleur Knative pour la finalisation du ConsumerGroup.
 
 ### Secret SASL (à créer dans le namespace du gateway)
 
@@ -467,7 +437,6 @@ services:
     inferenceURL: "http://kevent-transcription-predictor.default.svc.cluster.local"
     inputTopic: "jobs.whisper-large-v3.input"
     resultTopic: "jobs.whisper-large-v3.results"
-    syncTopic: "jobs.whisper-large-v3.sync"
     acceptedExts: [".mp3", ".wav", ".m4a", ".ogg", ".flac"]
     maxFileSizeMB: 500
 ```
@@ -476,7 +445,7 @@ services:
 
 ## Ajouter un service d'inférence
 
-Aucun changement de code n'est nécessaire. Il suffit d'ajouter un bloc dans `config.yaml` (gateway) et de déployer un relay sidecar configuré avec le `RESULT_TOPIC` correspondant.
+Aucun changement de code n'est nécessaire. Il suffit d'ajouter un bloc dans `config.yaml` (gateway) et de déployer un Relay Deployment configuré avec le `input_topic` et le `consumer_group` correspondants.
 
 **Gateway `config.yaml`** (service avec Kafka) :
 
@@ -490,7 +459,6 @@ services:
     inference_url: "http://kevent-diarization-predictor.default.svc.cluster.local"
     input_topic: jobs.pyannote-audio-3.1.input
     result_topic: jobs.pyannote-audio-3.1.results
-    sync_topic: jobs.pyannote-audio-3.1.sync
     accepted_exts: [".mp3", ".wav", ".m4a", ".ogg", ".flac"]
     max_file_size_mb: 500
 ```
@@ -509,13 +477,12 @@ services:
     # POST /jobs/reranker → 405  |  POST /rerank → proxy direct
 ```
 
-**Relay sidecar** (env vars dans le manifest KServe) :
+**Relay** (`relay/config.yaml` ou ConfigMap) :
 
 ```yaml
-- name: RESULT_TOPIC
-  value: "jobs.pyannote-audio-3.1.results"
-- name: INFERENCE_PORT
-  value: "9000"
+kafka:
+  input_topic: "jobs.pyannote-audio-3.1.input"
+  consumer_group: "kevent-relay-pyannote"
 ```
 
 > **Multi-modèles par type** : plusieurs entrées peuvent partager le même `type` avec des `model` différents. Le gateway sélectionne le backend d'après le champ `model` de la requête. Le champ `default: true` désigne le modèle utilisé si `model` est absent et que plusieurs modèles sont configurés.
@@ -524,7 +491,7 @@ services:
 
 > **Service sync-direct** : un service sans `input_topic`/`result_topic` est traité entièrement en proxy direct. Kafka n'est pas initialisé si aucun service ne configure de topic.
 
-> **Pré-requis Kafka** : si des topics sont configurés, `input_topic`, `result_topic` et `sync_topic` doivent être créés avant le démarrage (`AllowAutoTopicCreation: false`). Topics manquants → 500 à la soumission ou boucle infinie côté consumer.
+> **Pré-requis Kafka** : si des topics sont configurés, `input_topic` et `result_topic` doivent être créés avant le démarrage (`AllowAutoTopicCreation: false`). Topics manquants → 500 à la soumission ou boucle infinie côté consumer.
 
 ---
 
@@ -803,8 +770,6 @@ Les deux composants exposent des métriques Prometheus sur `GET /metrics`.
 |---|---|---|---|
 | `kevent_requests_total` | counter | `mode`, `service_type`, `model`, `status` | Requêtes traitées (mode `async` ou `sync`, code HTTP en `status`) |
 | `kevent_request_duration_seconds` | histogram | `mode`, `service_type`, `model` | Latence bout-en-bout du handler |
-| `kevent_sync_wait_duration_seconds` | histogram | `service_type`, `model` | Temps bloqué en attente du résultat Redis pub/sub (sync-over-Kafka) |
-| `kevent_sync_jobs_in_flight` | gauge | — | Connexions sync-over-Kafka ouvertes en attente du relay |
 | `kevent_s3_operation_duration_seconds` | histogram | `operation` (upload/get/delete) | Latence des opérations S3 |
 | `kevent_s3_errors_total` | counter | `operation` | Erreurs S3 |
 | `kevent_kafka_publish_duration_seconds` | histogram | `topic` | Latence des écritures Kafka |
@@ -824,20 +789,16 @@ Les deux composants exposent des métriques Prometheus sur `GET /metrics`.
 | `kevent_ratelimit_consumer_hits_total` | counter | `service_type`, `user_type` | Consumers ayant dépassé leur limite |
 | `kevent_ratelimit_errors_total` | counter | `service_type` | Erreurs Redis lors du rate limiting |
 
-### Relay sidecar
+### Relay
 
 | Métrique | Type | Labels | Description |
 |---|---|---|---|
 | `kevent_relay_jobs_total` | counter | `service_type`, `status` (completed/failed) | Jobs traités (mode async via Kafka) |
 | `kevent_relay_inference_duration_seconds` | histogram | `service_type` | Durée de l'appel à l'API d'inférence locale |
 | `kevent_relay_input_size_bytes` | histogram | `service_type` | Taille des fichiers d'entrée téléchargés depuis S3 |
-| `kevent_relay_sync_priority` | gauge | — | Nombre de jobs sync en cours sur ce pod (>0 reporte les jobs async) |
-| `kevent_relay_deferred_total` | counter | — | Jobs async retournés 503 à cause de la priorité sync |
 | `kevent_relay_s3_operation_duration_seconds` | histogram | `operation` (get/put/delete) | Latence des opérations S3 |
 | `kevent_relay_s3_errors_total` | counter | `operation` | Erreurs S3 |
 | `kevent_relay_kafka_publish_errors_total` | counter | — | Erreurs de publication des result events |
-| `kevent_relay_proxy_requests_total` | counter | `service_type`, `status` | Requêtes sync-direct proxifiées vers le modèle local |
-| `kevent_relay_proxy_duration_seconds` | histogram | `service_type` | Latence du proxy sync-direct |
 
 ### Exemple de configuration Prometheus
 
@@ -848,9 +809,8 @@ scrape_configs:
       - targets: ["kevent-gateway.default.svc.cluster.local:8080"]
 
   - job_name: kevent-relay
-    # Le relay tourne en sidecar — scraper via le service Knative du predictor
     static_configs:
-      - targets: ["kevent-transcription-predictor.default.svc.cluster.local:8080"]
+      - targets: ["kevent-relay.default.svc.cluster.local:8080"]
 ```
 
 ---
@@ -885,22 +845,22 @@ scrape_configs:
 │   │   └── consumer_tracker.go  # ConsumerTracker interface + Redis sorted-set + top-N refresh
 │   └── handler/
 │       ├── jobs.go              # POST /jobs/{service_type}  •  GET /jobs/{service_type}/{id}
-│       ├── sync.go              # POST /v1/*  (sync-over-Kafka, direct proxy, ou LLM proxy)
+│       ├── sync.go              # POST /v1/*  (direct proxy ou LLM proxy)
 │       ├── docs.go              # GET /docs (Swagger UI)  •  GET /openapi.yaml (spec généré dynamiquement)
 │       ├── health.go            # GET /health
 │       └── middleware.go        # Logger structuré (slog/JSON)
-├── relay/                       # Relay sidecar (module Go séparé : kevent/relay)
+├── relay/                       # Relay Deployment (module Go séparé : kevent/relay)
 │   ├── cmd/relay/main.go
 │   ├── internal/
 │   │   ├── config/config.go     # Config relay : inference.base_url + extra_fields
-│   │   ├── kafka/               # SASL + TLS, publisher résultats
-│   │   ├── relay/               # Handler CloudEvent (async POST /, sync POST /sync)
+│   │   ├── kafka/               # SASL + TLS, consumer pull, publisher résultats
+│   │   ├── relay/               # Traitement des jobs async
 │   │   ├── metrics/             # Définitions Prometheus relay — GET /metrics
 │   │   ├── adapter/             # Adapter multipart générique (model + extra_fields + file)
 │   │   └── storage/             # Client S3
 │   └── config.yaml              # Config template (env vars expansées au démarrage)
 ├── helm/gateway/                # Chart Helm du gateway (inclut Redis-HA)
-├── k8s/                         # Manifestes Kubernetes (KafkaUser, KafkaSource, ServingRuntime)
+├── k8s/                         # Manifestes Kubernetes (KafkaUser, Relay Deployment, KEDA ScaledObject)
 ├── config.yaml                  # Configuration par défaut du gateway
 └── Dockerfile                   # Multi-stage build → image distroless (~10 MB)
 ```
