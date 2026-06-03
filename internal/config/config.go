@@ -118,10 +118,11 @@ type LifecycleConfig struct {
 // Per-status values take precedence over Global; 0 means no TTL configured.
 // When all values are 0, an internal 2h safety net applies for orphaned records.
 type JobTTLConfig struct {
-	Global  string `yaml:"global"`  // fallback for all statuses
+	Global    string `yaml:"global"`    // fallback for all statuses
 	Completed string `yaml:"completed"` // override for completed jobs
-	Pending string `yaml:"pending"` // override for pending/processing jobs
-	Failed  string `yaml:"failed"`  // override for failed jobs
+	Pending   string `yaml:"pending"`   // override for pending/processing jobs
+	Failed    string `yaml:"failed"`    // override for failed jobs
+	Cancelled string `yaml:"cancelled"` // override for cancelled jobs
 }
 
 func parseDuration(s string) time.Duration {
@@ -135,6 +136,7 @@ func (j JobTTLConfig) GlobalDuration() time.Duration    { return parseDuration(j
 func (j JobTTLConfig) PendingDuration() time.Duration   { return parseDuration(j.Pending) }
 func (j JobTTLConfig) CompletedDuration() time.Duration { return parseDuration(j.Completed) }
 func (j JobTTLConfig) FailedDuration() time.Duration    { return parseDuration(j.Failed) }
+func (j JobTTLConfig) CancelledDuration() time.Duration { return parseDuration(j.Cancelled) }
 
 func (s ServiceConfig) ColdStartDuration() time.Duration { return parseDuration(s.ColdStartTime) }
 

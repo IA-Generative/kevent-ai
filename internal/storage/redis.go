@@ -46,8 +46,13 @@ func (r *RedisClient) ttlForStatus(status model.JobStatus) time.Duration {
 		d = r.lifecycle.JobTTL.PendingDuration()
 	case model.JobStatusCompleted:
 		d = r.lifecycle.JobTTL.CompletedDuration()
-	case model.JobStatusFailed, model.JobStatusCancelled:
+	case model.JobStatusFailed:
 		d = r.lifecycle.JobTTL.FailedDuration()
+	case model.JobStatusCancelled:
+		d = r.lifecycle.JobTTL.CancelledDuration()
+		if d == 0 {
+			d = r.lifecycle.JobTTL.FailedDuration()
+		}
 	}
 	if d == 0 {
 		d = r.lifecycle.JobTTL.GlobalDuration()
