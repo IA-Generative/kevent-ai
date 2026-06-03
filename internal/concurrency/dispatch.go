@@ -2,56 +2,75 @@ package concurrency
 
 import (
 	"context"
-	"sync"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 
 	"kevent/gateway/internal/service"
 )
 
-// DispatchScheduler staggers async inference calls for a single model by ensuring
-// at least ColdStartTime elapses between consecutive dispatches. This gives Knative
-// time to warm up a new pod before the next inference request is sent.
+// dispatchSlotScript atomically reserves the next available dispatch slot for
+// a model across all gateway replicas.
 //
-// Slots are reserved under the lock: each caller immediately advances lastDispatched
-// by ColdStartTime, so concurrent callers queue up deterministically without races.
+// Algorithm:
+//   last_ms  = last reserved slot time (0 if key absent)
+//   my_slot  = max(now, last_ms + cold_ms)   → queue after previous caller
+//   wait_ms  = my_slot - now                 → 0 for first caller
+//
+// The key TTL is set to cover the wait plus one extra cold_start period so
+// the slot reservation expires cleanly if the waiting worker is cancelled.
+var dispatchSlotScript = redis.NewScript(`
+local key     = KEYS[1]
+local now_ms  = tonumber(ARGV[1])
+local cold_ms = tonumber(ARGV[2])
+local last_ms = tonumber(redis.call("GET", key) or "0")
+local my_slot = math.max(now_ms, last_ms + cold_ms)
+local wait_ms = my_slot - now_ms
+local ttl_ms  = wait_ms + cold_ms + 5000
+redis.call("SET", key, tostring(my_slot), "PX", tostring(ttl_ms))
+return wait_ms
+`)
+
+// DispatchScheduler staggers async inference calls for a single model across
+// all gateway replicas by reserving dispatch slots in Redis.
+//
+// Worker 1 (any replica): slot = now       → wait = 0
+// Worker 2 (any replica): slot = now+cold  → wait = cold_start_time
+// Worker 3 (any replica): slot = now+2cold → wait = 2×cold_start_time
 type DispatchScheduler struct {
-	coldStart      time.Duration
-	mu             sync.Mutex
-	lastDispatched time.Time
+	rdb       *redis.Client
+	key       string
+	coldStart time.Duration
 }
 
-// NewDispatchScheduler creates a scheduler for the given cold start duration.
+// NewDispatchScheduler creates a Redis-backed scheduler for the given model.
 // Returns nil when coldStart is zero (staggering disabled).
-func NewDispatchScheduler(coldStart time.Duration) *DispatchScheduler {
+func NewDispatchScheduler(model string, coldStart time.Duration, rdb *redis.Client) *DispatchScheduler {
 	if coldStart <= 0 {
 		return nil
 	}
-	return &DispatchScheduler{coldStart: coldStart}
+	return &DispatchScheduler{
+		rdb:       rdb,
+		key:       "gateway:dispatch_slot:" + model,
+		coldStart: coldStart,
+	}
 }
 
-// Wait blocks until this caller's reserved dispatch slot is reached, then returns.
-// Each call serialises callers: the first dispatches immediately, the second waits
-// ColdStartTime, the third waits 2×ColdStartTime, etc.
+// Wait blocks until this caller's reserved slot is reached, then returns.
+// On Redis error, proceeds immediately (fail open).
 // Returns ctx.Err() if the context is cancelled while waiting.
 func (d *DispatchScheduler) Wait(ctx context.Context) error {
-	d.mu.Lock()
-	now := time.Now()
-	// How long until the previous reservation ends.
-	wait := d.coldStart - now.Sub(d.lastDispatched)
-	if wait > 0 {
-		// Reserve a slot: advance lastDispatched to when this caller will dispatch.
-		d.lastDispatched = now.Add(wait)
-	} else {
-		d.lastDispatched = now
-		wait = 0
+	waitMs, err := dispatchSlotScript.Run(ctx, d.rdb,
+		[]string{d.key},
+		time.Now().UnixMilli(),
+		d.coldStart.Milliseconds(),
+	).Int64()
+	if err != nil || waitMs <= 0 {
+		return nil // fail open or no wait needed
 	}
-	d.mu.Unlock()
 
-	if wait == 0 {
-		return nil
-	}
 	select {
-	case <-time.After(wait):
+	case <-time.After(time.Duration(waitMs) * time.Millisecond):
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -65,11 +84,11 @@ type ModelDispatchSchedulers struct {
 
 // NewModelDispatchSchedulers builds schedulers for all async models that have
 // ColdStartTime configured. Returns nil when no model has a cold start time.
-func NewModelDispatchSchedulers(reg *service.Registry) *ModelDispatchSchedulers {
+func NewModelDispatchSchedulers(reg *service.Registry, rdb *redis.Client) *ModelDispatchSchedulers {
 	m := make(map[string]*DispatchScheduler)
 	for _, def := range reg.All() {
 		if def.ColdStartTime > 0 {
-			m[def.Model] = NewDispatchScheduler(def.ColdStartTime)
+			m[def.Model] = NewDispatchScheduler(def.Model, def.ColdStartTime, rdb)
 		}
 	}
 	if len(m) == 0 {

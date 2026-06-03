@@ -73,7 +73,7 @@ func New(
 			redis:         redis,
 			s3:            s3,
 			webhookSender: webhookSender,
-			scheduler:     concurrency.NewDispatchScheduler(def.ColdStartTime),
+			scheduler:     concurrency.NewDispatchScheduler(def.Model, def.ColdStartTime, redis.Raw()),
 			persistResult: persistResult,
 			httpClient:    &http.Client{Timeout: 30 * time.Minute},
 		}

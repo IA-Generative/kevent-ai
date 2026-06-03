@@ -98,7 +98,7 @@ func buildRouter(
 
 	if reg.HasSyncServices() {
 		syncHandler := handler.NewSyncHandler(reg, cfg.Server.ConsumerHeader, rl, llmHandler).
-			WithSemaphore(concurrency.NewModelSemaphore(reg))
+			WithSemaphore(concurrency.NewModelSemaphore(reg, redisClient.Raw()))
 		r.Get("/v1/models", handler.ListModels(reg))
 		// Register each configured path exactly. Chi handles {model} parameter
 		// patterns natively. Single-segment paths (e.g. /rerank) are reachable
