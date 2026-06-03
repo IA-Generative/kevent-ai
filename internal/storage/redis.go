@@ -46,7 +46,7 @@ func (r *RedisClient) ttlForStatus(status model.JobStatus) time.Duration {
 		d = r.lifecycle.JobTTL.PendingDuration()
 	case model.JobStatusCompleted:
 		d = r.lifecycle.JobTTL.CompletedDuration()
-	case model.JobStatusFailed:
+	case model.JobStatusFailed, model.JobStatusCancelled:
 		d = r.lifecycle.JobTTL.FailedDuration()
 	}
 	if d == 0 {
@@ -287,7 +287,7 @@ if not data then
     return redis.error_reply('job not found: ' .. KEYS[1])
 end
 local job = cjson.decode(data)
-if job['status'] == 'completed' or job['status'] == 'failed' then
+if job['status'] == 'completed' or job['status'] == 'failed' or job['status'] == 'cancelled' then
     return redis.status_reply('OK')
 end
 job['status']     = ARGV[1]
@@ -333,13 +333,19 @@ func (r *RedisClient) UpdateJobResult(ctx context.Context, jobID string, status 
 	return nil
 }
 
-// MarkJobCancelled updates a processing job's status to cancelled and publishes
-// a cancellation signal on relay:{model}:cancel so the relay stops inference.
-// Returns without error if the job is already in a terminal state.
+// MarkJobCancelled marks a job as cancelled regardless of its current state
+// (pending or processing) and signals the relay to stop inference if running.
+// The job record is kept in Redis until the GC TTL expires — it is NOT deleted.
+// S3 input/result cleanup is left to the GC.
 func (r *RedisClient) MarkJobCancelled(ctx context.Context, jobID, modelName string) error {
 	if err := r.UpdateJobResult(ctx, jobID, model.JobStatusCancelled, "", "cancelled by client"); err != nil {
 		return err
 	}
+	// Remove from pending list in case the relay hasn't popped it yet.
+	if err := r.client.LRem(ctx, "relay:"+modelName+":pending", 1, jobID).Err(); err != nil {
+		slog.Warn("failed to lrem from pending list", "job_id", jobID, "model", modelName, "error", err)
+	}
+	// Signal the relay to stop if it is currently processing this job.
 	if err := r.client.Publish(ctx, "relay:"+modelName+":cancel", jobID).Err(); err != nil {
 		slog.Warn("failed to publish relay cancel signal", "job_id", jobID, "model", modelName, "error", err)
 	}

@@ -118,20 +118,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	job, err := s.GetJob(ctx, jobID)
-	if err != nil {
-		slog.Error("failed to get job from Redis", "job_id", jobID, "error", err)
-		os.Exit(1)
-	}
-
-	slog.Info("processing job", "job_id", jobID, "service_type", job.ServiceType)
-
 	// jobCtx is cancelled if the gateway sends a DELETE request for this job.
 	// SIGTERM does not cancel it — inference must finish (or be cancelled by the gateway).
 	jobCtx, cancelJob := context.WithCancel(context.Background())
 	defer cancelJob()
 
-	// Subscribe to gateway cancellation signals for this model.
+	// Subscribe before reading the job so we don't miss a cancel signal published
+	// between the pop and the subscribe (pending→processing race window).
 	cancelSub := rdb.Subscribe(context.Background(), "relay:"+cfg.Model+":cancel")
 	go func() {
 		defer cancelSub.Close()
@@ -143,6 +136,23 @@ func main() {
 			}
 		}
 	}()
+
+	job, err := s.GetJob(ctx, jobID)
+	if err != nil {
+		slog.Error("failed to get job from Redis", "job_id", jobID, "error", err)
+		os.Exit(1)
+	}
+
+	// If the gateway cancelled the job between our pop and this read, stop now.
+	if job.Status == model.JobStatusCancelled {
+		slog.Info("job already cancelled, skipping inference", "job_id", jobID)
+		if derr := q.Done(context.Background(), jobID); derr != nil {
+			slog.Warn("failed to remove cancelled job from processing", "job_id", jobID, "error", derr)
+		}
+		return
+	}
+
+	slog.Info("processing job", "job_id", jobID, "service_type", job.ServiceType)
 
 	if err := proc.Process(jobCtx, job); err != nil {
 		if errors.Is(err, context.Canceled) {

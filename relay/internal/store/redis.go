@@ -58,7 +58,7 @@ if not data then
     return redis.error_reply('job not found: ' .. KEYS[1])
 end
 local job = cjson.decode(data)
-if job['status'] == 'completed' or job['status'] == 'failed' then
+if job['status'] == 'completed' or job['status'] == 'failed' or job['status'] == 'cancelled' then
     return redis.status_reply('OK')
 end
 job['status']     = ARGV[1]

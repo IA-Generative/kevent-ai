@@ -493,8 +493,9 @@ func cancelReq(t *testing.T, serviceType, id string) *http.Request {
 	return req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 }
 
-// TestCancel_Pending_Success verifies that cancelling a pending job returns 204,
-// deletes the job from Redis, and asynchronously removes the S3 input file.
+// TestCancel_Pending_Success verifies that cancelling a pending job returns 202,
+// marks the job as cancelled in Redis (keeping the record for GC), and does NOT
+// immediately delete the S3 file (GC handles cleanup).
 func TestCancel_Pending_Success(t *testing.T) {
 	s3 := &mockJobS3{}
 	store := &mockAsyncStore{
@@ -511,19 +512,11 @@ func TestCancel_Pending_Success(t *testing.T) {
 	newAsyncHandler(singleOpRegistry(), s3, store).
 		Cancel(w, cancelReq(t, "transcription", "job-1"))
 
-	if w.Code != http.StatusNoContent {
-		t.Errorf("expected 204, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusAccepted {
+		t.Errorf("expected 202, got %d: %s", w.Code, w.Body.String())
 	}
-	if !store.deleteJobCalled {
-		t.Error("DeleteJob must be called to cancel a pending job")
-	}
-	// S3 deletion runs in a goroutine — give it a moment.
-	time.Sleep(20 * time.Millisecond)
-	s3.mu.Lock()
-	deleted := len(s3.deletedKeys) > 0
-	s3.mu.Unlock()
-	if !deleted {
-		t.Error("S3 input file should be deleted on cancel")
+	if store.deleteJobCalled {
+		t.Error("DeleteJob must NOT be called — job record is kept for GC")
 	}
 }
 

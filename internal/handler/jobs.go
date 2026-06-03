@@ -457,41 +457,18 @@ func (h *JobHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch job.Status {
-	case model.JobStatusPending:
-		if err := h.redis.DeleteJob(r.Context(), id); err != nil {
-			slog.ErrorContext(r.Context(), "cancel: delete job failed", "job_id", id, "error", err)
+	case model.JobStatusPending, model.JobStatusProcessing:
+		if err := h.redis.MarkJobCancelled(r.Context(), id, job.Model); err != nil {
+			slog.ErrorContext(r.Context(), "cancel: failed", "job_id", id, "error", err)
 			writeError(w, http.StatusInternalServerError, "failed to cancel job")
 			return
 		}
-		go func(inputRef, jobID string) {
-			if inputRef == "" {
-				return
-			}
-			if err := h.store.DeleteObject(context.Background(), inputRef); err != nil {
-				slog.Error("cancel: failed to delete input file", "job_id", jobID, "input_ref", inputRef, "error", err)
-			}
-		}(job.InputRef, id)
+		if job.Status == model.JobStatusProcessing {
+			metrics.AsyncJobsCancelledWhileProcessingTotal.WithLabelValues(serviceType, job.Model).Inc()
+		}
 		metrics.AsyncJobsCancelledTotal.WithLabelValues(serviceType, job.Model).Inc()
 		slog.InfoContext(r.Context(), "job cancelled", "job_id", id, "service_type", serviceType, "prior_status", job.Status)
-		w.WriteHeader(http.StatusNoContent)
-
-	case model.JobStatusProcessing:
-		if err := h.redis.MarkJobCancelled(r.Context(), id, job.Model); err != nil {
-			slog.ErrorContext(r.Context(), "cancel: mark job cancelled failed", "job_id", id, "error", err)
-			writeError(w, http.StatusInternalServerError, "failed to cancel job")
-			return
-		}
-		go func(inputRef, jobID string) {
-			if inputRef == "" {
-				return
-			}
-			if err := h.store.DeleteObject(context.Background(), inputRef); err != nil {
-				slog.Error("cancel: failed to delete input file", "job_id", jobID, "input_ref", inputRef, "error", err)
-			}
-		}(job.InputRef, id)
-		metrics.AsyncJobsCancelledWhileProcessingTotal.WithLabelValues(serviceType, job.Model).Inc()
-		slog.InfoContext(r.Context(), "job cancellation signalled to relay", "job_id", id, "service_type", serviceType)
-		// 202: relay will stop inference asynchronously and remove from processing list.
+		// Job record kept in Redis with status=cancelled; GC handles S3 + record cleanup.
 		w.WriteHeader(http.StatusAccepted)
 
 	default:
