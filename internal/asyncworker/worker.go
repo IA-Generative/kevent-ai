@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"kevent/gateway/internal/concurrency"
 	"kevent/gateway/internal/consumer"
 	"kevent/gateway/internal/model"
 	"kevent/gateway/internal/service"
@@ -42,6 +43,7 @@ type Pool struct {
 	redis         redisStore
 	s3            *storage.S3Client
 	webhookSender *consumer.WebhookSender
+	scheduler     *concurrency.DispatchScheduler // nil when cold_start_time not configured
 	persistResult bool
 	httpClient    *http.Client
 	wg            sync.WaitGroup
@@ -71,6 +73,7 @@ func New(
 			redis:         redis,
 			s3:            s3,
 			webhookSender: webhookSender,
+			scheduler:     concurrency.NewDispatchScheduler(def.ColdStartTime),
 			persistResult: persistResult,
 			httpClient:    &http.Client{Timeout: 30 * time.Minute},
 		}
@@ -147,6 +150,13 @@ func (p *Pool) process(ctx context.Context, jobID string) {
 		return
 	}
 
+	if p.scheduler != nil {
+		if err := p.scheduler.Wait(ctx); err != nil {
+			// Context cancelled during cold-start wait; job stays in processing for GC.
+			return
+		}
+	}
+
 	slog.Info("async worker: processing job", "job_id", jobID, "model", job.Model)
 
 	resultRef, inferErr := p.runJob(ctx, job)
@@ -183,21 +193,24 @@ func (p *Pool) runJob(ctx context.Context, job *model.Job) (string, error) {
 		return "", fmt.Errorf("s3 get: %w", err)
 	}
 
-	// Resolve inference URL from job or fall back to service def.
-	inferURL := job.InferenceURL
-	if inferURL == "" {
+	// Resolve inference URL: dedicated async pool takes priority, then job-level
+	// path, then sync backends. AsyncInferenceURL is a full URL (no path appending).
+	var inferURL string
+	if p.def.AsyncInferenceURL != "" {
+		inferURL = p.def.AsyncInferenceURL
+	} else if job.InferenceURL == "" {
 		if len(p.def.Backends) > 0 {
 			inferURL = p.def.Backends[0].URL
 		} else {
 			inferURL = p.def.InferenceURL
 		}
 	} else {
-		// job.InferenceURL is a path; prepend the backend base URL.
+		// job.InferenceURL is a path; prepend the sync backend base URL.
 		base := p.def.InferenceURL
 		if len(p.def.Backends) > 0 {
 			base = p.def.Backends[0].URL
 		}
-		inferURL = base + inferURL
+		inferURL = base + job.InferenceURL
 	}
 
 	result, err := callInference(ctx, p.httpClient, callInput{

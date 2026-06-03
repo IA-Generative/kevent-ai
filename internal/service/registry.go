@@ -22,6 +22,8 @@ type Def struct {
 	// (i.e. AcceptedExts is explicitly set in the config).
 	SupportsAsync        bool
 	AsyncWorkers         int               // goroutines processing async jobs (default 1)
+	ColdStartTime        time.Duration     // min delay between consecutive async dispatches; 0 = disabled
+	AsyncInferenceURL    string            // dedicated async inference pool URL; overrides Backends for async
 	MaxConcurrentSync    int               // max simultaneous sync calls; 0 = unlimited
 	InferenceExtraFields map[string]string // static fields appended to async multipart requests
 
@@ -178,6 +180,8 @@ func NewRegistry(cfgs []config.ServiceConfig) *Registry {
 			MaxFileSizeMB:        cfg.MaxFileSizeMB,
 			SupportsAsync:        len(cfg.AcceptedExts) > 0,
 			AsyncWorkers:         asyncWorkers,
+			ColdStartTime:        cfg.ColdStartDuration(),
+			AsyncInferenceURL:    cfg.AsyncInferenceURL,
 			MaxConcurrentSync:    cfg.MaxConcurrentSync,
 			InferenceExtraFields: cfg.InferenceExtraFields,
 			InferenceURL:         primaryURL,

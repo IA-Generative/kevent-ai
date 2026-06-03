@@ -136,6 +136,8 @@ func (j JobTTLConfig) PendingDuration() time.Duration   { return parseDuration(j
 func (j JobTTLConfig) CompletedDuration() time.Duration { return parseDuration(j.Completed) }
 func (j JobTTLConfig) FailedDuration() time.Duration    { return parseDuration(j.Failed) }
 
+func (s ServiceConfig) ColdStartDuration() time.Duration { return parseDuration(s.ColdStartTime) }
+
 // GCConfig controls the unified background garbage collector.
 type GCConfig struct {
 	Enabled      bool   `yaml:"enabled"`        // master switch; default false
@@ -181,6 +183,15 @@ type ServiceConfig struct {
 	// AsyncWorkers is the number of goroutines processing async jobs for this model.
 	// Defaults to 1 when AcceptedExts is non-empty. 0 disables async processing.
 	AsyncWorkers int `yaml:"async_workers"`
+	// ColdStartTime is the minimum duration between consecutive async inference
+	// dispatches for this model. Set to approximately the Knative pod cold start
+	// time so a new pod is warm before the next job is sent. 0 disables staggering.
+	// Example: "35s".
+	ColdStartTime string `yaml:"cold_start_time"`
+	// AsyncInferenceURL is the URL of the dedicated async inference pool for this
+	// model. When set, async workers use this URL instead of inference_url/backends,
+	// allowing separate sync and async inference deployments.
+	AsyncInferenceURL string `yaml:"async_inference_url"`
 	// MaxConcurrentSync limits the number of simultaneous sync proxy calls for this model.
 	// 0 (default) means no limit. When exceeded, the handler returns 503.
 	MaxConcurrentSync int `yaml:"max_concurrent_sync"`
