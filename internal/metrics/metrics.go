@@ -149,6 +149,11 @@ var (
 		Help: "Total async jobs cancelled by the client (DELETE /jobs/{type}/{id}).",
 	}, []string{"service_type", "model"})
 
+	AsyncJobsCancelledWhileProcessingTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "kevent_async_jobs_cancelled_while_processing_total",
+		Help: "Total async jobs cancelled while the relay was processing them (GPU interrupted).",
+	}, []string{"service_type", "model"})
+
 	AsyncJobsPurgedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "kevent_async_jobs_purged_total",
 		Help: "Total async jobs deleted by the admin purge endpoint.",

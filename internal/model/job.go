@@ -9,6 +9,7 @@ const (
 	JobStatusProcessing JobStatus = "processing"
 	JobStatusCompleted  JobStatus = "completed"
 	JobStatusFailed     JobStatus = "failed"
+	JobStatusCancelled  JobStatus = "cancelled"
 )
 
 // Job is the full record stored in Redis. CallbackURL is kept internal

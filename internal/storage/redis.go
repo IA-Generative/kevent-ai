@@ -333,6 +333,19 @@ func (r *RedisClient) UpdateJobResult(ctx context.Context, jobID string, status 
 	return nil
 }
 
+// MarkJobCancelled updates a processing job's status to cancelled and publishes
+// a cancellation signal on relay:{model}:cancel so the relay stops inference.
+// Returns without error if the job is already in a terminal state.
+func (r *RedisClient) MarkJobCancelled(ctx context.Context, jobID, modelName string) error {
+	if err := r.UpdateJobResult(ctx, jobID, model.JobStatusCancelled, "", "cancelled by client"); err != nil {
+		return err
+	}
+	if err := r.client.Publish(ctx, "relay:"+modelName+":cancel", jobID).Err(); err != nil {
+		slog.Warn("failed to publish relay cancel signal", "job_id", jobID, "model", modelName, "error", err)
+	}
+	return nil
+}
+
 // scanStaleJobs returns all pending jobs whose queue score (creation Unix timestamp)
 // is older than cutoff. Used by both SweepStalePendingJobs and ListStalePendingJobs
 // to avoid duplicating the queue-scan + MGet logic.

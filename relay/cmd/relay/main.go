@@ -126,8 +126,32 @@ func main() {
 
 	slog.Info("processing job", "job_id", jobID, "service_type", job.ServiceType)
 
-	// Use Background so a SIGTERM does not interrupt an in-flight inference job.
-	if err := proc.Process(context.Background(), job); err != nil {
+	// jobCtx is cancelled if the gateway sends a DELETE request for this job.
+	// SIGTERM does not cancel it — inference must finish (or be cancelled by the gateway).
+	jobCtx, cancelJob := context.WithCancel(context.Background())
+	defer cancelJob()
+
+	// Subscribe to gateway cancellation signals for this model.
+	cancelSub := rdb.Subscribe(context.Background(), "relay:"+cfg.Model+":cancel")
+	go func() {
+		defer cancelSub.Close()
+		for msg := range cancelSub.Channel() {
+			if msg.Payload == jobID {
+				slog.Info("cancellation signal received from gateway", "job_id", jobID)
+				cancelJob()
+				return
+			}
+		}
+	}()
+
+	if err := proc.Process(jobCtx, job); err != nil {
+		if errors.Is(err, context.Canceled) {
+			slog.Info("job cancelled by gateway, removing from processing", "job_id", jobID)
+			if derr := q.Done(context.Background(), jobID); derr != nil {
+				slog.Warn("failed to remove cancelled job from processing", "job_id", jobID, "error", derr)
+			}
+			return
+		}
 		slog.Error("fatal job error, exiting", "job_id", jobID, "error", err)
 		os.Exit(1)
 	}

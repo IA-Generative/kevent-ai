@@ -34,6 +34,7 @@ type asyncJobStore interface {
 	GetJob(ctx context.Context, id string) (*model.Job, error)
 	DeleteJob(ctx context.Context, id string) error
 	UpdateJobResult(ctx context.Context, jobID string, status model.JobStatus, resultRef, errMsg string) error
+	MarkJobCancelled(ctx context.Context, jobID, modelName string) error
 	ListJobsByConsumer(ctx context.Context, consumer string, limit, offset int64) ([]*model.Job, int64, error)
 	GetQueuePosition(ctx context.Context, jobID, model string) (int64, bool, error)
 	ListStalePendingJobs(ctx context.Context, olderThan time.Duration) ([]*model.Job, error)
@@ -455,29 +456,47 @@ func (h *JobHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if job.Status != model.JobStatusPending {
-		writeError(w, http.StatusConflict, fmt.Sprintf("job %q cannot be cancelled in state %q: only pending jobs can be cancelled", id, job.Status))
-		return
-	}
-
-	if err := h.redis.DeleteJob(r.Context(), id); err != nil {
-		slog.ErrorContext(r.Context(), "cancel: delete job failed", "job_id", id, "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to cancel job")
-		return
-	}
-
-	go func(inputRef, jobID string) {
-		if inputRef == "" {
+	switch job.Status {
+	case model.JobStatusPending:
+		if err := h.redis.DeleteJob(r.Context(), id); err != nil {
+			slog.ErrorContext(r.Context(), "cancel: delete job failed", "job_id", id, "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to cancel job")
 			return
 		}
-		if err := h.store.DeleteObject(context.Background(), inputRef); err != nil {
-			slog.Error("cancel: failed to delete input file", "job_id", jobID, "input_ref", inputRef, "error", err)
-		}
-	}(job.InputRef, id)
+		go func(inputRef, jobID string) {
+			if inputRef == "" {
+				return
+			}
+			if err := h.store.DeleteObject(context.Background(), inputRef); err != nil {
+				slog.Error("cancel: failed to delete input file", "job_id", jobID, "input_ref", inputRef, "error", err)
+			}
+		}(job.InputRef, id)
+		metrics.AsyncJobsCancelledTotal.WithLabelValues(serviceType, job.Model).Inc()
+		slog.InfoContext(r.Context(), "job cancelled", "job_id", id, "service_type", serviceType, "prior_status", job.Status)
+		w.WriteHeader(http.StatusNoContent)
 
-	metrics.AsyncJobsCancelledTotal.WithLabelValues(serviceType, job.Model).Inc()
-	slog.InfoContext(r.Context(), "job cancelled", "job_id", id, "service_type", serviceType, "prior_status", job.Status)
-	w.WriteHeader(http.StatusNoContent)
+	case model.JobStatusProcessing:
+		if err := h.redis.MarkJobCancelled(r.Context(), id, job.Model); err != nil {
+			slog.ErrorContext(r.Context(), "cancel: mark job cancelled failed", "job_id", id, "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to cancel job")
+			return
+		}
+		go func(inputRef, jobID string) {
+			if inputRef == "" {
+				return
+			}
+			if err := h.store.DeleteObject(context.Background(), inputRef); err != nil {
+				slog.Error("cancel: failed to delete input file", "job_id", jobID, "input_ref", inputRef, "error", err)
+			}
+		}(job.InputRef, id)
+		metrics.AsyncJobsCancelledWhileProcessingTotal.WithLabelValues(serviceType, job.Model).Inc()
+		slog.InfoContext(r.Context(), "job cancellation signalled to relay", "job_id", id, "service_type", serviceType)
+		// 202: relay will stop inference asynchronously and remove from processing list.
+		w.WriteHeader(http.StatusAccepted)
+
+	default:
+		writeError(w, http.StatusConflict, fmt.Sprintf("job %q cannot be cancelled in state %q", id, job.Status))
+	}
 }
 
 const defaultPurgeLimit = 500

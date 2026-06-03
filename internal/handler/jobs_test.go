@@ -72,6 +72,9 @@ func (m *mockAsyncStore) UpdateJobResult(_ context.Context, _ string, _ model.Jo
 	m.updateCalled = true
 	return nil
 }
+func (m *mockAsyncStore) MarkJobCancelled(_ context.Context, _, _ string) error {
+	return nil
+}
 func (m *mockAsyncStore) ListJobsByConsumer(_ context.Context, _ string, _, _ int64) ([]*model.Job, int64, error) {
 	return m.jobs, m.jobsTotal, nil
 }
@@ -524,8 +527,9 @@ func TestCancel_Pending_Success(t *testing.T) {
 	}
 }
 
-// TestCancel_Processing_Returns409 verifies that a processing job cannot be cancelled.
-func TestCancel_Processing_Returns409(t *testing.T) {
+// TestCancel_Processing_Returns202 verifies that a processing job is signalled for
+// cancellation and returns 202 Accepted (relay stops inference asynchronously).
+func TestCancel_Processing_Returns202(t *testing.T) {
 	store := &mockAsyncStore{
 		job: &model.Job{
 			ID:          "job-2",
@@ -539,8 +543,8 @@ func TestCancel_Processing_Returns409(t *testing.T) {
 	newAsyncHandler(singleOpRegistry(), &mockJobS3{}, store).
 		Cancel(w, cancelReq(t, "transcription", "job-2"))
 
-	if w.Code != http.StatusConflict {
-		t.Errorf("expected 409 for processing job, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusAccepted {
+		t.Errorf("expected 202 for processing job, got %d: %s", w.Code, w.Body.String())
 	}
 	if store.deleteJobCalled {
 		t.Error("DeleteJob must not be called when job is in processing state")
