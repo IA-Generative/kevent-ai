@@ -49,7 +49,7 @@ func ListModels(registry *service.Registry) http.HandlerFunc {
 				ServiceType: d.Type,
 				Provider:    d.Provider,
 				Capabilities: modelCapabilities{
-					SupportsAsync:    d.InputTopic != "",
+					SupportsAsync:    d.SupportsAsync,
 					SupportsSync:     len(d.Backends) > 0 || d.InferenceURL != "",
 					SupportsStreaming: d.Provider != "",
 					AcceptedFormats:  sortedExts(d.AcceptedExts),

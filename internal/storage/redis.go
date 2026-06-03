@@ -46,7 +46,7 @@ func (r *RedisClient) ttlForStatus(status model.JobStatus) time.Duration {
 		d = r.lifecycle.JobTTL.PendingDuration()
 	case model.JobStatusCompleted:
 		d = r.lifecycle.JobTTL.CompletedDuration()
-	case model.JobStatusFailed:
+	case model.JobStatusFailed, model.JobStatusCancelled:
 		d = r.lifecycle.JobTTL.FailedDuration()
 	}
 	if d == 0 {
@@ -132,6 +132,7 @@ func (r *RedisClient) SaveJob(ctx context.Context, job *model.Job) error {
 			})
 			pipe.Expire(ctx, consumerKey(job.ConsumerName), ttl)
 		}
+		pipe.RPush(ctx, "relay:"+job.Model+":pending", job.ID)
 		return nil
 	})
 
@@ -286,7 +287,7 @@ if not data then
     return redis.error_reply('job not found: ' .. KEYS[1])
 end
 local job = cjson.decode(data)
-if job['status'] == 'completed' or job['status'] == 'failed' then
+if job['status'] == 'completed' or job['status'] == 'failed' or job['status'] == 'cancelled' then
     return redis.status_reply('OK')
 end
 job['status']     = ARGV[1]
@@ -328,6 +329,25 @@ func (r *RedisClient) UpdateJobResult(ctx context.Context, jobID string, status 
 	if err != nil {
 		metrics.RedisErrorsTotal.WithLabelValues("update_job").Inc()
 		return fmt.Errorf("updating job %q in redis: %w", jobID, err)
+	}
+	return nil
+}
+
+// MarkJobCancelled marks a job as cancelled regardless of its current state
+// (pending or processing) and signals the relay to stop inference if running.
+// The job record is kept in Redis until the GC TTL expires — it is NOT deleted.
+// S3 input/result cleanup is left to the GC.
+func (r *RedisClient) MarkJobCancelled(ctx context.Context, jobID, modelName string) error {
+	if err := r.UpdateJobResult(ctx, jobID, model.JobStatusCancelled, "", "cancelled by client"); err != nil {
+		return err
+	}
+	// Remove from pending list in case the relay hasn't popped it yet.
+	if err := r.client.LRem(ctx, "relay:"+modelName+":pending", 1, jobID).Err(); err != nil {
+		slog.Warn("failed to lrem from pending list", "job_id", jobID, "model", modelName, "error", err)
+	}
+	// Signal the relay to stop if it is currently processing this job.
+	if err := r.client.Publish(ctx, "relay:"+modelName+":cancel", jobID).Err(); err != nil {
+		slog.Warn("failed to publish relay cancel signal", "job_id", jobID, "model", modelName, "error", err)
 	}
 	return nil
 }
@@ -440,7 +460,7 @@ func (s *jobDoneSub) Wait(ctx context.Context) error {
 func (s *jobDoneSub) Close() { _ = s.pubsub.Close() }
 
 // SubscribeJobDone creates a subscription for the given job's completion channel.
-// Must be called BEFORE publishing the job to Kafka to avoid missing the notification.
+// Must be called BEFORE the job is published to the relay queue to avoid missing the notification.
 func (r *RedisClient) SubscribeJobDone(ctx context.Context, jobID string) JobDoneSubscription {
 	ps := r.client.Subscribe(ctx, "job:"+jobID+":done")
 	return &jobDoneSub{ch: ps.Channel(), pubsub: ps}

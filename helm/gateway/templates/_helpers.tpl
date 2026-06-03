@@ -80,18 +80,6 @@ Utilise le Secret existant si spécifié, sinon celui créé par ce chart.
 {{- end }}
 
 {{/*
-Nom du Secret contenant le mot de passe SASL Kafka.
-Utilise le Secret existant si spécifié, sinon celui créé par ce chart.
-*/}}
-{{- define "kevent-gateway.kafkaSecretName" -}}
-{{- if .Values.kafka.sasl.existingSecret -}}
-{{- .Values.kafka.sasl.existingSecret -}}
-{{- else -}}
-{{- printf "%s-kafka" (include "kevent-gateway.fullname" .) -}}
-{{- end -}}
-{{- end }}
-
-{{/*
 Nom du Secret contenant la clé de chiffrement AES-256-GCM.
 Utilise le Secret existant si spécifié, sinon celui créé par ce chart.
 */}}

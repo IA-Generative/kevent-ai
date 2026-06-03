@@ -12,15 +12,40 @@ import (
 	"syscall"
 	"time"
 
-	kafkago "github.com/segmentio/kafka-go"
+	"github.com/redis/go-redis/v9"
 
 	"kevent/relay/internal/adapter"
 	"kevent/relay/internal/config"
-	"kevent/relay/internal/kafka"
 	"kevent/relay/internal/lifecycle"
-	"kevent/relay/internal/relay"
+	"kevent/relay/internal/model"
+	"kevent/relay/internal/queue"
+	relayproc "kevent/relay/internal/relay"
+	"kevent/relay/internal/store"
 	"kevent/relay/internal/storage"
 )
+
+// redisPublisher implements relay.eventPublisher via the Redis store and queue.
+// For every completed or failed job it:
+//  1. Atomically updates the job record in Redis (UpdateJobResult).
+//  2. Publishes a completion notification on jobs:{model}:completed.
+//  3. Removes the job from the processing list (Done).
+type redisPublisher struct {
+	st *store.Store
+	q  *queue.Queue
+}
+
+func (p *redisPublisher) PublishResult(ctx context.Context, jobID string, status model.JobStatus, resultRef, errMsg string) error {
+	if err := p.st.UpdateJobResult(ctx, jobID, status, resultRef, errMsg); err != nil {
+		return err
+	}
+	if err := p.q.Publish(ctx, jobID); err != nil {
+		slog.Warn("failed to publish job completion notification", "job_id", jobID, "error", err)
+	}
+	if err := p.q.Done(ctx, jobID); err != nil {
+		slog.Warn("failed to remove job from processing list", "job_id", jobID, "error", err)
+	}
+	return nil
+}
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -43,19 +68,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	publisher, err := kafka.NewPublisher(cfg.Kafka)
-	if err != nil {
-		slog.Error("failed to initialise Kafka publisher", "error", err)
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     cfg.Redis.Addr,
+		Password: cfg.Redis.Password,
+		DB:       cfg.Redis.DB,
+	})
+	pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := rdb.Ping(pingCtx).Err(); err != nil {
+		slog.Error("failed to connect to Redis", "addr", cfg.Redis.Addr, "error", err)
 		os.Exit(1)
 	}
-	defer publisher.Close()
 
-	consumer, err := kafka.NewConsumer(cfg.Kafka)
-	if err != nil {
-		slog.Error("failed to initialise Kafka consumer", "error", err)
-		os.Exit(1)
-	}
-	defer consumer.Close()
+	q := queue.New(rdb, cfg.Model)
+	s := store.New(rdb)
+
+	pub := &redisPublisher{st: s, q: q}
 
 	adp, err := adapter.New(cfg)
 	if err != nil {
@@ -64,7 +92,7 @@ func main() {
 	}
 
 	annotator := lifecycle.New()
-	proc := relay.New(adp, s3Client, publisher, cfg.Service.ResultTopic, annotator)
+	proc := relayproc.New(adp, s3Client, pub, annotator)
 
 	inferenceHealthURL := strings.TrimRight(cfg.Inference.BaseURL, "/") + "/health"
 	healthClient := &http.Client{Timeout: cfg.Inference.HealthCheckTimeoutDuration()}
@@ -75,59 +103,68 @@ func main() {
 
 	go serveHealth()
 
-	slog.Info("relay consumer started",
-		"topic", cfg.Kafka.InputTopic,
-		"consumer_group", cfg.Kafka.ConsumerGroup,
-	)
+	slog.Info("relay started", "model", cfg.Model)
 
-	for {
-		msg, err := consumer.FetchMessage(ctx)
-		if err != nil {
-			if errors.Is(err, context.Canceled) {
-				slog.Info("relay shutting down")
-			} else {
-				slog.Error("kafka fetch error", "error", err)
+	// Pop blocks until a job is available or the context is cancelled (SIGTERM).
+	// One pod = one job: after processing, the pod exits so KEDA creates a fresh
+	// pod for the next job rather than reusing this one.
+	jobID, err := q.Pop(ctx)
+	if errors.Is(err, context.Canceled) {
+		slog.Info("relay shutting down (no job received)")
+		return
+	}
+	if err != nil {
+		slog.Error("queue pop error", "error", err)
+		os.Exit(1)
+	}
+
+	// jobCtx is cancelled if the gateway sends a DELETE request for this job.
+	// SIGTERM does not cancel it — inference must finish (or be cancelled by the gateway).
+	jobCtx, cancelJob := context.WithCancel(context.Background())
+	defer cancelJob()
+
+	// Subscribe before reading the job so we don't miss a cancel signal published
+	// between the pop and the subscribe (pending→processing race window).
+	cancelSub := rdb.Subscribe(context.Background(), "relay:"+cfg.Model+":cancel")
+	go func() {
+		defer cancelSub.Close()
+		for msg := range cancelSub.Channel() {
+			if msg.Payload == jobID {
+				slog.Info("cancellation signal received from gateway", "job_id", jobID)
+				cancelJob()
+				return
 			}
-			break
 		}
+	}()
 
-		if err := handleMessage(proc, consumer, msg); err != nil {
-			slog.Error("fatal job error, exiting for Kafka redeliver", "error", err)
-			os.Exit(1)
+	job, err := s.GetJob(ctx, jobID)
+	if err != nil {
+		slog.Error("failed to get job from Redis", "job_id", jobID, "error", err)
+		os.Exit(1)
+	}
+
+	// If the gateway cancelled the job between our pop and this read, stop now.
+	if job.Status == model.JobStatusCancelled {
+		slog.Info("job already cancelled, skipping inference", "job_id", jobID)
+		if derr := q.Done(context.Background(), jobID); derr != nil {
+			slog.Warn("failed to remove cancelled job from processing", "job_id", jobID, "error", derr)
 		}
+		return
+	}
 
-		// After completing a job, honour a pending shutdown signal.
-		if ctx.Err() != nil {
-			slog.Info("relay shutting down after job completion")
-			break
+	slog.Info("processing job", "job_id", jobID, "service_type", job.ServiceType)
+
+	if err := proc.Process(jobCtx, job); err != nil {
+		if errors.Is(err, context.Canceled) {
+			slog.Info("job cancelled by gateway, removing from processing", "job_id", jobID)
+			if derr := q.Done(context.Background(), jobID); derr != nil {
+				slog.Warn("failed to remove cancelled job from processing", "job_id", jobID, "error", derr)
+			}
+			return
 		}
+		slog.Error("fatal job error, exiting", "job_id", jobID, "error", err)
+		os.Exit(1)
 	}
-}
-
-// handleMessage processes one Kafka message.
-// Returns an error only for transient infra failures that warrant pod restart.
-// Malformed/invalid messages are skipped (committed without processing).
-func handleMessage(proc *relay.Processor, consumer *kafka.Consumer, msg kafkago.Message) error {
-	event, err := relay.ParseInputEvent(msg.Value)
-	if err != nil || event.JobID == "" {
-		slog.Error("skipping unparseable message", "error", err, "offset", msg.Offset, "partition", msg.Partition)
-		// Use Background context: upstream ctx may be cancelled (SIGTERM).
-		return consumer.CommitMessages(context.Background(), msg)
-	}
-
-	slog.Info("processing job", "job_id", event.JobID, "service_type", event.ServiceType, "offset", msg.Offset)
-
-	// Use Background context so SIGTERM does not interrupt an in-flight inference job.
-	if err := proc.Process(context.Background(), event); err != nil {
-		return err // transient infra error — caller will os.Exit(1)
-	}
-
-	if err := consumer.CommitMessages(context.Background(), msg); err != nil {
-		return err
-	}
-
-	slog.Info("job committed", "job_id", event.JobID)
-	return nil
 }
 
 func serveHealth() {
@@ -144,9 +181,9 @@ func waitForInference(healthURL string, client *http.Client, timeout, interval t
 	slog.Info("waiting for inference service", "health_url", healthURL, "timeout", timeout)
 	deadline := time.Now().Add(timeout)
 	for {
-		resp, err := client.Get(healthURL)
+		resp, err := client.Get(healthURL) //nolint:noctx
 		if err == nil {
-			io.Copy(io.Discard, resp.Body)
+			io.Copy(io.Discard, resp.Body) //nolint:errcheck
 			resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
 				slog.Info("inference service ready")

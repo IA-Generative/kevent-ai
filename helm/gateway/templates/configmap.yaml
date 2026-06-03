@@ -13,22 +13,6 @@ data:
       # le timeout est géré par Knative timeoutSeconds côté InferenceService.
       write_timeout: 0s
 
-    kafka:
-      brokers:
-        - "{{ .Values.kafka.brokers }}"
-      consumer_group: "kevent-gateway"
-      {{- if .Values.kafka.sasl.enabled }}
-      sasl:
-        mechanism: "{{ .Values.kafka.sasl.mechanism }}"
-        username:  "{{ .Values.kafka.sasl.username }}"
-        password:  "${KAFKA_SASL_PASSWORD}"
-      {{- end }}
-      {{- if .Values.kafka.tls.enabled }}
-      tls:
-        enabled:      true
-        ca_cert_path: /etc/kafka-tls/ca.crt
-      {{- end }}
-
     s3:
       endpoint:   "{{ .Values.s3.endpoint }}"
       region:     "{{ .Values.s3.region }}"
@@ -99,10 +83,6 @@ data:
               {{- end }}
             {{- end }}
           {{- end }}
-        {{- end }}
-        {{- if .inputTopic }}
-        input_topic:       {{ .inputTopic }}
-        result_topic:      {{ .resultTopic }}
         {{- end }}
         accepted_exts:     {{ .acceptedExts | toJson }}
         max_file_size_mb:  {{ .maxFileSizeMB }}

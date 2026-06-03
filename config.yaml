@@ -25,11 +25,6 @@ server:
   # Leave empty to apply only the "*" fallback (no per-type differentiation).
   user_type_header: "${USER_TYPE_HEADER:-}"
 
-kafka:
-  brokers:
-    - "${KAFKA_BROKERS:-kafka:9092}"
-  consumer_group: "kevent-gateway"
-
 s3:
   # Standard S3-compatible object storage — configured here for Scaleway.
   # Endpoint format (Scaleway): https://s3.<region>.scw.cloud
@@ -113,8 +108,8 @@ metrics:
 #                  all paths are indexed for sync routing; the first is used for async
 #   inference_url: base URL of the backend — original request path is appended at runtime
 #
-# Async mode (Kafka):
-#   input_topic / result_topic / accepted_exts / max_file_size_mb
+# Async mode (Redis queue):
+#   accepted_exts / max_file_size_mb
 #   operation:     (form field) optional operation name for async submission
 #                  required when the model has multiple operations
 # ─────────────────────────────────────────────────────────────────────────────
@@ -129,9 +124,6 @@ services:
       translation:
         - "/v1/audio/translations"
     inference_url: "${TRANSCRIPTION_WHISPER_LARGE_V3_URL:-http://kevent-transcription-predictor.default.svc.cluster.local}"
-    # Async / Kafka — topics named after the model
-    input_topic: jobs.whisper-large-v3.input
-    result_topic: jobs.whisper-large-v3.results
     accepted_exts: [".mp3", ".wav", ".m4a", ".ogg", ".flac"]
     max_file_size_mb: 500
 
@@ -149,9 +141,6 @@ services:
         - "/v1/ocr"
         - "/v1/vision/ocr"
     inference_url: "${OCR_LLAVA_URL:-http://kevent-ocr-predictor.default.svc.cluster.local}"
-    # Async / Kafka — topics named after the model
-    input_topic: jobs.llava-v1.6-mistral-7b.input
-    result_topic: jobs.llava-v1.6-mistral-7b.results
     accepted_exts: [".pdf", ".jpg", ".jpeg", ".png", ".tiff", ".bmp"]
     max_file_size_mb: 50
 

@@ -50,13 +50,6 @@ spec:
                 secretKeyRef:
                   name: {{ include "kevent-gateway.s3SecretName" . }}
                   key: S3_SECRET_KEY
-            {{- if .Values.kafka.sasl.enabled }}
-            - name: KAFKA_SASL_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "kevent-gateway.kafkaSecretName" . }}
-                  key: {{ default "KAFKA_SASL_PASSWORD" .Values.kafka.sasl.secretKey }}
-            {{- end }}
             {{- if or .Values.encryption.key .Values.encryption.existingSecret }}
             - name: ENCRYPTION_KEY
               valueFrom:
@@ -71,11 +64,6 @@ spec:
             - name: config
               mountPath: /etc/kevent
               readOnly: true
-            {{- if .Values.kafka.tls.enabled }}
-            - name: kafka-tls
-              mountPath: /etc/kafka-tls
-              readOnly: true
-            {{- end }}
           livenessProbe:
             httpGet:
               path: /health
@@ -109,11 +97,6 @@ spec:
         - name: config
           configMap:
             name: {{ include "kevent-gateway.configMapName" . }}
-        {{- if .Values.kafka.tls.enabled }}
-        - name: kafka-tls
-          secret:
-            secretName: {{ .Values.kafka.tls.existingCACertSecret }}
-        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
