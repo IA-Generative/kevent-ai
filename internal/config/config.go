@@ -178,6 +178,15 @@ type ServiceConfig struct {
 	Backends []BackendConfig `yaml:"backends"`
 	AcceptedExts  []string `yaml:"accepted_exts"`
 	MaxFileSizeMB int64    `yaml:"max_file_size_mb"`
+	// AsyncWorkers is the number of goroutines processing async jobs for this model.
+	// Defaults to 1 when AcceptedExts is non-empty. 0 disables async processing.
+	AsyncWorkers int `yaml:"async_workers"`
+	// MaxConcurrentSync limits the number of simultaneous sync proxy calls for this model.
+	// 0 (default) means no limit. When exceeded, the handler returns 503.
+	MaxConcurrentSync int `yaml:"max_concurrent_sync"`
+	// InferenceExtraFields are static form fields appended to every async multipart
+	// inference request (e.g. response_format: json). Per-job Params take precedence.
+	InferenceExtraFields map[string]string `yaml:"inference_extra_fields"`
 	// SwaggerURL is an optional URL to an OpenAPI JSON spec for this service.
 	// Fetched once at startup; served at GET /swagger/{type}/{model}.
 	// Failures are logged as warnings and do not block startup.

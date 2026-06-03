@@ -333,6 +333,30 @@ func (r *RedisClient) UpdateJobResult(ctx context.Context, jobID string, status 
 	return nil
 }
 
+// PopJob atomically moves a job ID from relay:{model}:pending to
+// relay:{model}:processing using BLMOVE (blocks until a job is available
+// or the context is cancelled).
+func (r *RedisClient) PopJob(ctx context.Context, modelName string) (string, error) {
+	pending := "relay:" + modelName + ":pending"
+	processing := "relay:" + modelName + ":processing"
+	val, err := r.client.BLMove(ctx, pending, processing, "LEFT", "RIGHT", 0).Result()
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		return "", fmt.Errorf("blmove %s: %w", pending, err)
+	}
+	return val, nil
+}
+
+// DoneJob removes a job ID from relay:{model}:processing after completion.
+func (r *RedisClient) DoneJob(ctx context.Context, jobID, modelName string) error {
+	if err := r.client.LRem(ctx, "relay:"+modelName+":processing", 1, jobID).Err(); err != nil {
+		return fmt.Errorf("lrem processing %s: %w", jobID, err)
+	}
+	return nil
+}
+
 // MarkJobCancelled marks a job as cancelled regardless of its current state
 // (pending or processing) and signals the relay to stop inference if running.
 // The job record is kept in Redis until the GC TTL expires — it is NOT deleted.

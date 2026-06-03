@@ -15,9 +15,10 @@ import (
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"kevent/gateway/internal/asyncworker"
 	"kevent/gateway/internal/cache"
+	"kevent/gateway/internal/concurrency"
 	"kevent/gateway/internal/config"
-	"kevent/gateway/internal/consumer"
 	"kevent/gateway/internal/handler"
 	"kevent/gateway/internal/llmproxy"
 	"kevent/gateway/internal/llmproxy/provider"
@@ -96,7 +97,8 @@ func buildRouter(
 	r.Post("/-/jobs/purge", jobHandler.AdminPurge)
 
 	if reg.HasSyncServices() {
-		syncHandler := handler.NewSyncHandler(reg, cfg.Server.ConsumerHeader, rl, llmHandler)
+		syncHandler := handler.NewSyncHandler(reg, cfg.Server.ConsumerHeader, rl, llmHandler).
+			WithSemaphore(concurrency.NewModelSemaphore(reg))
 		r.Get("/v1/models", handler.ListModels(reg))
 		// Register each configured path exactly. Chi handles {model} parameter
 		// patterns natively. Single-segment paths (e.g. /rerank) are reachable
@@ -159,7 +161,7 @@ func main() {
 		slog.Info("rate limiting enabled", "services", len(cfg.RateLimits))
 	}
 
-	manager := consumer.NewManager(redisClient, s3Client, cfg.Lifecycle.PersistsResult)
+	asyncManager := asyncworker.New(initialRegistry, redisClient, s3Client, cfg.Lifecycle.PersistsResult)
 
 	// ── LLM proxy ─────────────────────────────────────────────────────────────
 	providerRegistry := provider.NewRegistry()
@@ -200,7 +202,7 @@ func main() {
 
 		// Update infrastructure state that survives across reloads.
 		redisClient.UpdateLifecycle(newCfg.Lifecycle)
-		manager.UpdatePersistsResult(newCfg.Lifecycle.PersistsResult)
+		asyncManager.UpdatePersistsResult(newCfg.Lifecycle.PersistsResult)
 		gcEnabled.Store(newCfg.Lifecycle.GC.Enabled)
 		if iv := newCfg.Lifecycle.GC.IntervalDuration(); iv > 0 {
 			gcInterval.Store(int64(iv))
@@ -222,7 +224,6 @@ func main() {
 
 		newRouter := buildRouter(newCfg, newReg, s3Client, redisClient, logger, reloadFn, rl, llmHandler)
 		holder.p.Store(newRouter)
-		manager.Reconcile(newReg)
 		slog.Info("config reloaded", "types", newReg.Types())
 		return nil
 	}
@@ -231,7 +232,7 @@ func main() {
 	initialRouter := buildRouter(cfg, initialRegistry, s3Client, redisClient, logger, reloadFn, rl, llmHandler)
 	holder.p.Store(initialRouter)
 
-	// ── Result consumers ──────────────────────────────────────────────────────
+	// ── Async workers + context ───────────────────────────────────────────────
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -239,7 +240,7 @@ func main() {
 		gmetrics.StartTopNRefresh(ctx, redisClient.Raw(), cfg.Metrics.TopConsumers, 60*time.Second)
 	}
 
-	manager.Start(ctx, initialRegistry)
+	asyncManager.Start(ctx)
 
 	// ── Unified GC ────────────────────────────────────────────────────────────
 	// All atomics are read on each tick so hot-reload takes effect without restart.
@@ -321,9 +322,9 @@ func main() {
 	}
 
 	slog.Info("shutting down…")
-	cancel() // stop all consumers
+	cancel() // stop async workers and other background goroutines
 
-	manager.Wait() // drain in-flight webhook goroutines
+	asyncManager.Wait() // drain in-flight async jobs
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
