@@ -111,6 +111,10 @@ func main() {
 		slog.Info("relay shutting down (no job received)")
 		return
 	}
+	if errors.Is(err, queue.ErrNoJob) {
+		slog.Info("queue empty after timeout (job cancelled before pod started), exiting")
+		return
+	}
 	if err != nil {
 		slog.Error("queue pop error", "error", err)
 		os.Exit(1)
