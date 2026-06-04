@@ -4,7 +4,7 @@ API Gateway pour les services d'inférence KServe. Plusieurs modes de fonctionne
 
 | Mode | Endpoints | Quand l'utiliser |
 |---|---|---|
-| **Async** (Kafka) | `POST /jobs/{service_type}`, `GET /jobs/{service_type}/{id}`, `GET /jobs` | Fichiers lourds, traitements longs (>30s), besoin de webhook |
+| **Async** (Redis queue) | `POST /jobs/{service_type}`, `GET /jobs/{service_type}/{id}`, `GET /jobs` | Fichiers lourds, traitements longs (>30s), besoin de webhook |
 | **Sync direct proxy** | `POST /v1/*` (JSON ou multipart) | Intégration SDK OpenAI, services sans Kafka (reranker, embeddings…) |
 | **LLM proxy** | `POST /v1/*` JSON + `provider` configuré | Proxying LLM (OpenAI, Anthropic, Ollama, vLLM) avec cache et métriques |
 
@@ -20,18 +20,19 @@ POST /jobs/{service_type} (multipart: file, model, operation?)
   │
   ├─ 1. Fichier → S3
   ├─ 2. Job record → Redis (status: pending)
-  └─ 3. InputEvent → Kafka (jobs.<model>.input)
+  └─ 3. Job ID → Redis list relay:<model>:pending  (RPUSH)
                           │
                           ▼
-                    Relay Deployment (pull consumer, scalé par KEDA)
+                    Relay Deployment (un job par cycle de vie du pod)
                                               │
+                                              ├─ BLMOVE relay:<model>:pending → relay:<model>:processing
                                               ├─ Download fichier S3
                                               ├─ POST multipart → modèle GPU (127.0.0.1:9000/<inference_url>)
                                               ├─ Upload result.json → S3
-                                              └─ ResultEvent → Kafka (jobs.<model>.results)
+                                              └─ PUBLISH jobs:<model>:completed  (Redis pub/sub)
                                                                     │
                                               ┌─────────────────────┘
-                                              │  (consumer interne gateway)
+                                              │  (consumer.Manager interne gateway)
                                               ▼
                                        Redis mis à jour (status: completed/failed)
                                        + Webhook POST si callback_url fourni
@@ -43,7 +44,7 @@ GET /jobs/{service_type}/{id}  →  { status, result (inline JSON) }
 
 ### Mode sync (proxy OpenAI-compatible)
 
-**Direct proxy** (requête `application/json` ou `multipart/form-data`, service sans topics Kafka) :
+**Direct proxy** (requête `application/json` ou `multipart/form-data`) :
 ```
 Client  POST /v1/*
   │
@@ -80,8 +81,7 @@ Gateway — LLM proxy
 
 | Composant | Rôle | Requis |
 |---|---|---|
-| **Kafka** | Bus d'événements (mode async) — port 9093, SASL_SSL + SCRAM-SHA-512 | Seulement si des services configurent `input_topic` |
-| **Redis** | État des jobs (TTL configurable) | Toujours |
+| **Redis** | État des jobs, queue relay, pub/sub completion, cache LLM, rate limiting | Toujours |
 | **S3** | Stockage fichiers d'entrée et résultats | Toujours |
 
 ---
@@ -91,7 +91,7 @@ Gateway — LLM proxy
 ### Prérequis
 
 - Go 1.23+
-- Kafka (SASL_SSL), Redis et un bucket S3-compatible accessibles
+- Redis et un bucket S3-compatible accessibles
 
 ### Build
 
@@ -113,7 +113,6 @@ docker build -t kevent-gateway .
 docker run \
   -e S3_ACCESS_KEY=... \
   -e S3_SECRET_KEY=... \
-  -e KAFKA_BROKERS=kafka:9093 \
   -e REDIS_ADDR=redis:6379 \
   -p 8080:8080 \
   kevent-gateway
@@ -143,19 +142,6 @@ server:
   # user_type_header: header HTTP pour le type d'utilisateur (ex: "X-User-Type" → "sa" | "user").
   # Utilisé pour le rate limiting et le labelling des métriques LLM.
   user_type_header: "${USER_TYPE_HEADER:-}"
-
-kafka:
-  # Optionnel si aucun service ne configure de topic Kafka.
-  brokers:
-    - "kafka:9093"
-  consumer_group: "kevent-gateway"
-  sasl:
-    mechanism: "SCRAM-SHA-512"   # PLAIN | SCRAM-SHA-256 | SCRAM-SHA-512
-    username:  "kevent-gateway"
-    password:  "${KAFKA_SASL_PASSWORD}"
-  tls:
-    enabled:      true
-    ca_cert_path: "/etc/kafka-tls/ca.crt"
 
 s3:
   endpoint: "https://s3.fr-par.scw.cloud"
@@ -202,8 +188,6 @@ services:
       translation:
         - "/v1/audio/translations"
     inference_url: "http://kevent-transcription-predictor.default.svc.cluster.local"
-    input_topic: jobs.whisper-large-v3.input
-    result_topic: jobs.whisper-large-v3.results
     accepted_exts: [".mp3", ".wav", ".m4a", ".ogg", ".flac"]
     max_file_size_mb: 500
 
@@ -215,13 +199,10 @@ services:
         - "/v1/ocr"
         - "/v1/vision/ocr"    # alias — toutes les paths d'une opération sont indexées
     inference_url: "http://kevent-ocr-predictor.default.svc.cluster.local"
-    input_topic: jobs.deepseek-ocr.input
-    result_topic: jobs.deepseek-ocr.results
     accepted_exts: [".pdf", ".jpg", ".jpeg", ".png", ".tiff", ".bmp"]
     max_file_size_mb: 50
 
-  # Service sync-direct uniquement — pas de Kafka, pas de S3 pour ce service.
-  # POST /v1/* → proxy direct vers inference_url.
+  # Service sync-direct uniquement — POST /v1/* → proxy direct vers inference_url.
   # POST /jobs/{service_type} → 405 Method Not Allowed.
   - type: reranker
     model: "bge-reranker-v2-m3"
@@ -229,7 +210,7 @@ services:
       rerank:
         - "/rerank"
     inference_url: "http://kevent-reranker-predictor.default.svc.cluster.local"
-    # Pas de input_topic / result_topic → sync-direct uniquement
+    # Pas de async (pas de relay queue) → sync-direct uniquement
 
   # LLM proxy — openai, anthropic, ollama ou passthrough (vLLM…)
   # Les requêtes JSON POST /v1/* passent par le proxy LLM (cache, métriques, traduction).
@@ -473,7 +454,7 @@ services:
       rerank:
         - "/rerank"
     inference_url: "http://kevent-reranker-predictor.default.svc.cluster.local"
-    # Pas de input_topic / result_topic → sync-direct uniquement
+    # Pas de async (pas de relay queue) → sync-direct uniquement
     # POST /jobs/reranker → 405  |  POST /rerank → proxy direct
 ```
 

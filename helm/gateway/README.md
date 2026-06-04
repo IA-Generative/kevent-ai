@@ -1,14 +1,14 @@
 # kevent-gateway
 
-Helm chart for the **kevent** API gateway — accepts file uploads, enqueues them as Kafka jobs, and exposes sync (OpenAI-compatible) and async endpoints for AI inference services running on Knative/KServe.
+Helm chart for the **kevent** API gateway — accepts file uploads, pushes async jobs to a Redis queue consumed by relay sidecars, and exposes sync (OpenAI-compatible) endpoints for AI inference services.
 
 ## Prerequisites
 
 - Kubernetes ≥ 1.25
 - Helm ≥ 3.10
 - Redis-HA instance (included as subchart)
-- Knative Serving + KServe for the inference backends
-- Kafka cluster (Strimzi recommended) — **only required if services use Kafka topics** (async or sync-over-Kafka mode)
+- S3-compatible bucket (Scaleway Object Storage, AWS S3, MinIO…)
+- Relay sidecar container deployed alongside each inference pod (see `relay/`)
 
 ## Installation
 
@@ -33,16 +33,15 @@ helm upgrade --install kevent-gateway ./helm/gateway -f values.yaml
 
 ```
 Client
-  │  POST /jobs/{service_type}        (async — Kafka)
-  │  POST /v1/audio/transcriptions    (sync-over-Kafka or direct proxy)
-  │  POST /rerank                  (sync direct proxy — no Kafka)
+  │  POST /jobs/{service_type}        (async — Redis queue)
+  │  POST /v1/*                       (sync direct proxy or LLM proxy)
   ▼
 Gateway (:8080)
   ├── S3 — upload/download
-  ├── Redis — job state (TTL 72 h)
-  └── Kafka — InputEvent → jobs.<model>.input   [only if service has Kafka topics]
-                    └── Relay sidecar (inside InferenceService pod)
-                              └── ResultEvent → jobs.<model>.results → Gateway → Redis/Webhook
+  ├── Redis — job state + relay queue (relay:<model>:pending) + pub/sub completion
+  └── Relay sidecar (inside inference pod)
+            ├── BLMOVE relay:<model>:pending → processes job
+            └── PUBLISH jobs:<model>:completed → Gateway → Redis update + Webhook
 ```
 
 ## Configuration
@@ -76,21 +75,6 @@ Two options — choose one:
 | `s3.secretKey` | **Option A** — secret key |
 | `s3.existingSecret` | **Option B** — name of an existing Secret containing `S3_ACCESS_KEY` and `S3_SECRET_KEY` |
 
-### Kafka
-
-Kafka is optional when all configured services are sync-direct (no `inputTopic` / `resultTopic`). The gateway skips producer and consumer initialisation in that case.
-
-| Parameter | Description | Default |
-|---|---|---|
-| `kafka.brokers` | Bootstrap brokers (required if any service uses Kafka topics) | `kafka:9092` |
-| `kafka.sasl.enabled` | Enable SASL authentication | `false` |
-| `kafka.sasl.mechanism` | SASL mechanism | `SCRAM-SHA-512` |
-| `kafka.sasl.username` | SASL username | `kevent-gateway` |
-| `kafka.sasl.password` | **Option A** — SASL password (chart creates a Secret) | `""` |
-| `kafka.sasl.existingSecret` | **Option B** — existing Secret with key `KAFKA_SASL_PASSWORD` | `""` |
-| `kafka.tls.enabled` | Enable TLS | `false` |
-| `kafka.tls.existingCACertSecret` | Secret containing `ca.crt` (Strimzi: `kafka-cluster-ca-cert`) | `kafka-cluster-ca-cert` |
-
 ### At-rest encryption (S3)
 
 Files are encrypted with AES-256-GCM before upload and decrypted on download. The same key must be configured in all relay sidecars (`ENCRYPTION_KEY` env var).
@@ -110,9 +94,9 @@ Each entry in `services` registers one inference model with the gateway. Three o
 
 | Mode | Required fields | Behaviour |
 |---|---|---|
-| **Async (Kafka)** | `inputTopic`, `resultTopic` | `POST /jobs/{type}` enqueues to Kafka; `GET /jobs/{type}/{id}` polls result |
-| **Sync-over-Kafka** | `inputTopic`, `resultTopic`, `syncTopic` | `POST /v1/*` multipart → priority Kafka topic, result streamed back |
-| **Sync direct proxy** | none (no topics) | `POST /v1/*` → proxied directly to `inferenceURL`; `POST /jobs/{type}` → 405 |
+| **Async** | `inferenceURL` (or `backends`) | `POST /jobs/{type}` pushes to Redis relay queue; relay processes and publishes completion; `GET /jobs/{type}/{id}` polls result |
+| **Sync direct proxy** | `inferenceURL` (or `backends`) | `POST /v1/*` → proxied directly to inference backend; `POST /jobs/{type}` → 405 |
+| **LLM proxy** | `provider`, `inferenceURL` (or `backends`) | `POST /v1/*` JSON → proxy with cache, metrics, provider translation |
 
 ```yaml
 services:
@@ -126,20 +110,17 @@ services:
       translation:
         - "/v1/audio/translations"
     inferenceURL: "http://kevent-transcription-predictor.default.svc.cluster.local"
-    inputTopic: "jobs.whisper-large-v3.input"
-    resultTopic: "jobs.whisper-large-v3.results"
-    syncTopic: "jobs.whisper-large-v3.sync"   # enables sync-over-Kafka for multipart POST /v1/*
     acceptedExts: [".mp3", ".wav", ".m4a", ".ogg", ".flac"]
     maxFileSizeMB: 500
 
-  # Sync-direct only: no Kafka, POST /v1/* proxied directly
+  # Sync-direct only: POST /v1/* proxied directly to inferenceURL
   - type: reranker
     model: "bge-reranker-v2-m3"
     operations:
       rerank:
         - "/rerank"
     inferenceURL: "http://kevent-reranker-predictor.default.svc.cluster.local"
-    # No inputTopic / resultTopic → sync-direct mode only
+    # No relay queue — sync-direct mode only
 ```
 
 **Field reference:**
@@ -152,9 +133,6 @@ services:
 | `operations` | Map of `operationName → [url-paths]`. All paths are indexed for sync routing. The first path of the selected operation is forwarded in async InputEvents. |
 | `inferenceURL` | Base URL of the Knative InferenceService predictor (cluster-local). The original request path is appended at runtime. Single-backend legacy — use `backends` for multi-backend. |
 | `backends` | List of backends with weighted routing. Takes precedence over `inferenceURL`. See below. |
-| `inputTopic` | Kafka topic for async input events. Absent = no async support for this service. |
-| `resultTopic` | Kafka topic for result events. Must be set if `inputTopic` is set (and vice versa). |
-| `syncTopic` | Priority Kafka topic for sync-over-Kafka (`POST /v1/*` multipart). Optional. |
 | `acceptedExts` | Allowed file extensions (e.g. `[".mp3", ".wav"]`). Empty or absent = all extensions accepted. |
 | `maxFileSizeMB` | Maximum upload size in MB. `0` or absent = 100 MB default. |
 | `inferenceHeaders` | HTTP headers injected on every request to the backend (sync-direct and LLM proxy). Values support `${VAR}` env expansion. |
@@ -316,7 +294,7 @@ GET /jobs/{service_type}/{id}
   Note: result S3 file is deleted after this call — subsequent calls return 404.
 ```
 
-> `POST /jobs/{service_type}` returns **405** for sync-direct only services (no `inputTopic` configured).
+> `POST /jobs/{service_type}` returns **405** for services without a relay queue (sync-direct only).
 
 ### Sync (OpenAI-compatible)
 
@@ -324,9 +302,7 @@ GET /jobs/{service_type}/{id}
 POST /v1/<operation-path>
   Body: same as OpenAI API; "model" field selects the backend
   Routing:
-    multipart + syncTopic configured → sync-over-Kafka (priority, keep-alive)
-    multipart + no syncTopic         → direct proxy to inferenceURL
-    application/json                 → direct proxy to inferenceURL
+    any content-type → direct proxy to inferenceURL (or selected backend)
 ```
 
 ### Other endpoints
@@ -449,7 +425,7 @@ The generated secret (`kevent-gateway` in `infra-kafka`) must be copied to the g
 ### 0.3.x → 0.5.x
 
 - `config.existingConfigMap` option added — reference an external ConfigMap instead of letting the chart create one
-- Services without `inputTopic`/`resultTopic` are now valid (sync-direct only mode); `kafka.brokers` is no longer required when no service uses Kafka topics
+- Services without relay queue are valid (sync-direct only mode)
 - `acceptedExts` empty = all extensions accepted (previously would reject all files)
 - `maxFileSizeMB: 0` or absent = 100 MB default (previously 0 meant no limit)
 
@@ -458,7 +434,7 @@ The generated secret (`kevent-gateway` in `infra-kafka`) must be copied to the g
 - `swaggerHeaders` field added per service — optional HTTP headers for authenticated `swaggerURL` fetching
 - `extraEnvVars` added — inject arbitrary env vars (e.g. secrets) into the gateway container
 - `configReloader` section added — optional `configmap-reload` sidecar for automatic hot reload on ConfigMap update
-- `POST /-/reload` endpoint: reloads services, Swagger specs, OpenAPI spec, and Kafka consumers at runtime
+- `POST /-/reload` endpoint: reloads services, Swagger specs, OpenAPI spec at runtime
 
 ### 0.5.15 → 0.7.0
 
