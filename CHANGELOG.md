@@ -16,6 +16,28 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Gateway
 
+### [v0.14.0] — 2026-06-04
+
+#### Changed
+
+- **Kafka removed entirely** (`internal/kafka/` deleted, `kafka-go` dropped): the gateway no longer publishes `InputEvent` to Kafka. Jobs are now pushed directly to the relay Redis queue (`relay:<model>:pending` via `RPUSH` inside `SaveJob`).
+- **Redis-based completion notifications**: a new `internal/consumer` package replaces the Kafka `ConsumerManager`. A `Subscriber` listens on `jobs:<model>:completed` Redis pub/sub channels; a `WebhookSender` delivers results to `callback_url` with 3-attempt exponential backoff (2 s → 4 s → 8 s).
+- **Sync client disconnect propagation**: cancelling the HTTP client during a sync request now cancels the in-flight inference call. Cancelled jobs are kept in Redis (status `cancelled`) for GC instead of being deleted immediately.
+- **Distributed sync semaphore** via Redis — replaces the previous in-process atomic counter.
+
+#### Added
+
+- `job_ttl.cancelled` config field — dedicated TTL for cancelled jobs (default falls back to `global`).
+
+#### Removed
+
+- All Kafka config fields (`kafka.*`, `sync_topic`, `priority_topic`, `input_topic`, `result_topic`) and the `kafka-go` dependency.
+- Kafka Secret, env vars, and TLS volume from the Helm chart (`helm/gateway/templates/`).
+- `async_workers`, `cold_start_time`, `async_inference_url` config fields (async dispatch is now handled by the relay).
+- Prometheus counters tied to Kafka publish operations.
+
+---
+
 ### [v0.13.0] — 2026-06-01
 
 #### Removed
