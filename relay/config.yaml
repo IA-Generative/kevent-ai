@@ -1,19 +1,9 @@
-service:
-  # Topic where result events are published. Must match the gateway's result_topic
-  # for this model (e.g. jobs.whisper-large-v3.results).
-  result_topic: "${RESULT_TOPIC}"
+model: "${RELAY_MODEL}"   # e.g. "whisper-diarization"
 
-kafka:
-  brokers: ["${KAFKA_BROKERS:-kafka:9092}"]
-  sasl:
-    mechanism: "${KAFKA_SASL_MECHANISM:-}"
-    username:  "${KAFKA_SASL_USERNAME:-}"
-    password:  "${KAFKA_SASL_PASSWORD:-}"
-  tls:
-    enabled:      ${KAFKA_TLS_ENABLED:-false}
-    ca_cert_path: "${KAFKA_CA_CERT_PATH:-}"
-  input_topic:    "${KAFKA_INPUT_TOPIC}"     # e.g. jobs.whisper-large-v3.input
-  consumer_group: "${KAFKA_CONSUMER_GROUP}"  # e.g. inference-whisper-large-v3
+redis:
+  addr:     "${REDIS_ADDR}"
+  password: "${REDIS_PASSWORD:-}"
+  db:       0
 
 encryption:
   # Must match the key configured on the gateway.
@@ -28,8 +18,8 @@ s3:
 
 # Inference service endpoint. For Job deployments, set INFERENCE_BASE_URL to the InferenceService cluster URL.
 # INFERENCE_PORT is the port of the model server in the pod.
-# The OpenAI path (e.g. /v1/audio/transcriptions) is provided per-event by the
-# gateway (InputEvent.inference_url) and appended at runtime:
+# The OpenAI path (e.g. /v1/audio/transcriptions) is provided per-job by the
+# gateway (Job.inference_url) and appended at runtime:
 #   final URL = base_url + inference_url
 #
 # extra_fields: optional form fields added to every multipart request.
@@ -45,4 +35,3 @@ inference:
     response_format: "json"
     # language: "fr"
     # prompt: "Extract all text visible in this document."
-

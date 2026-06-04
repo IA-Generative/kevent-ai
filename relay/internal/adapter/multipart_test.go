@@ -31,37 +31,33 @@ func callInput() CallInput {
 	}
 }
 
-// TestCall_ParentContextCancelled_DoesNotAbortInference verifies that cancelling
-// the Knative request context (simulating timeoutSeconds) does NOT abort an
-// in-flight inference call. Only http.Client.Timeout governs the deadline.
-func TestCall_ParentContextCancelled_DoesNotAbortInference(t *testing.T) {
+// TestCall_ContextCancelled_AbortsInference verifies that cancelling the context
+// (e.g. via a gateway DELETE request) aborts the in-flight inference HTTP call.
+func TestCall_ContextCancelled_AbortsInference(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Consume the body so the client's pipe-writer goroutine can finish.
 		_, _ = io.ReadAll(r.Body)
-		wg.Done()      // signal that inference has been reached
-		time.Sleep(50 * time.Millisecond) // simulate slow inference
+		wg.Done()                         // signal that inference has been reached
+		time.Sleep(200 * time.Millisecond) // simulate slow inference
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(w, `{"result":"ok"}`)
 	}))
 	defer backend.Close()
 
-	a := newTestAdapter(backend.URL, 5*time.Second) // generous client timeout
+	a := newTestAdapter(backend.URL, 5*time.Second)
 
-	// Simulate Knative cancelling the request context (e.g. timeoutSeconds=300).
 	ctx, cancel := context.WithCancel(context.Background())
-
 	go func() {
-		wg.Wait()   // wait until backend has received the request
-		cancel()    // then cancel the parent context — as Knative would
+		wg.Wait() // wait until backend received the request
+		cancel()  // then cancel — simulating gateway DELETE signal
 	}()
 
 	_, err := a.Call(ctx, callInput())
-	if err != nil {
-		t.Errorf("inference should succeed despite parent context cancellation, got: %v", err)
+	if err == nil {
+		t.Error("expected error when context is cancelled mid-inference, got nil")
 	}
 }
 

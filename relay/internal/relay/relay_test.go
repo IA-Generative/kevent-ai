@@ -49,13 +49,20 @@ func (a *mockAdapter) Call(_ context.Context, _ adapter.CallInput) ([]byte, erro
 	return a.result, a.err
 }
 
-type mockPublisher struct {
-	published []*model.ResultEvent
-	err       error
+type publishCall struct {
+	jobID     string
+	status    model.JobStatus
+	resultRef string
+	errMsg    string
 }
 
-func (p *mockPublisher) PublishResultEvent(_ context.Context, _ string, event *model.ResultEvent) error {
-	p.published = append(p.published, event)
+type mockPublisher struct {
+	calls []publishCall
+	err   error
+}
+
+func (p *mockPublisher) PublishResult(_ context.Context, jobID string, status model.JobStatus, resultRef, errMsg string) error {
+	p.calls = append(p.calls, publishCall{jobID, status, resultRef, errMsg})
 	return p.err
 }
 
@@ -111,16 +118,15 @@ func (m *mockS3PutCounter) DeleteObject(_ context.Context, key string) error {
 
 func newTestProcessor(s3 objectStore, adp adapter.Adapter, pub eventPublisher) *Processor {
 	return &Processor{
-		adapter:     adp,
-		s3:          s3,
-		publisher:   pub,
-		resultTopic: "results",
+		adapter:   adp,
+		s3:        s3,
+		publisher: pub,
 	}
 }
 
-func testEvent() *model.InputEvent {
-	return &model.InputEvent{
-		JobID:        "job-1",
+func testJob() *model.Job {
+	return &model.Job{
+		ID:           "job-1",
 		ServiceType:  "transcription",
 		Model:        "whisper-large-v3",
 		InputRef:     "job-1/input.wav",
@@ -128,34 +134,10 @@ func testEvent() *model.InputEvent {
 	}
 }
 
-// ── ParseInputEvent tests ─────────────────────────────────────────────────────
-
-func TestParseInputEvent_Raw(t *testing.T) {
-	data := []byte(`{"job_id":"abc","service_type":"transcription","model":"whisper-large-v3","input_ref":"abc/input.wav","created_at":"2026-01-01T00:00:00Z"}`)
-	event, err := ParseInputEvent(data)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if event.JobID != "abc" {
-		t.Errorf("expected job_id abc, got %q", event.JobID)
-	}
-}
-
-func TestParseInputEvent_StructuredCloudEvent(t *testing.T) {
-	data := []byte(`{"specversion":"1.0","type":"dev.knative.kafka.event","source":"/kafkasource","id":"123","data":{"job_id":"abc","service_type":"transcription","model":"whisper-large-v3","input_ref":"abc/input.wav","created_at":"2026-01-01T00:00:00Z"}}`)
-	event, err := ParseInputEvent(data)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if event.JobID != "abc" {
-		t.Errorf("expected job_id abc, got %q", event.JobID)
-	}
-}
-
 // ── process() unit tests ──────────────────────────────────────────────────────
 
 // TestProcess_S3NotFound_PublishesFailureAndReturnsNil verifies that a permanent
-// S3 NoSuchKey error is treated as a permanent failure: a ResultEvent with status
+// S3 NoSuchKey error is treated as a permanent failure: a result with status
 // "failed" is published, nil is returned (no retry), and the input
 // file is NOT re-queued.
 func TestProcess_S3NotFound_PublishesFailureAndReturnsNil(t *testing.T) {
@@ -164,94 +146,94 @@ func TestProcess_S3NotFound_PublishesFailureAndReturnsNil(t *testing.T) {
 	pub := &mockPublisher{}
 
 	p := newTestProcessor(s3, &mockAdapter{}, pub)
-	err := p.process(context.Background(), testEvent())
+	err := p.process(context.Background(), testJob())
 	if err != nil {
 		t.Fatalf("expected nil (permanent failure, no retry), got: %v", err)
 	}
-	if len(pub.published) != 1 {
-		t.Fatalf("expected 1 published event, got %d", len(pub.published))
+	if len(pub.calls) != 1 {
+		t.Fatalf("expected 1 published result, got %d", len(pub.calls))
 	}
-	if pub.published[0].Status != model.JobStatusFailed {
-		t.Errorf("expected status failed, got %q", pub.published[0].Status)
+	if pub.calls[0].status != model.JobStatusFailed {
+		t.Errorf("expected status failed, got %q", pub.calls[0].status)
 	}
-	if !strings.Contains(pub.published[0].Error, "input file not found") {
-		t.Errorf("expected 'input file not found' in error, got %q", pub.published[0].Error)
+	if !strings.Contains(pub.calls[0].errMsg, "input file not found") {
+		t.Errorf("expected 'input file not found' in errMsg, got %q", pub.calls[0].errMsg)
 	}
 }
 
 // TestProcess_S3TransientError_ReturnsError verifies that a non-404 S3 error is
-// treated as transient: process() returns an error so the Job exits 1.
+// treated as transient: process() returns an error so the pod exits 1.
 func TestProcess_S3TransientError_ReturnsError(t *testing.T) {
 	s3 := &mockS3{getErr: errors.New("connection refused")}
 	pub := &mockPublisher{}
 
 	p := newTestProcessor(s3, &mockAdapter{}, pub)
-	err := p.process(context.Background(), testEvent())
+	err := p.process(context.Background(), testJob())
 	if err == nil {
 		t.Fatal("expected error for transient S3 failure, got nil")
 	}
-	if len(pub.published) != 0 {
-		t.Errorf("expected no published events for transient error, got %d", len(pub.published))
+	if len(pub.calls) != 0 {
+		t.Errorf("expected no published results for transient error, got %d", len(pub.calls))
 	}
 }
 
 // TestProcess_InferenceFailure_PublishesFailureAndReturnsNil verifies that when
-// the adapter returns an error (model/file invalid), a failure ResultEvent is
-// published and nil is returned so the Job does not get retried.
+// the adapter returns an error (model/file invalid), a failure result is
+// published and nil is returned so the job does not get retried.
 func TestProcess_InferenceFailure_PublishesFailureAndReturnsNil(t *testing.T) {
 	s3 := &mockS3{getBody: "audio data"}
 	adp := &mockAdapter{err: errors.New("unsupported format")}
 	pub := &mockPublisher{}
 
 	p := newTestProcessor(s3, adp, pub)
-	err := p.process(context.Background(), testEvent())
+	err := p.process(context.Background(), testJob())
 	if err != nil {
 		t.Fatalf("expected nil (business failure, no retry), got: %v", err)
 	}
-	if len(pub.published) != 1 {
-		t.Fatalf("expected 1 published event, got %d", len(pub.published))
+	if len(pub.calls) != 1 {
+		t.Fatalf("expected 1 published result, got %d", len(pub.calls))
 	}
-	if pub.published[0].Status != model.JobStatusFailed {
-		t.Errorf("expected status failed, got %q", pub.published[0].Status)
+	if pub.calls[0].status != model.JobStatusFailed {
+		t.Errorf("expected status failed, got %q", pub.calls[0].status)
 	}
 }
 
-// TestProcess_Success_PublishesCompletedEvent verifies the happy path: a completed
-// ResultEvent is published with a non-empty result_ref and the input file is deleted.
-func TestProcess_Success_PublishesCompletedEvent(t *testing.T) {
+// TestProcess_Success_PublishesCompletedResult verifies the happy path: a completed
+// result is published with a non-empty result_ref and the input file is deleted.
+func TestProcess_Success_PublishesCompletedResult(t *testing.T) {
 	s3 := &mockS3{getBody: "audio data"}
 	adp := &mockAdapter{result: []byte(`{"text":"hello"}`)}
 	pub := &mockPublisher{}
 
 	p := newTestProcessor(s3, adp, pub)
-	err := p.process(context.Background(), testEvent())
+	err := p.process(context.Background(), testJob())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(pub.published) != 1 {
-		t.Fatalf("expected 1 published event, got %d", len(pub.published))
+	if len(pub.calls) != 1 {
+		t.Fatalf("expected 1 published result, got %d", len(pub.calls))
 	}
-	if pub.published[0].Status != model.JobStatusCompleted {
-		t.Errorf("expected status completed, got %q", pub.published[0].Status)
+	if pub.calls[0].status != model.JobStatusCompleted {
+		t.Errorf("expected status completed, got %q", pub.calls[0].status)
 	}
-	if pub.published[0].ResultRef == "" {
-		t.Error("expected non-empty result_ref")
+	if pub.calls[0].resultRef == "" {
+		t.Error("expected non-empty resultRef")
 	}
-	if len(s3.deleted) != 1 || s3.deleted[0] != testEvent().InputRef {
-		t.Errorf("expected input file %q to be deleted, got %v", testEvent().InputRef, s3.deleted)
+	if len(s3.deleted) != 1 || s3.deleted[0] != testJob().InputRef {
+		t.Errorf("expected input file %q to be deleted, got %v", testJob().InputRef, s3.deleted)
 	}
 }
 
 // TestProcess_S3NotFound_PublishFails_ReturnsError verifies that if publishing
-// the permanent-failure event itself fails (Kafka down), process() returns an
-// error so the Job is retried later.
+// the permanent-failure result itself fails (Redis down), process() returns an
+// error so the job can be retried later.
 func TestProcess_S3NotFound_PublishFails_ReturnsError(t *testing.T) {
 	noSuchKey := &s3types.NoSuchKey{}
 	s3 := &mockS3{getErr: fmt.Errorf("getting S3 object: %w", noSuchKey)}
-	pub := &mockPublisher{err: errors.New("kafka unavailable")}
+	pub := &mockPublisher{err: errors.New("redis unavailable")}
 
 	p := newTestProcessor(s3, &mockAdapter{}, pub)
-	err := p.process(context.Background(), testEvent())
+	err := p.process(context.Background(), testJob())
 	if err == nil {
 		t.Fatal("expected error when publish of permanent failure fails, got nil")
 	}
@@ -259,8 +241,8 @@ func TestProcess_S3NotFound_PublishFails_ReturnsError(t *testing.T) {
 
 // TestProcess_InferenceTransientError_RetriesOnce verifies that a transient
 // inference failure (e.g. network glitch, endpoint restart) triggers one
-// immediate retry. The second attempt succeeds and a completed ResultEvent is
-// published — no retry needed.
+// immediate retry. The second attempt succeeds and a completed result is
+// published — no further retry needed.
 func TestProcess_InferenceTransientError_RetriesOnce(t *testing.T) {
 	s3 := &mockS3{getBody: "audio data"}
 	calls := 0
@@ -274,15 +256,15 @@ func TestProcess_InferenceTransientError_RetriesOnce(t *testing.T) {
 	pub := &mockPublisher{}
 
 	p := newTestProcessor(s3, adp, pub)
-	err := p.process(context.Background(), testEvent())
+	err := p.process(context.Background(), testJob())
 	if err != nil {
 		t.Fatalf("expected nil after successful retry, got: %v", err)
 	}
 	if calls != 2 {
 		t.Errorf("expected 2 adapter calls (1 fail + 1 retry), got %d", calls)
 	}
-	if len(pub.published) != 1 || pub.published[0].Status != model.JobStatusCompleted {
-		t.Errorf("expected one completed ResultEvent, got %v", pub.published)
+	if len(pub.calls) != 1 || pub.calls[0].status != model.JobStatusCompleted {
+		t.Errorf("expected one completed result, got %v", pub.calls)
 	}
 }
 
@@ -300,15 +282,15 @@ func TestProcess_InferencePermanentError_NoRetry(t *testing.T) {
 	pub := &mockPublisher{}
 
 	p := newTestProcessor(s3, &mockAdapter{}, pub)
-	err := p.process(context.Background(), testEvent())
+	err := p.process(context.Background(), testJob())
 	if err != nil {
 		t.Fatalf("expected nil for not-found (permanent failure), got: %v", err)
 	}
 	if calls != 1 {
 		t.Errorf("expected exactly 1 GetObject call (no retry on not-found), got %d", calls)
 	}
-	if len(pub.published) != 1 || pub.published[0].Status != model.JobStatusFailed {
-		t.Errorf("expected one failed ResultEvent, got %v", pub.published)
+	if len(pub.calls) != 1 || pub.calls[0].status != model.JobStatusFailed {
+		t.Errorf("expected one failed result, got %v", pub.calls)
 	}
 }
 
@@ -330,14 +312,14 @@ func TestProcess_S3PutTransientError_RetriesOnce(t *testing.T) {
 	pub := &mockPublisher{}
 
 	p := newTestProcessor(s3, adp, pub)
-	err := p.process(context.Background(), testEvent())
+	err := p.process(context.Background(), testJob())
 	if err != nil {
 		t.Fatalf("expected nil after successful s3 put retry, got: %v", err)
 	}
 	if putCalls != 2 {
 		t.Errorf("expected 2 PutObject calls (1 fail + 1 retry), got %d", putCalls)
 	}
-	if len(pub.published) != 1 || pub.published[0].Status != model.JobStatusCompleted {
-		t.Errorf("expected one completed ResultEvent, got %v", pub.published)
+	if len(pub.calls) != 1 || pub.calls[0].status != model.JobStatusCompleted {
+		t.Errorf("expected one completed result, got %v", pub.calls)
 	}
 }

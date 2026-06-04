@@ -11,7 +11,6 @@ import (
 
 type Config struct {
 	Server     ServerConfig                          `yaml:"server"`
-	Kafka      KafkaConfig                           `yaml:"kafka"`
 	S3         S3Config                              `yaml:"s3"`
 	Redis      RedisConfig                           `yaml:"redis"`
 	Lifecycle  LifecycleConfig                       `yaml:"lifecycle"`
@@ -65,10 +64,7 @@ type ServerConfig struct {
 	IdleTimeout  time.Duration `yaml:"idle_timeout"`
 	// PriorityHeader is the HTTP header injected by APISIX on SA consumer
 	// requests to signal high-priority processing. When a request carries this
-	// header and the service has a priority_topic configured, the job is
-	// published to that topic instead of input_topic. A dedicated KafkaSource
-	// routes this topic to a JobSink, processing these jobs independently of
-	// the async queue.
+	// header, the job mode is set to "async-priority" for relay-side prioritisation.
 	PriorityHeader string `yaml:"priority_header"`
 	// ConsumerHeader is the HTTP header used to identify the API consumer.
 	// Typically set by APISIX after authentication (e.g. "X-Consumer-Username").
@@ -87,24 +83,6 @@ type ServerConfig struct {
 	// "*" is the fallback when the header is absent. Leave empty to disable
 	// per-type differentiation.
 	UserTypeHeader string `yaml:"user_type_header"`
-}
-
-type KafkaConfig struct {
-	Brokers       []string   `yaml:"brokers"`
-	ConsumerGroup string     `yaml:"consumer_group"`
-	SASL          SASLConfig `yaml:"sasl"`
-	TLS           TLSConfig  `yaml:"tls"`
-}
-
-type SASLConfig struct {
-	Mechanism string `yaml:"mechanism"` // PLAIN | SCRAM-SHA-256 | SCRAM-SHA-512
-	Username  string `yaml:"username"`
-	Password  string `yaml:"password"`
-}
-
-type TLSConfig struct {
-	Enabled    bool   `yaml:"enabled"`
-	CACertPath string `yaml:"ca_cert_path"`
 }
 
 // S3Config holds S3-compatible object storage credentials and settings.
@@ -140,10 +118,11 @@ type LifecycleConfig struct {
 // Per-status values take precedence over Global; 0 means no TTL configured.
 // When all values are 0, an internal 2h safety net applies for orphaned records.
 type JobTTLConfig struct {
-	Global  string `yaml:"global"`  // fallback for all statuses
+	Global    string `yaml:"global"`    // fallback for all statuses
 	Completed string `yaml:"completed"` // override for completed jobs
-	Pending string `yaml:"pending"` // override for pending/processing jobs
-	Failed  string `yaml:"failed"`  // override for failed jobs
+	Pending   string `yaml:"pending"`   // override for pending/processing jobs
+	Failed    string `yaml:"failed"`    // override for failed jobs
+	Cancelled string `yaml:"cancelled"` // override for cancelled jobs
 }
 
 func parseDuration(s string) time.Duration {
@@ -157,6 +136,7 @@ func (j JobTTLConfig) GlobalDuration() time.Duration    { return parseDuration(j
 func (j JobTTLConfig) PendingDuration() time.Duration   { return parseDuration(j.Pending) }
 func (j JobTTLConfig) CompletedDuration() time.Duration { return parseDuration(j.Completed) }
 func (j JobTTLConfig) FailedDuration() time.Duration    { return parseDuration(j.Failed) }
+func (j JobTTLConfig) CancelledDuration() time.Duration { return parseDuration(j.Cancelled) }
 
 // GCConfig controls the unified background garbage collector.
 type GCConfig struct {
@@ -198,16 +178,11 @@ type ServiceConfig struct {
 	// weight > 0 = eligible for primary selection (weighted random).
 	// weight = 0 = fallback-only (tried only if all weight>0 backends fail).
 	Backends []BackendConfig `yaml:"backends"`
-	// Async / Kafka mode.
-	InputTopic string `yaml:"input_topic"`
-	ResultTopic string `yaml:"result_topic"`
-	// PriorityTopic is the Kafka topic for high-priority async jobs (e.g. SA accounts).
-	// When set and the server.priority_header is present on the request, the job is
-	// published here instead of input_topic. A dedicated KafkaSource routes this topic
-	// to POST /sync on the relay, which defers normal async jobs for its duration.
-	PriorityTopic string `yaml:"priority_topic"`
 	AcceptedExts  []string `yaml:"accepted_exts"`
 	MaxFileSizeMB int64    `yaml:"max_file_size_mb"`
+	// MaxConcurrentSync limits the number of simultaneous sync proxy calls for this model.
+	// 0 (default) means no limit. When exceeded, the handler returns 503.
+	MaxConcurrentSync int `yaml:"max_concurrent_sync"`
 	// SwaggerURL is an optional URL to an OpenAPI JSON spec for this service.
 	// Fetched once at startup; served at GET /swagger/{type}/{model}.
 	// Failures are logged as warnings and do not block startup.
@@ -242,7 +217,7 @@ type ServiceConfig struct {
 	ResponseCacheTTL int `yaml:"response_cache_ttl"`
 	// Retries is the number of additional full backend-cycle attempts when all
 	// backends return a network error or a 5xx response. 0 = no retry (default).
-	// Only applies to the sync-direct proxy path (not Kafka-based flows).
+	// Only applies to the sync-direct proxy path (not async relay flows).
 	// A 500ms exponential backoff is applied between each cycle.
 	Retries    int              `yaml:"retries"`
 	Guardrails GuardrailsConfig `yaml:"guardrails"`
@@ -306,9 +281,6 @@ func (c *Config) applyDefaults() {
 	if c.Server.IdleTimeout == 0 {
 		c.Server.IdleTimeout = 120 * time.Second
 	}
-	if c.Kafka.ConsumerGroup == "" {
-		c.Kafka.ConsumerGroup = "kevent-gateway"
-	}
 	if c.Redis.PendingMaxAge == "" {
 		c.Redis.PendingMaxAge = "2h"
 	}
@@ -341,21 +313,10 @@ func (c *Config) validate() error {
 	if len(c.Services) == 0 {
 		return fmt.Errorf("at least one service must be configured")
 	}
-	needsKafka := false
 	for _, svc := range c.Services {
 		if svc.Type == "" {
 			return fmt.Errorf("a service has an empty type")
 		}
-		// input_topic and result_topic must both be set or both be empty.
-		if (svc.InputTopic == "") != (svc.ResultTopic == "") {
-			return fmt.Errorf("service %q: input_topic and result_topic must both be set or both be empty", svc.Type)
-		}
-		if svc.InputTopic != "" || svc.ResultTopic != "" || svc.PriorityTopic != "" {
-			needsKafka = true
-		}
-	}
-	if needsKafka && len(c.Kafka.Brokers) == 0 {
-		return fmt.Errorf("kafka.brokers is required when services use Kafka topics")
 	}
 	validProviders := map[string]bool{"openai": true, "anthropic": true, "ollama": true, "passthrough": true}
 	for _, svc := range c.Services {

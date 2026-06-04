@@ -16,9 +16,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"kevent/gateway/internal/cache"
+	"kevent/gateway/internal/consumer"
+	"kevent/gateway/internal/concurrency"
 	"kevent/gateway/internal/config"
 	"kevent/gateway/internal/handler"
-	"kevent/gateway/internal/kafka"
 	"kevent/gateway/internal/llmproxy"
 	"kevent/gateway/internal/llmproxy/provider"
 	gmetrics "kevent/gateway/internal/metrics"
@@ -67,13 +68,12 @@ func buildRouter(
 	reg *service.Registry,
 	s3Client *storage.S3Client,
 	redisClient *storage.RedisClient,
-	producer *kafka.Producer,
 	logger *slog.Logger,
 	reloadFn func() error,
 	rl ratelimit.Checker,
 	llmHandler *llmproxy.Handler,
 ) *chi.Mux {
-	jobHandler := handler.NewJobHandler(reg, s3Client, redisClient, producer, cfg.Server.PriorityHeader, cfg.Server.ConsumerHeader, rl, cfg.Lifecycle)
+	jobHandler := handler.NewJobHandler(reg, s3Client, redisClient, cfg.Server.PriorityHeader, cfg.Server.ConsumerHeader, rl, cfg.Lifecycle)
 
 	r := chi.NewRouter()
 	r.Use(chimw.RequestID)
@@ -97,7 +97,8 @@ func buildRouter(
 	r.Post("/-/jobs/purge", jobHandler.AdminPurge)
 
 	if reg.HasSyncServices() {
-		syncHandler := handler.NewSyncHandler(reg, cfg.Server.ConsumerHeader, rl, llmHandler)
+		syncHandler := handler.NewSyncHandler(reg, cfg.Server.ConsumerHeader, rl, llmHandler).
+			WithSemaphore(concurrency.NewModelSemaphore(reg, redisClient.Raw()))
 		r.Get("/v1/models", handler.ListModels(reg))
 		// Register each configured path exactly. Chi handles {model} parameter
 		// patterns natively. Single-segment paths (e.g. /rerank) are reachable
@@ -160,26 +161,7 @@ func main() {
 		slog.Info("rate limiting enabled", "services", len(cfg.RateLimits))
 	}
 
-	// Kafka producer and consumer manager are created whenever brokers are
-	// configured, regardless of the initial service count. This allows hot
-	// reload to add or remove Kafka services without restarting the pod.
-	var producer *kafka.Producer
-	var consumerManager *kafka.ConsumerManager
-	if len(cfg.Kafka.Brokers) > 0 {
-		producer, err = kafka.NewProducer(cfg.Kafka)
-		if err != nil {
-			slog.Error("failed to initialise Kafka producer", "error", err)
-			os.Exit(1)
-		}
-		defer producer.Close()
-
-		consumerManager, err = kafka.NewConsumerManager(cfg.Kafka, redisClient, s3Client, logger, cfg.Lifecycle.PersistsResult)
-		if err != nil {
-			slog.Error("failed to initialise Kafka consumer manager", "error", err)
-			os.Exit(1)
-		}
-		slog.Info("Kafka initialised", "brokers", cfg.Kafka.Brokers)
-	}
+	manager := consumer.NewManager(redisClient, s3Client, cfg.Lifecycle.PersistsResult)
 
 	// ── LLM proxy ─────────────────────────────────────────────────────────────
 	providerRegistry := provider.NewRegistry()
@@ -198,8 +180,8 @@ func main() {
 
 	// ── Hot-reload ────────────────────────────────────────────────────────────
 	// reloadFn re-reads the config file, atomically swaps the active router,
-	// and reconciles Kafka consumers (stopping removed, starting added topics).
-	// Infrastructure (S3, Redis, Kafka connection) is not re-initialised.
+	// and reconciles Redis subscribers (stopping removed, starting added models).
+	// Infrastructure (S3, Redis) is not re-initialised.
 	holder := &routerHolder{}
 
 	// GC atomics — declared before reloadFn so the reload path can update them.
@@ -220,9 +202,8 @@ func main() {
 
 		// Update infrastructure state that survives across reloads.
 		redisClient.UpdateLifecycle(newCfg.Lifecycle)
-		if consumerManager != nil {
-			consumerManager.UpdatePersistsResult(newCfg.Lifecycle.PersistsResult)
-		}
+		manager.UpdatePersistsResult(newCfg.Lifecycle.PersistsResult)
+		manager.Reconcile(newReg)
 		gcEnabled.Store(newCfg.Lifecycle.GC.Enabled)
 		if iv := newCfg.Lifecycle.GC.IntervalDuration(); iv > 0 {
 			gcInterval.Store(int64(iv))
@@ -242,20 +223,17 @@ func main() {
 			newCfg.Server.UserTypeHeader, consumerTracker,
 			llmproxy.AuditConfig{Enabled: newCfg.AuditLog.Enabled, Prompt: newCfg.AuditLog.Prompt})
 
-		newRouter := buildRouter(newCfg, newReg, s3Client, redisClient, producer, logger, reloadFn, rl, llmHandler)
+		newRouter := buildRouter(newCfg, newReg, s3Client, redisClient, logger, reloadFn, rl, llmHandler)
 		holder.p.Store(newRouter)
-		if consumerManager != nil {
-			consumerManager.Reconcile(newReg)
-		}
 		slog.Info("config reloaded", "types", newReg.Types())
 		return nil
 	}
 
 	// ── HTTP router ───────────────────────────────────────────────────────────
-	initialRouter := buildRouter(cfg, initialRegistry, s3Client, redisClient, producer, logger, reloadFn, rl, llmHandler)
+	initialRouter := buildRouter(cfg, initialRegistry, s3Client, redisClient, logger, reloadFn, rl, llmHandler)
 	holder.p.Store(initialRouter)
 
-	// ── Result consumers ──────────────────────────────────────────────────────
+	// ── Async workers + context ───────────────────────────────────────────────
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -263,9 +241,7 @@ func main() {
 		gmetrics.StartTopNRefresh(ctx, redisClient.Raw(), cfg.Metrics.TopConsumers, 60*time.Second)
 	}
 
-	if consumerManager != nil {
-		consumerManager.Start(ctx, initialRegistry)
-	}
+	manager.Start(ctx, initialRegistry)
 
 	// ── Unified GC ────────────────────────────────────────────────────────────
 	// All atomics are read on each tick so hot-reload takes effect without restart.
@@ -347,11 +323,9 @@ func main() {
 	}
 
 	slog.Info("shutting down…")
-	cancel() // stop all Kafka consumers
+	cancel() // stop async workers and other background goroutines
 
-	if consumerManager != nil {
-		consumerManager.Wait() // drain in-flight consumers and webhooks
-	}
+	manager.Wait() // drain in-flight webhook goroutines
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()

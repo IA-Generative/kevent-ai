@@ -6,13 +6,9 @@ import (
 	"time"
 )
 
-func TestValidate_MissingInputTopic(t *testing.T) {
+func TestValidate_MissingRedisAddr(t *testing.T) {
 	cfg := &Config{
-		Service: ServiceConfig{ResultTopic: "jobs.x.results"},
-		Kafka: KafkaConfig{
-			Brokers:       []string{"kafka:9092"},
-			ConsumerGroup: "g",
-		},
+		Model: "whisper-large-v3",
 		S3: S3Config{
 			Endpoint: "https://s3.example.com",
 			Region:   "fr-par",
@@ -20,18 +16,14 @@ func TestValidate_MissingInputTopic(t *testing.T) {
 		},
 		Inference: InferenceConfig{BaseURL: "http://127.0.0.1:9000"},
 	}
-	if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "input_topic") {
-		t.Errorf("expected input_topic validation error, got %v", err)
+	if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "redis.addr") {
+		t.Errorf("expected redis.addr validation error, got %v", err)
 	}
 }
 
-func TestValidate_MissingConsumerGroup(t *testing.T) {
+func TestValidate_MissingModel(t *testing.T) {
 	cfg := &Config{
-		Service: ServiceConfig{ResultTopic: "jobs.x.results"},
-		Kafka: KafkaConfig{
-			Brokers:    []string{"kafka:9092"},
-			InputTopic: "jobs.x.input",
-		},
+		Redis: RedisConfig{Addr: "redis:6379"},
 		S3: S3Config{
 			Endpoint: "https://s3.example.com",
 			Region:   "fr-par",
@@ -39,8 +31,23 @@ func TestValidate_MissingConsumerGroup(t *testing.T) {
 		},
 		Inference: InferenceConfig{BaseURL: "http://127.0.0.1:9000"},
 	}
-	if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "consumer_group") {
-		t.Errorf("expected consumer_group validation error, got %v", err)
+	if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "model") {
+		t.Errorf("expected model validation error, got %v", err)
+	}
+}
+
+func TestValidate_MissingS3Endpoint(t *testing.T) {
+	cfg := &Config{
+		Model: "whisper-large-v3",
+		Redis: RedisConfig{Addr: "redis:6379"},
+		S3: S3Config{
+			Region: "fr-par",
+			Bucket: "bucket",
+		},
+		Inference: InferenceConfig{BaseURL: "http://127.0.0.1:9000"},
+	}
+	if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "s3.endpoint") {
+		t.Errorf("expected s3.endpoint validation error, got %v", err)
 	}
 }
 
