@@ -16,7 +16,6 @@ import (
 
 	"kevent/relay/internal/adapter"
 	"kevent/relay/internal/config"
-	"kevent/relay/internal/lifecycle"
 	"kevent/relay/internal/model"
 	"kevent/relay/internal/queue"
 	relayproc "kevent/relay/internal/relay"
@@ -91,8 +90,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	annotator := lifecycle.New()
-	proc := relayproc.New(adp, s3Client, pub, annotator)
+	proc := relayproc.New(adp, s3Client, pub)
 
 	inferenceHealthURL := strings.TrimRight(cfg.Inference.BaseURL, "/") + "/health"
 	healthClient := &http.Client{Timeout: cfg.Inference.HealthCheckTimeoutDuration()}
