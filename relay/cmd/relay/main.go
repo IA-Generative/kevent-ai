@@ -106,7 +106,7 @@ func main() {
 	// Pop blocks until a job is available or the context is cancelled (SIGTERM).
 	// One pod = one job: after processing, the pod exits so KEDA creates a fresh
 	// pod for the next job rather than reusing this one.
-	jobID, err := q.Pop(ctx)
+	jobID, err := q.Pop(ctx, cfg.QueuePopTimeoutDuration())
 	if errors.Is(err, context.Canceled) {
 		slog.Info("relay shutting down (no job received)")
 		return

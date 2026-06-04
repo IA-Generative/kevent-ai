@@ -16,11 +16,6 @@ import (
 // The pod was created by KEDA before the job was cancelled — caller should exit 0.
 var ErrNoJob = errors.New("no job available")
 
-// popTimeout is how long Pop waits before returning ErrNoJob.
-// KEDA creates one pod per queue item; if nothing arrives within this window
-// the item was cancelled before the pod started.
-const popTimeout = 30 * time.Second
-
 // Queue manages the relay-side Redis lists for one model.
 type Queue struct {
 	rdb     *redis.Client
@@ -39,12 +34,13 @@ func New(rdb *redis.Client, model string) *Queue {
 	}
 }
 
-// Pop waits up to popTimeout for a job ID in the pending list, then atomically
+// Pop waits up to timeout for a job ID in the pending list, then atomically
 // moves it to the processing list using BLMOVE.
-// Returns ErrNoJob if the queue stays empty for the full timeout (job was
-// cancelled before the pod started). Returns context.Canceled on SIGTERM.
-func (q *Queue) Pop(ctx context.Context) (string, error) {
-	val, err := q.rdb.BLMove(ctx, q.pending, q.proc, "LEFT", "RIGHT", popTimeout).Result()
+// timeout=0 blocks indefinitely. Returns ErrNoJob when the timeout expires
+// with an empty queue (job was cancelled before the pod started).
+// Returns context.Canceled on SIGTERM.
+func (q *Queue) Pop(ctx context.Context, timeout time.Duration) (string, error) {
+	val, err := q.rdb.BLMove(ctx, q.pending, q.proc, "LEFT", "RIGHT", timeout).Result()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
 			return "", ErrNoJob
