@@ -16,16 +16,17 @@ import (
 type Def struct {
 	Type          string
 	Model         string
-	InputTopic    string
-	ResultTopic   string
 	AcceptedExts  map[string]struct{} // empty = accept any extension
 	MaxFileSizeMB int64
+	// SupportsAsync is true when the service is configured for async file-upload jobs
+	// (i.e. AcceptedExts is explicitly set in the config).
+	SupportsAsync     bool
+	MaxConcurrentSync int // max simultaneous sync calls; 0 = unlimited
 
 	// Sync / OpenAI-compatible mode (optional).
 	InferenceURL     string              // primary backend URL (derived from Backends; kept for compatibility)
 	Backends         []Backend           // ordered list of backends; always non-empty when InferenceURL != ""
 	Operations       map[string][]string // operation name → URL paths (all indexed; first used for async)
-	PriorityTopic    string              // Kafka topic for high-priority async jobs (SA accounts)
 	InferenceHeaders map[string]string   // headers injected on every sync-direct proxy request to the backend
 	Provider         string
 	BackendModel     string        // real model name sent to backend; empty = use Model (the alias)
@@ -165,22 +166,21 @@ func NewRegistry(cfgs []config.ServiceConfig) *Registry {
 			primaryURL = backends[0].URL
 		}
 		def := &Def{
-			Type:             cfg.Type,
-			Model:            cfg.Model,
-			InputTopic:       cfg.InputTopic,
-			ResultTopic:      cfg.ResultTopic,
-			AcceptedExts:     exts,
-			MaxFileSizeMB:    cfg.MaxFileSizeMB,
-			InferenceURL:     primaryURL,
-			Backends:         backends,
-			Operations:       cfg.Operations,
-			PriorityTopic:    cfg.PriorityTopic,
-			InferenceHeaders: cfg.InferenceHeaders,
-			Provider:         cfg.Provider,
-			BackendModel:     cfg.BackendModel,
-			ResponseCacheTTL: time.Duration(cfg.ResponseCacheTTL) * time.Second,
-			Retries:          cfg.Retries,
-			GuardrailsPII:    cfg.Guardrails.PII,
+			Type:              cfg.Type,
+			Model:             cfg.Model,
+			AcceptedExts:      exts,
+			MaxFileSizeMB:     cfg.MaxFileSizeMB,
+			SupportsAsync:     len(cfg.AcceptedExts) > 0,
+			MaxConcurrentSync: cfg.MaxConcurrentSync,
+			InferenceURL:         primaryURL,
+			Backends:             backends,
+			Operations:           cfg.Operations,
+			InferenceHeaders:     cfg.InferenceHeaders,
+			Provider:             cfg.Provider,
+			BackendModel:         cfg.BackendModel,
+			ResponseCacheTTL:     time.Duration(cfg.ResponseCacheTTL) * time.Second,
+			Retries:              cfg.Retries,
+			GuardrailsPII:        cfg.Guardrails.PII,
 		}
 
 		if r.byTypeModel[cfg.Type] == nil {
@@ -507,30 +507,3 @@ func (r *Registry) All() []*Def {
 	return defs
 }
 
-// HasKafkaServices reports whether any service has Kafka topics configured
-// (input_topic, result_topic, or priority_topic). Used to conditionally initialise
-// the Kafka producer and consumer manager at startup.
-func (r *Registry) HasKafkaServices() bool {
-	for _, models := range r.byTypeModel {
-		for _, d := range models {
-			if d.InputTopic != "" || d.ResultTopic != "" || d.PriorityTopic != "" {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// KafkaServices returns service definitions that have a result topic configured.
-// Used by ConsumerManager to start one result consumer per service.
-func (r *Registry) KafkaServices() []*Def {
-	var defs []*Def
-	for _, models := range r.byTypeModel {
-		for _, d := range models {
-			if d.ResultTopic != "" {
-				defs = append(defs, d)
-			}
-		}
-	}
-	return defs
-}

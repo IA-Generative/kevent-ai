@@ -33,19 +33,6 @@ var (
 		Help: "Total number of S3 operation errors.",
 	}, []string{"operation"})
 
-	// KafkaPublishDuration measures Kafka WriteMessages latency per topic.
-	KafkaPublishDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "kevent_kafka_publish_duration_seconds",
-		Help:    "Kafka publish duration in seconds.",
-		Buckets: prometheus.DefBuckets,
-	}, []string{"topic"})
-
-	// KafkaPublishErrorsTotal counts Kafka publish failures per topic.
-	KafkaPublishErrorsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "kevent_kafka_publish_errors_total",
-		Help: "Total number of Kafka publish errors.",
-	}, []string{"topic"})
-
 	// RedisOperationDuration measures latency for each Redis operation.
 	RedisOperationDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "kevent_redis_operation_duration_seconds",
@@ -160,6 +147,11 @@ var (
 	AsyncJobsCancelledTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "kevent_async_jobs_cancelled_total",
 		Help: "Total async jobs cancelled by the client (DELETE /jobs/{type}/{id}).",
+	}, []string{"service_type", "model"})
+
+	AsyncJobsCancelledWhileProcessingTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "kevent_async_jobs_cancelled_while_processing_total",
+		Help: "Total async jobs cancelled while the relay was processing them (GPU interrupted).",
 	}, []string{"service_type", "model"})
 
 	AsyncJobsPurgedTotal = promauto.NewCounterVec(prometheus.CounterOpts{

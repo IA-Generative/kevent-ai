@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"kevent/gateway/internal/concurrency"
 	"kevent/gateway/internal/guardrails"
 	"kevent/gateway/internal/llmproxy"
 	"kevent/gateway/internal/metrics"
@@ -29,11 +30,12 @@ import (
 type SyncHandler struct {
 	registry       *service.Registry
 	httpClient     *http.Client
-	consumerHeader string            // HTTP header identifying the API consumer (e.g. "X-Consumer-Username")
-	rateLimiter    ratelimit.Checker // nil = no rate limiting
-	llm            *llmproxy.Handler // nil when no LLM services are configured
-	piiChecker     *guardrails.Checker // nil = PII scanning disabled globally
-	retryBackoff   time.Duration     // initial backoff between retry cycles; default 500ms
+	consumerHeader string                      // HTTP header identifying the API consumer (e.g. "X-Consumer-Username")
+	rateLimiter    ratelimit.Checker           // nil = no rate limiting
+	semaphore      *concurrency.ModelSemaphore // nil = no concurrency limit
+	llm            *llmproxy.Handler           // nil when no LLM services are configured
+	piiChecker     *guardrails.Checker         // nil = PII scanning disabled globally
+	retryBackoff   time.Duration               // initial backoff between retry cycles; default 500ms
 }
 
 func NewSyncHandler(
@@ -52,6 +54,12 @@ func NewSyncHandler(
 		httpClient:   &http.Client{Timeout: 15 * time.Minute},
 		retryBackoff: 500 * time.Millisecond,
 	}
+}
+
+// WithSemaphore sets the per-model concurrency limiter for sync calls.
+func (h *SyncHandler) WithSemaphore(s *concurrency.ModelSemaphore) *SyncHandler {
+	h.semaphore = s
+	return h
 }
 
 // WithRetryBackoff overrides the initial backoff between retry cycles.
@@ -112,6 +120,14 @@ func (h *SyncHandler) handleMultipart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if h.semaphore != nil {
+		if !h.semaphore.TryAcquire(def.Model) {
+			writeError(w, http.StatusServiceUnavailable, "model too busy, retry later")
+			return
+		}
+		defer h.semaphore.Release(def.Model)
+	}
+
 	bodyRC, contentType, err := reconstructMultipart(r)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to rebuild request: "+err.Error())
@@ -162,6 +178,14 @@ func (h *SyncHandler) handleJSON(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+	}
+
+	if h.semaphore != nil {
+		if !h.semaphore.TryAcquire(def.Model) {
+			writeError(w, http.StatusServiceUnavailable, "model too busy, retry later")
+			return
+		}
+		defer h.semaphore.Release(def.Model)
 	}
 
 	// JSON requests: route through LLM proxy if configured, else direct proxy.

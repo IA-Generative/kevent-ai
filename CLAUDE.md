@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository overview
 
-**kevent** is an AI inference job gateway for Kubernetes/Knative. It exposes an HTTP API that accepts file uploads, enqueues them as Kafka jobs, and returns results asynchronously. A relay sidecar runs inside each Knative InferenceService pod, consuming jobs from Kafka, calling the local inference model, and publishing results back.
+**kevent** is an AI inference job gateway for Kubernetes. It exposes an HTTP API that accepts file uploads, enqueues them as Kafka jobs, and returns results asynchronously. A relay Deployment runs alongside each inference pod, pulling jobs from Kafka, calling the local inference model, and publishing results back.
 
 Two independent Go modules (separate `go.mod`, separate Docker images):
 - **Gateway** — root module `kevent/gateway`, entry point `cmd/gateway/main.go`
@@ -59,7 +59,7 @@ Images:
 - Gateway:    `ghcr.io/ia-generative/kevent-ai/gateway:vX.Y.Z`
 - Relay: `ghcr.io/ia-generative/kevent-ai/relay:vX.Y.Z`
 
-Current tags: gateway `v0.10.0`, relay `v0.5.2`.
+Current tags: gateway `v0.13.0`, relay `v0.6.0`.
 
 ## Architecture
 
@@ -75,11 +75,9 @@ Gateway (:8080)
   ├── Save job record → Redis (TTL 72h)
   └── Publish InputEvent → Kafka jobs.<model>.input
                                     │
-                              KafkaSource async (Knative Eventing)
-                                    │  CloudEvent → POST /
+                        Relay Deployment (pull consumer)
+                             ├── FetchMessage from Kafka
                                     ▼
-                         Relay sidecar (:8080)
-                              ├── Check syncPriority flag — if 1, return 503 (KafkaSource retries)
                               ├── Download file from S3
                               ├── POST to local inference model (127.0.0.1:9000/<inference_url>)
                               ├── Upload result.json → S3
@@ -91,51 +89,18 @@ Gateway (:8080)
                                                               └── Trigger webhook (if callback_url set)
 ```
 
-**Sync-over-Kafka** (`POST /v1/*` multipart with `sync_topic` configured):
-```
-Client
-  │  POST /v1/audio/transcriptions (multipart, keep-alive)
-  ▼
-Gateway
-  ├── Upload file → S3
-  ├── Save job → Redis
-  ├── Subscribe Redis pub/sub job:<id>:done  ← before publishing
-  ├── Publish InputEvent → Kafka jobs.<model>.sync
-  └── Wait (Redis pub/sub) ──────────────────────────────────────────────┐
-                                    │                                    │
-                              KafkaSource sync (Knative Eventing)        │
-                                    │  CloudEvent → POST /sync           │
-                                    ▼                                    │
-                         Relay sidecar                                   │
-                              ├── Set syncPriority=1 (defers async jobs) │
-                              ├── Process job (S3 → inference → S3)      │
-                              ├── Publish ResultEvent → results topic     │
-                              └── Unset syncPriority=0                   │
-                                                    │                    │
-                                             ConsumerManager             │
-                                                    ├── Update Redis     │
-                                                    └── Notify pub/sub ──┘
-                                                                │
-Gateway continues:
-  ├── Fetch result from S3
-  ├── Return result in HTTP response (200)
-  └── Cleanup (delete S3 file + Redis job)
-```
-
-**Sync direct proxy** (`POST /v1/*` JSON, or multipart without `sync_topic`):
+**Sync direct proxy** (`POST /v1/*`):
 ```
 Gateway → HTTP proxy → InferenceService URL (inference_url in config)
 ```
 
 ### Sync (OpenAI-compatible) mode — routing summary
 
-| Request | `sync_topic` configured | Path |
-|---|---|---|
-| `multipart/form-data` | yes | Sync-over-Kafka (priority, keep-alive) |
-| `multipart/form-data` | no | Direct proxy to `inference_url` |
-| `application/json` | any | Direct proxy to `inference_url` |
+| Request | Path |
+|---|---|
+| Any `POST /v1/*` | Direct proxy to `inference_url` |
 
-Configured via `services[].sync_topic`, `services[].operations`, `services[].model`, `services[].inference_url` in `config.yaml`.
+Configured via `services[].operations`, `services[].model`, `services[].inference_url` in `config.yaml`.
 
 ### Service registry — key concepts
 
@@ -166,12 +131,6 @@ operations:
 - `GET /docs` — Swagger UI
 
 Version injected at build time: `go build -ldflags "-X main.version=v0.4.3" ./cmd/gateway`.
-
-### Priority mechanism
-
-When a sync job arrives at the relay via `POST /sync`, it sets `syncPriority = 1`. Concurrent async CloudEvents to `POST /` see this flag and return `503 Service Unavailable`. KafkaSource retries them after `backoffDelay` (configured on the async KafkaSource). Once the sync job finishes, the flag is cleared and async jobs proceed normally.
-
-This works across pod scale-out: each pod independently tracks its own sync job. No shared state across pods is needed — each pod that has a sync job defers its own async queue.
 
 ### Config loading
 
@@ -225,7 +184,7 @@ kubectl get secret kevent-relay-kafka -n default \
 
 ## Deployment
 
-Helm chart deploys the gateway with Redis-HA (HAProxy front-end). The relay runs as a sidecar in the `ServingRuntime` (KServe), not managed by Helm.
+Helm chart deploys the gateway with Redis-HA (HAProxy front-end). The relay runs as a standalone Deployment alongside the inference pod (see `k8s/deployment-transcription.yaml`), not managed by Helm.
 
 The Helm chart is published to GitHub Pages at `https://ia-generative.github.io/kevent-ai` (auto-updated on push to `main` when `helm/` changes). The `gh-pages` branch must exist in the repository.
 

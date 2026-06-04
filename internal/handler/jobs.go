@@ -28,17 +28,13 @@ type s3Store interface {
 	DeleteObject(ctx context.Context, key string) error
 }
 
-// eventProducer is the subset of kafka.Producer used by JobHandler.
-type eventProducer interface {
-	PublishInputEvent(ctx context.Context, topic string, event *model.InputEvent) error
-}
-
 // asyncJobStore is the subset of storage.RedisClient used by JobHandler.
 type asyncJobStore interface {
 	SaveJob(ctx context.Context, job *model.Job) error
 	GetJob(ctx context.Context, id string) (*model.Job, error)
 	DeleteJob(ctx context.Context, id string) error
 	UpdateJobResult(ctx context.Context, jobID string, status model.JobStatus, resultRef, errMsg string) error
+	MarkJobCancelled(ctx context.Context, jobID, modelName string) error
 	ListJobsByConsumer(ctx context.Context, consumer string, limit, offset int64) ([]*model.Job, int64, error)
 	GetQueuePosition(ctx context.Context, jobID, model string) (int64, bool, error)
 	ListStalePendingJobs(ctx context.Context, olderThan time.Duration) ([]*model.Job, error)
@@ -55,7 +51,6 @@ type JobHandler struct {
 	registry       *service.Registry
 	store          s3Store           // reuses the interface defined in sync.go
 	redis          asyncJobStore
-	producer       eventProducer     // reuses the interface defined in sync.go
 	priorityHeader string            // HTTP header that triggers high-priority routing (e.g. "X-Priority")
 	consumerHeader string            // HTTP header identifying the API consumer (e.g. "X-Consumer-Username")
 	rateLimiter    ratelimit.Checker // nil = no rate limiting
@@ -66,13 +61,12 @@ func NewJobHandler(
 	registry *service.Registry,
 	store s3Store,
 	redis asyncJobStore,
-	producer eventProducer,
 	priorityHeader string,
 	consumerHeader string,
 	rateLimiter ratelimit.Checker,
 	lifecycle config.LifecycleConfig,
 ) *JobHandler {
-	return &JobHandler{registry, store, redis, producer, priorityHeader, consumerHeader, rateLimiter, lifecycle}
+	return &JobHandler{registry, store, redis, priorityHeader, consumerHeader, rateLimiter, lifecycle}
 }
 
 // submitResponse is the 202 body returned after a successful job submission.
@@ -167,8 +161,8 @@ func (h *JobHandler) Submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Sync-direct services have no Kafka topics and cannot be used asynchronously.
-	if def.InputTopic == "" {
+	// Sync-direct services do not accept file uploads and cannot be used asynchronously.
+	if !def.SupportsAsync {
 		writeError(w, http.StatusMethodNotAllowed, fmt.Sprintf("service %q only supports sync requests (POST /v1/*)", def.Model))
 		return
 	}
@@ -223,6 +217,11 @@ func (h *JobHandler) Submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	mode := "async"
+	if h.priorityHeader != "" && r.Header.Get(h.priorityHeader) != "" {
+		mode = "async-priority"
+	}
+
 	now := time.Now().UTC()
 	job := &model.Job{
 		ID:           jobID,
@@ -230,51 +229,18 @@ func (h *JobHandler) Submit(w http.ResponseWriter, r *http.Request) {
 		Model:        def.Model,
 		Status:       model.JobStatusPending,
 		InputRef:     inputRef,
+		InferenceURL: inferenceURL,
+		Params:       params,
 		CallbackURL:  callbackURL,
 		ConsumerName: consumerName,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
 
-	// Step 2 — persist the job record in Redis.
+	// Step 2 — persist the job record in Redis (also enqueues to relay:<model>:pending).
 	if err := h.redis.SaveJob(r.Context(), job); err != nil {
 		slog.ErrorContext(r.Context(), "redis save failed", "job_id", jobID, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to save job")
-		return
-	}
-
-	// Step 3 — publish the input event to the model's Kafka topic.
-	// When the priority header is present and the service has a priority_topic,
-	// route to that topic so the relay processes it with elevated priority
-	// (processed via a dedicated KafkaSource → JobSink, independently of the async queue).
-
-	topic := def.InputTopic
-	mode := "async"
-	if h.priorityHeader != "" && r.Header.Get(h.priorityHeader) != "" && def.PriorityTopic != "" {
-		topic = def.PriorityTopic
-		mode = "async-priority"
-	}
-
-	event := &model.InputEvent{
-		JobID:        jobID,
-		ServiceType:  serviceType,
-		Model:        def.Model,
-		InputRef:     inputRef,
-		InferenceURL: inferenceURL,
-		Params:       params,
-		CreatedAt:    now,
-	}
-	if err := h.producer.PublishInputEvent(r.Context(), topic, event); err != nil {
-		slog.ErrorContext(r.Context(), "kafka publish failed", "job_id", jobID, "error", err)
-		// Mark the job as failed so the client can react instead of polling forever.
-		_ = h.redis.UpdateJobResult(r.Context(), jobID, model.JobStatusFailed, "", "failed to enqueue")
-		// Clean up the orphaned S3 input file — it will never be consumed.
-		go func() {
-			if derr := h.store.DeleteObject(context.Background(), inputRef); derr != nil {
-				slog.Error("failed to delete orphaned input after publish failure", "job_id", jobID, "error", derr)
-			}
-		}()
-		writeError(w, http.StatusInternalServerError, "failed to enqueue job, please retry")
 		return
 	}
 
@@ -284,7 +250,6 @@ func (h *JobHandler) Submit(w http.ResponseWriter, r *http.Request) {
 		"model", def.Model,
 		"file", header.Filename,
 		"mode", mode,
-		"topic", topic,
 	)
 
 	metrics.RequestsTotal.WithLabelValues(mode, serviceType, def.Model, "202").Inc()
@@ -491,29 +456,24 @@ func (h *JobHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if job.Status != model.JobStatusPending {
-		writeError(w, http.StatusConflict, fmt.Sprintf("job %q cannot be cancelled in state %q: only pending jobs can be cancelled", id, job.Status))
-		return
-	}
-
-	if err := h.redis.DeleteJob(r.Context(), id); err != nil {
-		slog.ErrorContext(r.Context(), "cancel: delete job failed", "job_id", id, "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to cancel job")
-		return
-	}
-
-	go func(inputRef, jobID string) {
-		if inputRef == "" {
+	switch job.Status {
+	case model.JobStatusPending, model.JobStatusProcessing:
+		if err := h.redis.MarkJobCancelled(r.Context(), id, job.Model); err != nil {
+			slog.ErrorContext(r.Context(), "cancel: failed", "job_id", id, "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to cancel job")
 			return
 		}
-		if err := h.store.DeleteObject(context.Background(), inputRef); err != nil {
-			slog.Error("cancel: failed to delete input file", "job_id", jobID, "input_ref", inputRef, "error", err)
+		if job.Status == model.JobStatusProcessing {
+			metrics.AsyncJobsCancelledWhileProcessingTotal.WithLabelValues(serviceType, job.Model).Inc()
 		}
-	}(job.InputRef, id)
+		metrics.AsyncJobsCancelledTotal.WithLabelValues(serviceType, job.Model).Inc()
+		slog.InfoContext(r.Context(), "job cancelled", "job_id", id, "service_type", serviceType, "prior_status", job.Status)
+		// Job record kept in Redis with status=cancelled; GC handles S3 + record cleanup.
+		w.WriteHeader(http.StatusAccepted)
 
-	metrics.AsyncJobsCancelledTotal.WithLabelValues(serviceType, job.Model).Inc()
-	slog.InfoContext(r.Context(), "job cancelled", "job_id", id, "service_type", serviceType, "prior_status", job.Status)
-	w.WriteHeader(http.StatusNoContent)
+	default:
+		writeError(w, http.StatusConflict, fmt.Sprintf("job %q cannot be cancelled in state %q", id, job.Status))
+	}
 }
 
 const defaultPurgeLimit = 500

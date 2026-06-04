@@ -9,17 +9,34 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Config holds all relay runtime configuration.
 type Config struct {
-	Service    ServiceConfig    `yaml:"service"`
-	Kafka      KafkaConfig      `yaml:"kafka"`
-	S3         S3Config         `yaml:"s3"`
-	Encryption EncryptionConfig `yaml:"encryption"`
-	Inference  InferenceConfig  `yaml:"inference"`
+	Model          string           `yaml:"model"`
+	Redis          RedisConfig      `yaml:"redis"`
+	S3             S3Config         `yaml:"s3"`
+	Encryption     EncryptionConfig `yaml:"encryption"`
+	Inference      InferenceConfig  `yaml:"inference"`
+	// QueuePopTimeout is how long Pop waits for a job before returning ErrNoJob.
+	// Use when a pod may start after its queue item was already cancelled.
+	// Defaults to 30s. Set to "0" to block indefinitely (legacy behaviour).
+	QueuePopTimeout string `yaml:"queue_pop_timeout"`
+}
+
+// QueuePopTimeoutDuration returns the configured queue pop timeout.
+// "0" or "0s" means block indefinitely. Defaults to 30s.
+func (c *Config) QueuePopTimeoutDuration() time.Duration {
+	if d, err := time.ParseDuration(c.QueuePopTimeout); err == nil {
+		if d <= 0 {
+			return 0
+		}
+		return d
+	}
+	return 30 * time.Second
 }
 
 // InferenceConfig holds the local inference endpoint configuration.
-// The base_url is combined with the OpenAI path supplied per-event
-// (InputEvent.InferenceURL) to build the actual request URL:
+// The base_url is combined with the OpenAI path supplied per-job
+// (Job.InferenceURL) to build the actual request URL:
 //
 //	base_url + inference_url  (e.g. "http://127.0.0.1:9000" + "/v1/audio/transcriptions")
 //
@@ -75,44 +92,19 @@ func (c InferenceConfig) HealthCheckTimeoutDuration() time.Duration {
 	return 2 * time.Second
 }
 
+// EncryptionConfig holds the AES key for S3 payload encryption.
 type EncryptionConfig struct {
 	Key string `yaml:"key"`
 }
 
-type ServiceConfig struct {
-	ResultTopic string `yaml:"result_topic"`
+// RedisConfig holds connection parameters for the relay's Redis instance.
+type RedisConfig struct {
+	Addr     string `yaml:"addr"`
+	Password string `yaml:"password"`
+	DB       int    `yaml:"db"`
 }
 
-// Type derives the service type from the result topic.
-// The expected format is "jobs.<type>.results" (e.g. "jobs.whisper.results" → "whisper").
-// Falls back to the full topic name if the format doesn't match.
-func (s ServiceConfig) Type() string {
-	parts := strings.SplitN(s.ResultTopic, ".", 3)
-	if len(parts) == 3 && parts[0] == "jobs" {
-		return parts[1]
-	}
-	return s.ResultTopic
-}
-
-type KafkaConfig struct {
-	Brokers       []string   `yaml:"brokers"`
-	SASL          SASLConfig `yaml:"sasl"`
-	TLS           TLSConfig  `yaml:"tls"`
-	InputTopic    string     `yaml:"input_topic"`
-	ConsumerGroup string     `yaml:"consumer_group"`
-}
-
-type SASLConfig struct {
-	Mechanism string `yaml:"mechanism"` // PLAIN | SCRAM-SHA-256 | SCRAM-SHA-512
-	Username  string `yaml:"username"`
-	Password  string `yaml:"password"`
-}
-
-type TLSConfig struct {
-	Enabled    bool   `yaml:"enabled"`
-	CACertPath string `yaml:"ca_cert_path"`
-}
-
+// S3Config holds MinIO/S3-compatible storage credentials.
 type S3Config struct {
 	Endpoint  string `yaml:"endpoint"`
 	Region    string `yaml:"region"`
@@ -155,17 +147,11 @@ func expandWithDefault(key string) string {
 }
 
 func (c *Config) validate() error {
-	if c.Service.ResultTopic == "" {
-		return fmt.Errorf("service.result_topic is required (set RESULT_TOPIC env var)")
+	if c.Redis.Addr == "" {
+		return fmt.Errorf("redis.addr is required")
 	}
-	if len(c.Kafka.Brokers) == 0 {
-		return fmt.Errorf("kafka.brokers is required")
-	}
-	if c.Kafka.InputTopic == "" {
-		return fmt.Errorf("kafka.input_topic is required (set KAFKA_INPUT_TOPIC env var)")
-	}
-	if c.Kafka.ConsumerGroup == "" {
-		return fmt.Errorf("kafka.consumer_group is required (set KAFKA_CONSUMER_GROUP env var)")
+	if c.Model == "" {
+		return fmt.Errorf("model is required")
 	}
 	if c.S3.Endpoint == "" {
 		return fmt.Errorf("s3.endpoint is required")

@@ -17,12 +17,10 @@ services:
       translation:
         - "/v1/audio/translations"
     inference_url: "http://..."        # backend base URL (path appended at runtime)
-    sync_topic: jobs.whisper.sync      # omit → use direct proxy for multipart
 
     # Async / Kafka
     input_topic: jobs.whisper.input
     result_topic: jobs.whisper.results
-    priority_topic: jobs.whisper.priority  # optional — SA/priority consumers
 
     # File validation
     accepted_exts: [".mp3", ".wav", ".m4a", ".ogg", ".flac"]
@@ -107,7 +105,7 @@ For sync-direct services whose backend requires authentication, add `inference_h
 Headers are injected on every outgoing request to the backend. Values support `${VAR}` expansion. Config headers override client headers with the same name.
 
 !!! note
-    `inference_headers` only applies to **sync-direct** proxy. Async and sync-over-Kafka jobs run via the relay sidecar (local `127.0.0.1:9000`) and are unaffected.
+    `inference_headers` only applies to **sync-direct** proxy and **LLM proxy**. Async jobs processed by the relay are unaffected.
 
 ## LLM proxy services
 

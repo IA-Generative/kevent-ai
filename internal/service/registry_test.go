@@ -16,8 +16,6 @@ func baseServiceConfig() config.ServiceConfig {
 			"translation":   {"/v1/audio/translations"},
 		},
 		InferenceURL:  "http://inference.svc.cluster.local",
-		InputTopic:    "jobs.whisper-large-v3.input",
-		ResultTopic:   "jobs.whisper-large-v3.results",
 		AcceptedExts:  []string{".mp3", ".wav"},
 		MaxFileSizeMB: 100,
 	}
@@ -81,8 +79,6 @@ func TestRegistry_MultipleServices(t *testing.T) {
 				"chat": {"/v1/chat/completions"},
 			},
 			InferenceURL: "http://ocr.svc.cluster.local",
-			InputTopic:   "jobs.llava.input",
-			ResultTopic:  "jobs.llava.results",
 		},
 	}
 	reg := service.NewRegistry(cfgs)
@@ -164,8 +160,6 @@ func TestSyncPathPrefixes(t *testing.T) {
 				"infer":         {"/v2/models/{model}/infer"},
 			},
 			InferenceURL: "http://inference.example.com",
-			InputTopic:   "jobs.whisper-large-v3.input",
-			ResultTopic:  "jobs.whisper-large-v3.results",
 		},
 	}
 	reg := service.NewRegistry(cfgs)
@@ -189,22 +183,18 @@ func TestSyncPathPrefixes(t *testing.T) {
 func TestRouteAsync_DefaultModel(t *testing.T) {
 	cfgs := []config.ServiceConfig{
 		{
-			Type:        "transcription",
-			Model:       "whisper-large-v3",
-			Default:     true,
-			Operations:  map[string][]string{"transcription": {"/v1/audio/transcriptions"}},
+			Type:         "transcription",
+			Model:        "whisper-large-v3",
+			Default:      true,
+			Operations:   map[string][]string{"transcription": {"/v1/audio/transcriptions"}},
 			InferenceURL: "http://whisper-large.svc",
-			InputTopic:  "jobs.whisper-large-v3.input",
-			ResultTopic: "jobs.whisper-large-v3.results",
 		},
 		{
-			Type:        "transcription",
-			Model:       "whisper-turbo",
-			Default:     false,
-			Operations:  map[string][]string{"transcription": {"/v1/audio/transcriptions"}},
+			Type:         "transcription",
+			Model:        "whisper-turbo",
+			Default:      false,
+			Operations:   map[string][]string{"transcription": {"/v1/audio/transcriptions"}},
 			InferenceURL: "http://whisper-turbo.svc",
-			InputTopic:  "jobs.whisper-turbo.input",
-			ResultTopic: "jobs.whisper-turbo.results",
 		},
 	}
 	reg := service.NewRegistry(cfgs)
@@ -233,14 +223,14 @@ func TestRouteAsync_DefaultModel(t *testing.T) {
 func TestRouteAsync_NoDefaultMultipleModels(t *testing.T) {
 	cfgs := []config.ServiceConfig{
 		{
-			Type: "transcription", Model: "whisper-large-v3",
+			Type:       "transcription",
+			Model:      "whisper-large-v3",
 			Operations: map[string][]string{"transcription": {"/v1/audio/transcriptions"}},
-			InputTopic: "j.input", ResultTopic: "j.results",
 		},
 		{
-			Type: "transcription", Model: "whisper-turbo",
+			Type:       "transcription",
+			Model:      "whisper-turbo",
 			Operations: map[string][]string{"transcription": {"/v1/audio/transcriptions"}},
-			InputTopic: "j2.input", ResultTopic: "j2.results",
 		},
 	}
 	reg := service.NewRegistry(cfgs)

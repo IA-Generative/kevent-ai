@@ -3,7 +3,7 @@ package relay
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -11,8 +11,6 @@ import (
 	"time"
 
 	"kevent/relay/internal/adapter"
-	"kevent/relay/internal/kafka"
-	"kevent/relay/internal/lifecycle"
 	"kevent/relay/internal/metrics"
 	"kevent/relay/internal/model"
 	"kevent/relay/internal/storage"
@@ -24,100 +22,55 @@ type objectStore interface {
 	DeleteObject(ctx context.Context, key string) error
 }
 
+// eventPublisher wraps the Redis result pipeline: UpdateJobResult + Publish + Done.
 type eventPublisher interface {
-	PublishResultEvent(ctx context.Context, topic string, event *model.ResultEvent) error
+	PublishResult(ctx context.Context, jobID string, status model.JobStatus, resultRef, errMsg string) error
 }
 
-// Processor runs the full processing pipeline for a single InputEvent pulled from Kafka.
+// Processor runs the full processing pipeline for a single Job pulled from the Redis queue.
 type Processor struct {
-	adapter     adapter.Adapter
-	s3          objectStore
-	publisher   eventPublisher
-	resultTopic string
-	annotator   *lifecycle.PodAnnotator
+	adapter   adapter.Adapter
+	s3        objectStore
+	publisher eventPublisher
 }
 
-func New(
-	adp adapter.Adapter,
-	s3 *storage.S3Client,
-	pub *kafka.Publisher,
-	resultTopic string,
-	annotator *lifecycle.PodAnnotator,
-) *Processor {
+// New creates a Processor. pub handles persisting the result and notifying the gateway.
+func New(adp adapter.Adapter, s3 *storage.S3Client, pub eventPublisher) *Processor {
 	return &Processor{
-		adapter:     adp,
-		s3:          s3,
-		publisher:   pub,
-		resultTopic: resultTopic,
-		annotator:   annotator,
+		adapter:   adp,
+		s3:        s3,
+		publisher: pub,
 	}
 }
 
-// Process runs the full job pipeline for the given InputEvent.
-// It returns an error only for transient infrastructure failures (S3, Kafka,
-// network) so the caller can exit 1 and let Knative retry the Job.
-// Inference errors are published as failed ResultEvents and return nil.
-func (p *Processor) Process(ctx context.Context, event *model.InputEvent) error {
-	if p.annotator != nil {
-		if err := p.annotator.SetDeletionCost(ctx, lifecycle.CostBusy); err != nil {
-			slog.Warn("failed to set pod deletion cost busy", "error", err)
-		}
-	}
-	err := p.process(ctx, event)
-	if p.annotator != nil {
-		if setErr := p.annotator.SetDeletionCost(context.Background(), lifecycle.CostIdle); setErr != nil {
-			slog.Warn("failed to set pod deletion cost idle", "error", setErr)
-		}
-	}
-	return err
+// Process runs the full job pipeline for the given Job.
+// It returns an error only for transient infrastructure failures (S3, Redis,
+// network) so the caller can exit 1 and let the orchestrator retry the Job.
+// Inference errors are published as failed results and return nil.
+func (p *Processor) Process(ctx context.Context, job *model.Job) error {
+	return p.process(ctx, job)
 }
 
-// ParseInputEvent parses an InputEvent from raw bytes.
-// It detects structured CloudEvent format (has "specversion" field) and
-// extracts the InputEvent from the "data" field. Otherwise the bytes are
-// treated as a raw InputEvent JSON.
-func ParseInputEvent(data []byte) (*model.InputEvent, error) {
-	payload := data
-	var probe struct {
-		SpecVersion string          `json:"specversion"`
-		Data        json.RawMessage `json:"data"`
-	}
-	if err := json.Unmarshal(data, &probe); err == nil && probe.SpecVersion != "" {
-		if probe.Data == nil {
-			return nil, fmt.Errorf("structured CloudEvent has no data field")
-		}
-		payload = probe.Data
-	}
-	var event model.InputEvent
-	if err := json.Unmarshal(payload, &event); err != nil {
-		return nil, err
-	}
-	return &event, nil
-}
-
-// process orchestre le pipeline complet. Il retourne une erreur uniquement pour
-// les pannes infrastructure (S3 indisponible, réseau) afin que le Job puisse
-// sortir avec exit 1 et être retenté par Knative. Les échecs d'inférence sont
-// publiés en ResultEvent et ne génèrent pas d'erreur (le job est définitivement
-// terminé, en échec).
+// process orchestrates the complete pipeline. It returns an error only for
+// infrastructure pannes (S3 unavailable, Redis unreachable) so the pod can
+// exit 1 and be restarted. Inference failures are published as failed results
+// and return nil (the job is definitively terminated).
 //
-// Stratégie de retry : chaque étape transiente (inférence, S3 put result,
-// Kafka publish result) est retentée une fois immédiatement avant de
-// déléguer à Knative. Le retry inférence implique un nouveau téléchargement
-// du fichier depuis S3 (le stream S3 précédent est épuisé).
-// Le téléchargement initial (GetObject input) n'est pas retenté : une erreur
-// infra S3 à cette étape remonte directement à Knative.
-func (p *Processor) process(ctx context.Context, event *model.InputEvent) error {
-	log := slog.With("job_id", event.JobID, "service_type", event.ServiceType)
-	log.Info("processing job", "input_ref", event.InputRef)
+// Retry strategy: each transient step (inference, S3 put result, result publish)
+// is retried once immediately before escalating. The inference retry requires a
+// fresh S3 download (the previous stream is exhausted).
+// The initial GetObject is not retried — an infra error there is escalated directly.
+func (p *Processor) process(ctx context.Context, job *model.Job) error {
+	log := slog.With("job_id", job.ID, "service_type", job.ServiceType)
+	log.Info("processing job", "input_ref", job.InputRef)
 
-	body, size, contentType, err := p.s3.GetObject(ctx, event.InputRef)
+	body, size, contentType, err := p.s3.GetObject(ctx, job.InputRef)
 	if err != nil {
 		if storage.IsNotFound(err) {
-			log.Error("input file not found, publishing permanent failure", "input_ref", event.InputRef)
-			metrics.JobsTotal.WithLabelValues(event.ServiceType, "failed").Inc()
-			if perr := p.publishFailure(context.Background(), event, "input file not found: "+event.InputRef); perr != nil {
-				return fmt.Errorf("publishing not-found failure event: %w", perr)
+			log.Error("input file not found, publishing permanent failure", "input_ref", job.InputRef)
+			metrics.JobsTotal.WithLabelValues(job.ServiceType, "failed").Inc()
+			if perr := p.publisher.PublishResult(context.Background(), job.ID, model.JobStatusFailed, "", "input file not found: "+job.InputRef); perr != nil {
+				return fmt.Errorf("publishing not-found failure: %w", perr)
 			}
 			return nil
 		}
@@ -126,42 +79,45 @@ func (p *Processor) process(ctx context.Context, event *model.InputEvent) error 
 	defer body.Close()
 
 	if size > 0 {
-		metrics.InputSizeBytes.WithLabelValues(event.ServiceType).Observe(float64(size))
+		metrics.InputSizeBytes.WithLabelValues(job.ServiceType).Observe(float64(size))
 	}
 
-	result, inferErr := p.runInference(ctx, event, body, size, contentType)
+	result, inferErr := p.runInference(ctx, job, body, size, contentType)
 	if inferErr != nil {
+		if errors.Is(inferErr, context.Canceled) {
+			return inferErr // job cancelled by gateway; main.go calls q.Done
+		}
 		// Retry inference once immediately: re-download for a fresh stream.
 		log.Warn("inference attempt failed, retrying immediately", "error", inferErr)
-		body2, size2, ct2, getErr := p.s3.GetObject(context.WithoutCancel(ctx), event.InputRef)
+		body2, size2, ct2, getErr := p.s3.GetObject(context.WithoutCancel(ctx), job.InputRef)
 		if getErr != nil {
 			if storage.IsNotFound(getErr) {
-				log.Error("input file not found on inference retry, publishing permanent failure", "input_ref", event.InputRef)
-				metrics.JobsTotal.WithLabelValues(event.ServiceType, "failed").Inc()
-				if perr := p.publishFailure(context.Background(), event, "input file not found on retry: "+event.InputRef); perr != nil {
-					return fmt.Errorf("publishing not-found failure event: %w", perr)
+				log.Error("input file not found on inference retry, publishing permanent failure", "input_ref", job.InputRef)
+				metrics.JobsTotal.WithLabelValues(job.ServiceType, "failed").Inc()
+				if perr := p.publisher.PublishResult(context.Background(), job.ID, model.JobStatusFailed, "", "input file not found on retry: "+job.InputRef); perr != nil {
+					return fmt.Errorf("publishing not-found failure: %w", perr)
 				}
 				return nil
 			}
 			return fmt.Errorf("s3 get on inference retry: %w", getErr)
 		}
 		defer body2.Close()
-		result, inferErr = p.runInference(ctx, event, body2, size2, ct2)
+		result, inferErr = p.runInference(ctx, job, body2, size2, ct2)
 	}
 
 	if inferErr != nil {
 		log.Error("inference failed", "error", inferErr)
-		metrics.JobsTotal.WithLabelValues(event.ServiceType, "failed").Inc()
-		if perr := p.publishFailure(context.Background(), event, fmt.Sprintf("inference: %v", inferErr)); perr != nil {
-			return fmt.Errorf("publishing failure event: %w", perr)
+		metrics.JobsTotal.WithLabelValues(job.ServiceType, "failed").Inc()
+		if perr := p.publisher.PublishResult(context.Background(), job.ID, model.JobStatusFailed, "", fmt.Sprintf("inference: %v", inferErr)); perr != nil {
+			return fmt.Errorf("publishing failure: %w", perr)
 		}
-		if derr := p.s3.DeleteObject(context.Background(), event.InputRef); derr != nil {
-			log.Error("failed to delete input file after failure", "input_ref", event.InputRef, "error", derr)
+		if derr := p.s3.DeleteObject(context.Background(), job.InputRef); derr != nil {
+			log.Error("failed to delete input file after failure", "input_ref", job.InputRef, "error", derr)
 		}
 		return nil
 	}
 
-	resultKey := event.JobID + "/result.json"
+	resultKey := job.ID + "/result.json"
 	if err := p.s3.PutObject(ctx, resultKey, bytes.NewReader(result), int64(len(result)), "application/json"); err != nil {
 		log.Warn("s3 put attempt failed, retrying immediately", "error", err)
 		if err := p.s3.PutObject(ctx, resultKey, bytes.NewReader(result), int64(len(result)), "application/json"); err != nil {
@@ -169,58 +125,36 @@ func (p *Processor) process(ctx context.Context, event *model.InputEvent) error 
 		}
 	}
 
-	resultEvent := &model.ResultEvent{
-		JobID:       event.JobID,
-		ServiceType: event.ServiceType,
-		Status:      model.JobStatusCompleted,
-		ResultRef:   resultKey,
-		CompletedAt: time.Now().UTC(),
-	}
-	if err := p.publisher.PublishResultEvent(ctx, p.resultTopic, resultEvent); err != nil {
+	if err := p.publisher.PublishResult(ctx, job.ID, model.JobStatusCompleted, resultKey, ""); err != nil {
 		log.Warn("publish result attempt failed, retrying immediately", "error", err)
-		if err := p.publisher.PublishResultEvent(ctx, p.resultTopic, resultEvent); err != nil {
-			log.Error("failed to publish result event after retry", "error", err)
+		if err := p.publisher.PublishResult(ctx, job.ID, model.JobStatusCompleted, resultKey, ""); err != nil {
+			log.Error("failed to publish result after retry", "error", err)
 		}
 	}
 
-	metrics.JobsTotal.WithLabelValues(event.ServiceType, "completed").Inc()
+	metrics.JobsTotal.WithLabelValues(job.ServiceType, "completed").Inc()
 	log.Info("job completed", "result_ref", resultKey)
 
-	if err := p.s3.DeleteObject(context.Background(), event.InputRef); err != nil {
-		log.Error("failed to delete input file", "input_ref", event.InputRef, "error", err)
+	if err := p.s3.DeleteObject(context.Background(), job.InputRef); err != nil {
+		log.Error("failed to delete input file", "input_ref", job.InputRef, "error", err)
 	}
 
 	return nil
 }
 
 // runInference calls the adapter and records timing metrics.
-func (p *Processor) runInference(ctx context.Context, event *model.InputEvent, body io.Reader, size int64, contentType string) ([]byte, error) {
+func (p *Processor) runInference(ctx context.Context, job *model.Job, body io.Reader, size int64, contentType string) ([]byte, error) {
 	inferStart := time.Now()
 	result, err := p.adapter.Call(ctx, adapter.CallInput{
-		JobID:        event.JobID,
-		Filename:     filepath.Base(event.InputRef),
+		JobID:        job.ID,
+		Filename:     filepath.Base(job.InputRef),
 		ContentType:  contentType,
 		Size:         size,
 		Body:         body,
-		Model:        event.Model,
-		InferenceURL: event.InferenceURL,
-		Params:       event.Params,
+		Model:        job.Model,
+		InferenceURL: job.InferenceURL,
+		Params:       job.Params,
 	})
-	metrics.InferenceDuration.WithLabelValues(event.ServiceType).Observe(time.Since(inferStart).Seconds())
+	metrics.InferenceDuration.WithLabelValues(job.ServiceType).Observe(time.Since(inferStart).Seconds())
 	return result, err
-}
-
-func (p *Processor) publishFailure(ctx context.Context, event *model.InputEvent, errMsg string) error {
-	resultEvent := &model.ResultEvent{
-		JobID:       event.JobID,
-		ServiceType: event.ServiceType,
-		Status:      model.JobStatusFailed,
-		Error:       errMsg,
-		CompletedAt: time.Now().UTC(),
-	}
-	if err := p.publisher.PublishResultEvent(ctx, p.resultTopic, resultEvent); err != nil {
-		slog.Error("failed to publish failure event", "job_id", event.JobID, "error", err)
-		return err
-	}
-	return nil
 }
