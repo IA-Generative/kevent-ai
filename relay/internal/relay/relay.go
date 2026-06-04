@@ -3,6 +3,7 @@ package relay
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -83,6 +84,9 @@ func (p *Processor) process(ctx context.Context, job *model.Job) error {
 
 	result, inferErr := p.runInference(ctx, job, body, size, contentType)
 	if inferErr != nil {
+		if errors.Is(inferErr, context.Canceled) {
+			return inferErr // job cancelled by gateway; main.go calls q.Done
+		}
 		// Retry inference once immediately: re-download for a fresh stream.
 		log.Warn("inference attempt failed, retrying immediately", "error", inferErr)
 		body2, size2, ct2, getErr := p.s3.GetObject(context.WithoutCancel(ctx), job.InputRef)
