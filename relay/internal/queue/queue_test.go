@@ -39,7 +39,7 @@ func TestPop_MovesJobFromPendingToProcessing(t *testing.T) {
 	q, mr := newTestQueue(t)
 	mr.RPush("relay:test-model:pending", "job-1")
 
-	jobID, err := q.Pop(context.Background())
+	jobID, err := q.Pop(context.Background(), 5*time.Second)
 	if err != nil {
 		t.Fatalf("Pop: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestPop_OnlyPopsOncePerCall(t *testing.T) {
 	q, mr := newTestQueue(t)
 	mr.RPush("relay:test-model:pending", "job-1", "job-2")
 
-	jobID, err := q.Pop(context.Background())
+	jobID, err := q.Pop(context.Background(), 5*time.Second)
 	if err != nil {
 		t.Fatalf("Pop: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestPop_DoesNotPickUpJobsAlreadyInProcessing(t *testing.T) {
 	mr.RPush("relay:test-model:processing", "orphan-job")
 	mr.RPush("relay:test-model:pending", "real-job")
 
-	jobID, err := q.Pop(context.Background())
+	jobID, err := q.Pop(context.Background(), 5*time.Second)
 	if err != nil {
 		t.Fatalf("Pop: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestPop_DoesNotPickUpJobsAlreadyInProcessing(t *testing.T) {
 func TestDone_RemovesJobFromProcessing(t *testing.T) {
 	q, mr := newTestQueue(t)
 	mr.RPush("relay:test-model:pending", "job-1")
-	if _, err := q.Pop(context.Background()); err != nil {
+	if _, err := q.Pop(context.Background(), 5*time.Second); err != nil {
 		t.Fatalf("Pop: %v", err)
 	}
 
@@ -137,7 +137,7 @@ func TestPopThenDone_FullLifecycle(t *testing.T) {
 	q, mr := newTestQueue(t)
 	mr.RPush("relay:test-model:pending", "job-1", "job-2")
 
-	id1, err := q.Pop(context.Background())
+	id1, err := q.Pop(context.Background(), 5*time.Second)
 	if err != nil || id1 != "job-1" {
 		t.Fatalf("first Pop: got %q, %v", id1, err)
 	}
@@ -148,7 +148,7 @@ func TestPopThenDone_FullLifecycle(t *testing.T) {
 		t.Error("processing should be empty after Done")
 	}
 
-	id2, err := q.Pop(context.Background())
+	id2, err := q.Pop(context.Background(), 5*time.Second)
 	if err != nil || id2 != "job-2" {
 		t.Fatalf("second Pop: got %q, %v", id2, err)
 	}
@@ -170,7 +170,7 @@ func TestPop_CancelledContext_ReturnsError(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := q.Pop(ctx)
+		_, err := q.Pop(ctx, 5*time.Second)
 		done <- err
 	}()
 

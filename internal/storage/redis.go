@@ -46,8 +46,13 @@ func (r *RedisClient) ttlForStatus(status model.JobStatus) time.Duration {
 		d = r.lifecycle.JobTTL.PendingDuration()
 	case model.JobStatusCompleted:
 		d = r.lifecycle.JobTTL.CompletedDuration()
-	case model.JobStatusFailed, model.JobStatusCancelled:
+	case model.JobStatusFailed:
 		d = r.lifecycle.JobTTL.FailedDuration()
+	case model.JobStatusCancelled:
+		d = r.lifecycle.JobTTL.CancelledDuration()
+		if d == 0 {
+			d = r.lifecycle.JobTTL.FailedDuration()
+		}
 	}
 	if d == 0 {
 		d = r.lifecycle.JobTTL.GlobalDuration()
@@ -329,6 +334,30 @@ func (r *RedisClient) UpdateJobResult(ctx context.Context, jobID string, status 
 	if err != nil {
 		metrics.RedisErrorsTotal.WithLabelValues("update_job").Inc()
 		return fmt.Errorf("updating job %q in redis: %w", jobID, err)
+	}
+	return nil
+}
+
+// PopJob atomically moves a job ID from relay:{model}:pending to
+// relay:{model}:processing using BLMOVE (blocks until a job is available
+// or the context is cancelled).
+func (r *RedisClient) PopJob(ctx context.Context, modelName string) (string, error) {
+	pending := "relay:" + modelName + ":pending"
+	processing := "relay:" + modelName + ":processing"
+	val, err := r.client.BLMove(ctx, pending, processing, "LEFT", "RIGHT", 0).Result()
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		return "", fmt.Errorf("blmove %s: %w", pending, err)
+	}
+	return val, nil
+}
+
+// DoneJob removes a job ID from relay:{model}:processing after completion.
+func (r *RedisClient) DoneJob(ctx context.Context, jobID, modelName string) error {
+	if err := r.client.LRem(ctx, "relay:"+modelName+":processing", 1, jobID).Err(); err != nil {
+		return fmt.Errorf("lrem processing %s: %w", jobID, err)
 	}
 	return nil
 }

@@ -20,7 +20,8 @@ type Def struct {
 	MaxFileSizeMB int64
 	// SupportsAsync is true when the service is configured for async file-upload jobs
 	// (i.e. AcceptedExts is explicitly set in the config).
-	SupportsAsync bool
+	SupportsAsync     bool
+	MaxConcurrentSync int // max simultaneous sync calls; 0 = unlimited
 
 	// Sync / OpenAI-compatible mode (optional).
 	InferenceURL     string              // primary backend URL (derived from Backends; kept for compatibility)
@@ -165,20 +166,21 @@ func NewRegistry(cfgs []config.ServiceConfig) *Registry {
 			primaryURL = backends[0].URL
 		}
 		def := &Def{
-			Type:             cfg.Type,
-			Model:            cfg.Model,
-			AcceptedExts:     exts,
-			MaxFileSizeMB:    cfg.MaxFileSizeMB,
-			SupportsAsync:    len(cfg.AcceptedExts) > 0,
-			InferenceURL:     primaryURL,
-			Backends:         backends,
-			Operations:       cfg.Operations,
-			InferenceHeaders: cfg.InferenceHeaders,
-			Provider:         cfg.Provider,
-			BackendModel:     cfg.BackendModel,
-			ResponseCacheTTL: time.Duration(cfg.ResponseCacheTTL) * time.Second,
-			Retries:          cfg.Retries,
-			GuardrailsPII:    cfg.Guardrails.PII,
+			Type:              cfg.Type,
+			Model:             cfg.Model,
+			AcceptedExts:      exts,
+			MaxFileSizeMB:     cfg.MaxFileSizeMB,
+			SupportsAsync:     len(cfg.AcceptedExts) > 0,
+			MaxConcurrentSync: cfg.MaxConcurrentSync,
+			InferenceURL:         primaryURL,
+			Backends:             backends,
+			Operations:           cfg.Operations,
+			InferenceHeaders:     cfg.InferenceHeaders,
+			Provider:             cfg.Provider,
+			BackendModel:         cfg.BackendModel,
+			ResponseCacheTTL:     time.Duration(cfg.ResponseCacheTTL) * time.Second,
+			Retries:              cfg.Retries,
+			GuardrailsPII:        cfg.Guardrails.PII,
 		}
 
 		if r.byTypeModel[cfg.Type] == nil {

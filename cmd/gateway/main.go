@@ -16,8 +16,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"kevent/gateway/internal/cache"
-	"kevent/gateway/internal/config"
 	"kevent/gateway/internal/consumer"
+	"kevent/gateway/internal/concurrency"
+	"kevent/gateway/internal/config"
 	"kevent/gateway/internal/handler"
 	"kevent/gateway/internal/llmproxy"
 	"kevent/gateway/internal/llmproxy/provider"
@@ -96,7 +97,8 @@ func buildRouter(
 	r.Post("/-/jobs/purge", jobHandler.AdminPurge)
 
 	if reg.HasSyncServices() {
-		syncHandler := handler.NewSyncHandler(reg, cfg.Server.ConsumerHeader, rl, llmHandler)
+		syncHandler := handler.NewSyncHandler(reg, cfg.Server.ConsumerHeader, rl, llmHandler).
+			WithSemaphore(concurrency.NewModelSemaphore(reg, redisClient.Raw()))
 		r.Get("/v1/models", handler.ListModels(reg))
 		// Register each configured path exactly. Chi handles {model} parameter
 		// patterns natively. Single-segment paths (e.g. /rerank) are reachable
@@ -201,6 +203,7 @@ func main() {
 		// Update infrastructure state that survives across reloads.
 		redisClient.UpdateLifecycle(newCfg.Lifecycle)
 		manager.UpdatePersistsResult(newCfg.Lifecycle.PersistsResult)
+		manager.Reconcile(newReg)
 		gcEnabled.Store(newCfg.Lifecycle.GC.Enabled)
 		if iv := newCfg.Lifecycle.GC.IntervalDuration(); iv > 0 {
 			gcInterval.Store(int64(iv))
@@ -222,7 +225,6 @@ func main() {
 
 		newRouter := buildRouter(newCfg, newReg, s3Client, redisClient, logger, reloadFn, rl, llmHandler)
 		holder.p.Store(newRouter)
-		manager.Reconcile(newReg)
 		slog.Info("config reloaded", "types", newReg.Types())
 		return nil
 	}
@@ -231,7 +233,7 @@ func main() {
 	initialRouter := buildRouter(cfg, initialRegistry, s3Client, redisClient, logger, reloadFn, rl, llmHandler)
 	holder.p.Store(initialRouter)
 
-	// ── Result consumers ──────────────────────────────────────────────────────
+	// ── Async workers + context ───────────────────────────────────────────────
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -321,7 +323,7 @@ func main() {
 	}
 
 	slog.Info("shutting down…")
-	cancel() // stop all consumers
+	cancel() // stop async workers and other background goroutines
 
 	manager.Wait() // drain in-flight webhook goroutines
 

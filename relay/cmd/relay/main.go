@@ -16,7 +16,6 @@ import (
 
 	"kevent/relay/internal/adapter"
 	"kevent/relay/internal/config"
-	"kevent/relay/internal/lifecycle"
 	"kevent/relay/internal/model"
 	"kevent/relay/internal/queue"
 	relayproc "kevent/relay/internal/relay"
@@ -91,8 +90,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	annotator := lifecycle.New()
-	proc := relayproc.New(adp, s3Client, pub, annotator)
+	proc := relayproc.New(adp, s3Client, pub)
 
 	inferenceHealthURL := strings.TrimRight(cfg.Inference.BaseURL, "/") + "/health"
 	healthClient := &http.Client{Timeout: cfg.Inference.HealthCheckTimeoutDuration()}
@@ -108,9 +106,13 @@ func main() {
 	// Pop blocks until a job is available or the context is cancelled (SIGTERM).
 	// One pod = one job: after processing, the pod exits so KEDA creates a fresh
 	// pod for the next job rather than reusing this one.
-	jobID, err := q.Pop(ctx)
+	jobID, err := q.Pop(ctx, cfg.QueuePopTimeoutDuration())
 	if errors.Is(err, context.Canceled) {
 		slog.Info("relay shutting down (no job received)")
+		return
+	}
+	if errors.Is(err, queue.ErrNoJob) {
+		slog.Info("queue empty after timeout (job cancelled before pod started), exiting")
 		return
 	}
 	if err != nil {

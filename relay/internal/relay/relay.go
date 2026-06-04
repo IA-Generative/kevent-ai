@@ -3,6 +3,7 @@ package relay
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -10,7 +11,6 @@ import (
 	"time"
 
 	"kevent/relay/internal/adapter"
-	"kevent/relay/internal/lifecycle"
 	"kevent/relay/internal/metrics"
 	"kevent/relay/internal/model"
 	"kevent/relay/internal/storage"
@@ -32,21 +32,14 @@ type Processor struct {
 	adapter   adapter.Adapter
 	s3        objectStore
 	publisher eventPublisher
-	annotator *lifecycle.PodAnnotator
 }
 
 // New creates a Processor. pub handles persisting the result and notifying the gateway.
-func New(
-	adp adapter.Adapter,
-	s3 *storage.S3Client,
-	pub eventPublisher,
-	annotator *lifecycle.PodAnnotator,
-) *Processor {
+func New(adp adapter.Adapter, s3 *storage.S3Client, pub eventPublisher) *Processor {
 	return &Processor{
 		adapter:   adp,
 		s3:        s3,
 		publisher: pub,
-		annotator: annotator,
 	}
 }
 
@@ -55,18 +48,7 @@ func New(
 // network) so the caller can exit 1 and let the orchestrator retry the Job.
 // Inference errors are published as failed results and return nil.
 func (p *Processor) Process(ctx context.Context, job *model.Job) error {
-	if p.annotator != nil {
-		if err := p.annotator.SetDeletionCost(ctx, lifecycle.CostBusy); err != nil {
-			slog.Warn("failed to set pod deletion cost busy", "error", err)
-		}
-	}
-	err := p.process(ctx, job)
-	if p.annotator != nil {
-		if setErr := p.annotator.SetDeletionCost(context.Background(), lifecycle.CostIdle); setErr != nil {
-			slog.Warn("failed to set pod deletion cost idle", "error", setErr)
-		}
-	}
-	return err
+	return p.process(ctx, job)
 }
 
 // process orchestrates the complete pipeline. It returns an error only for
@@ -102,6 +84,9 @@ func (p *Processor) process(ctx context.Context, job *model.Job) error {
 
 	result, inferErr := p.runInference(ctx, job, body, size, contentType)
 	if inferErr != nil {
+		if errors.Is(inferErr, context.Canceled) {
+			return inferErr // job cancelled by gateway; main.go calls q.Done
+		}
 		// Retry inference once immediately: re-download for a fresh stream.
 		log.Warn("inference attempt failed, retrying immediately", "error", inferErr)
 		body2, size2, ct2, getErr := p.s3.GetObject(context.WithoutCancel(ctx), job.InputRef)

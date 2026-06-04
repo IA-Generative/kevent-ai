@@ -11,11 +11,27 @@ import (
 
 // Config holds all relay runtime configuration.
 type Config struct {
-	Model      string          `yaml:"model"`
-	Redis      RedisConfig     `yaml:"redis"`
-	S3         S3Config        `yaml:"s3"`
-	Encryption EncryptionConfig `yaml:"encryption"`
-	Inference  InferenceConfig  `yaml:"inference"`
+	Model          string           `yaml:"model"`
+	Redis          RedisConfig      `yaml:"redis"`
+	S3             S3Config         `yaml:"s3"`
+	Encryption     EncryptionConfig `yaml:"encryption"`
+	Inference      InferenceConfig  `yaml:"inference"`
+	// QueuePopTimeout is how long Pop waits for a job before returning ErrNoJob.
+	// Use when a pod may start after its queue item was already cancelled.
+	// Defaults to 30s. Set to "0" to block indefinitely (legacy behaviour).
+	QueuePopTimeout string `yaml:"queue_pop_timeout"`
+}
+
+// QueuePopTimeoutDuration returns the configured queue pop timeout.
+// "0" or "0s" means block indefinitely. Defaults to 30s.
+func (c *Config) QueuePopTimeoutDuration() time.Duration {
+	if d, err := time.ParseDuration(c.QueuePopTimeout); err == nil {
+		if d <= 0 {
+			return 0
+		}
+		return d
+	}
+	return 30 * time.Second
 }
 
 // InferenceConfig holds the local inference endpoint configuration.
