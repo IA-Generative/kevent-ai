@@ -15,8 +15,8 @@ import (
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"kevent/gateway/internal/asyncworker"
 	"kevent/gateway/internal/cache"
+	"kevent/gateway/internal/consumer"
 	"kevent/gateway/internal/concurrency"
 	"kevent/gateway/internal/config"
 	"kevent/gateway/internal/handler"
@@ -161,7 +161,7 @@ func main() {
 		slog.Info("rate limiting enabled", "services", len(cfg.RateLimits))
 	}
 
-	asyncManager := asyncworker.New(initialRegistry, redisClient, s3Client, cfg.Lifecycle.PersistsResult)
+	manager := consumer.NewManager(redisClient, s3Client, cfg.Lifecycle.PersistsResult)
 
 	// ── LLM proxy ─────────────────────────────────────────────────────────────
 	providerRegistry := provider.NewRegistry()
@@ -202,7 +202,8 @@ func main() {
 
 		// Update infrastructure state that survives across reloads.
 		redisClient.UpdateLifecycle(newCfg.Lifecycle)
-		asyncManager.UpdatePersistsResult(newCfg.Lifecycle.PersistsResult)
+		manager.UpdatePersistsResult(newCfg.Lifecycle.PersistsResult)
+		manager.Reconcile(newReg)
 		gcEnabled.Store(newCfg.Lifecycle.GC.Enabled)
 		if iv := newCfg.Lifecycle.GC.IntervalDuration(); iv > 0 {
 			gcInterval.Store(int64(iv))
@@ -240,7 +241,7 @@ func main() {
 		gmetrics.StartTopNRefresh(ctx, redisClient.Raw(), cfg.Metrics.TopConsumers, 60*time.Second)
 	}
 
-	asyncManager.Start(ctx)
+	manager.Start(ctx, initialRegistry)
 
 	// ── Unified GC ────────────────────────────────────────────────────────────
 	// All atomics are read on each tick so hot-reload takes effect without restart.
@@ -324,7 +325,7 @@ func main() {
 	slog.Info("shutting down…")
 	cancel() // stop async workers and other background goroutines
 
-	asyncManager.Wait() // drain in-flight async jobs
+	manager.Wait() // drain in-flight webhook goroutines
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
