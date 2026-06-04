@@ -20,12 +20,8 @@ type Def struct {
 	MaxFileSizeMB int64
 	// SupportsAsync is true when the service is configured for async file-upload jobs
 	// (i.e. AcceptedExts is explicitly set in the config).
-	SupportsAsync        bool
-	AsyncWorkers         int               // goroutines processing async jobs (default 1)
-	ColdStartTime        time.Duration     // min delay between consecutive async dispatches; 0 = disabled
-	AsyncInferenceURL    string            // dedicated async inference pool URL; overrides Backends for async
-	MaxConcurrentSync    int               // max simultaneous sync calls; 0 = unlimited
-	InferenceExtraFields map[string]string // static fields appended to async multipart requests
+	SupportsAsync     bool
+	MaxConcurrentSync int // max simultaneous sync calls; 0 = unlimited
 
 	// Sync / OpenAI-compatible mode (optional).
 	InferenceURL     string              // primary backend URL (derived from Backends; kept for compatibility)
@@ -169,21 +165,13 @@ func NewRegistry(cfgs []config.ServiceConfig) *Registry {
 		if primaryURL == "" && len(backends) > 0 {
 			primaryURL = backends[0].URL
 		}
-		asyncWorkers := cfg.AsyncWorkers
-		if asyncWorkers == 0 && len(cfg.AcceptedExts) > 0 {
-			asyncWorkers = 1
-		}
 		def := &Def{
-			Type:                 cfg.Type,
-			Model:                cfg.Model,
-			AcceptedExts:         exts,
-			MaxFileSizeMB:        cfg.MaxFileSizeMB,
-			SupportsAsync:        len(cfg.AcceptedExts) > 0,
-			AsyncWorkers:         asyncWorkers,
-			ColdStartTime:        cfg.ColdStartDuration(),
-			AsyncInferenceURL:    cfg.AsyncInferenceURL,
-			MaxConcurrentSync:    cfg.MaxConcurrentSync,
-			InferenceExtraFields: cfg.InferenceExtraFields,
+			Type:              cfg.Type,
+			Model:             cfg.Model,
+			AcceptedExts:      exts,
+			MaxFileSizeMB:     cfg.MaxFileSizeMB,
+			SupportsAsync:     len(cfg.AcceptedExts) > 0,
+			MaxConcurrentSync: cfg.MaxConcurrentSync,
 			InferenceURL:         primaryURL,
 			Backends:             backends,
 			Operations:           cfg.Operations,
