@@ -544,6 +544,16 @@ New `lifecycle.gc` config block:
 
 ## Relay
 
+### [v0.6.2] — 2026-06-05
+
+#### Changed
+
+- **Prometheus metrics**: replaced `kevent_relay_kafka_publish_errors_total` (removed with Kafka) by two Redis-specific counters:
+  - `kevent_relay_redis_publish_errors_total` — failures publishing the completion notification to `jobs:<model>:completed` (Redis pub/sub)
+  - `kevent_relay_redis_done_errors_total` — failures removing the job from `relay:<model>:processing` after completion
+
+---
+
 ### [v0.6.1] — 2026-06-04
 
 #### Changed
