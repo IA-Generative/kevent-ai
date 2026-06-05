@@ -5,7 +5,7 @@ API Gateway pour les services d'inférence KServe. Plusieurs modes de fonctionne
 | Mode | Endpoints | Quand l'utiliser |
 |---|---|---|
 | **Async** (Redis queue) | `POST /jobs/{service_type}`, `GET /jobs/{service_type}/{id}`, `GET /jobs` | Fichiers lourds, traitements longs (>30s), besoin de webhook |
-| **Sync direct proxy** | `POST /v1/*` (JSON ou multipart) | Intégration SDK OpenAI, services sans Kafka (reranker, embeddings…) |
+| **Sync direct proxy** | `POST /v1/*` (JSON ou multipart) | Intégration SDK OpenAI, services sync-only (reranker, embeddings…) |
 | **LLM proxy** | `POST /v1/*` JSON + `provider` configuré | Proxying LLM (OpenAI, Anthropic, Ollama, vLLM) avec cache et métriques |
 
 ## Architecture
@@ -246,11 +246,9 @@ services:
 | `type` | Nom du type de service (ex: `audio`, `ocr`). Plusieurs entrées peuvent partager le même type avec des modèles différents. |
 | `model` | Identifiant du modèle, transmis dans le payload OpenAI pour le routage. |
 | `default` | `true` → modèle par défaut pour ce type quand aucun `model` n'est précisé dans la requête. |
-| `operations` | Map `nom_opération → liste de paths URL`. Tous les paths sont indexés pour le routage sync ; le premier est utilisé comme `inference_url` dans les events async. |
+| `operations` | Map `nom_opération → liste de paths URL`. Tous les paths sont indexés pour le routage sync ; le premier est utilisé comme `inference_url` dans les jobs async. |
 | `inference_url` | URL de base du backend pour le direct proxy. Le chemin de la requête d'origine y est appendé. |
-| `input_topic` | Topic Kafka pour les jobs async en entrée. Optionnel — absent = service sync-direct uniquement. |
-| `result_topic` | Topic Kafka pour les résultats. Doit être absent si `input_topic` est absent (les deux vont de pair). |
-| `accepted_exts` | Extensions acceptées. Vide ou absent = toutes les extensions acceptées. |
+| `accepted_exts` | Extensions acceptées (mode async uniquement). Vide ou absent = toutes les extensions acceptées. |
 | `max_file_size_mb` | Taille max du fichier. Absent ou 0 = 100 MB par défaut. |
 | `inference_url` | URL de base du backend (un seul backend, legacy). Ignoré si `backends` est défini. |
 | `backends` | Liste de backends avec routing pondéré. Prend le pas sur `inference_url`. Voir ci-dessous. |
@@ -272,17 +270,14 @@ services:
 ### Relay (`relay/config.yaml`)
 
 ```yaml
-kafka:
-  brokers: ["${KAFKA_BROKERS:-kafka:9092}"]
-  input_topic: "${KAFKA_INPUT_TOPIC}"       # ex: jobs.whisper-large-v3.input
-  consumer_group: "${KAFKA_CONSUMER_GROUP}" # ex: kevent-relay-whisper
-  sasl:
-    mechanism: "${KAFKA_SASL_MECHANISM:-}"
-    username:  "${KAFKA_SASL_USERNAME:-}"
-    password:  "${KAFKA_SASL_PASSWORD:-}"
-  tls:
-    enabled:      ${KAFKA_TLS_ENABLED:-false}
-    ca_cert_path: "${KAFKA_CA_CERT_PATH:-}"
+redis:
+  addr: "${REDIS_ADDR:-redis:6379}"
+  password: "${REDIS_PASSWORD:-}"
+  db: 0
+
+model: "${RELAY_MODEL}"          # ex: whisper-large-v3  — sets relay:<model>:pending queue name
+
+queue_pop_timeout: "${QUEUE_POP_TIMEOUT:-5m}"   # BLMOVE timeout before the pod exits 0
 
 s3:
   endpoint:   "${S3_ENDPOINT:-https://s3.fr-par.scw.cloud}"
@@ -317,8 +312,6 @@ inference:
 | `S3_ACCESS_KEY` | — | Access Key ID (**requis**) |
 | `S3_SECRET_KEY` | — | Secret Key (**requis**) |
 | `S3_BUCKET` | `kevent-jobs` | Nom du bucket |
-| `KAFKA_BROKERS` | `kafka:9092` | Adresse(s) des brokers Kafka |
-| `KAFKA_SASL_PASSWORD` | _(vide)_ | Mot de passe SASL Kafka |
 | `REDIS_ADDR` | `redis:6379` | Adresse Redis |
 | `REDIS_PASSWORD` | _(vide)_ | Mot de passe Redis |
 | `ENCRYPTION_KEY` | _(vide)_ | Clé AES-256-GCM hex-encodée (32 octets) |
@@ -331,52 +324,14 @@ inference:
 | Variable | Valeur par défaut | Description |
 |---|---|---|
 | `CONFIG_PATH` | `config.yaml` | Chemin vers le fichier de configuration |
-| `KAFKA_INPUT_TOPIC` | — | Topic Kafka d'entrée (**requis**, ou défini dans config.yaml) |
-| `KAFKA_CONSUMER_GROUP` | — | Consumer group Kafka (**requis**, ou défini dans config.yaml) |
+| `RELAY_MODEL` | — | Nom du modèle (**requis**) — détermine la queue `relay:<model>:pending` |
+| `QUEUE_POP_TIMEOUT` | `5m` | Timeout BLMOVE avant que le pod quitte avec code 0 |
 | `INFERENCE_PORT` | `9000` | Port du serveur de modèle local |
-| `KAFKA_BROKERS` | `kafka:9092` | Brokers Kafka |
-| `KAFKA_SASL_MECHANISM` | _(vide)_ | Mécanisme SASL |
-| `KAFKA_SASL_USERNAME` | _(vide)_ | Utilisateur SASL |
-| `KAFKA_SASL_PASSWORD` | _(vide)_ | Mot de passe SASL |
-| `KAFKA_TLS_ENABLED` | `false` | Activer TLS |
-| `KAFKA_CA_CERT_PATH` | _(vide)_ | Chemin vers la CA Strimzi |
+| `REDIS_ADDR` | `redis:6379` | Adresse Redis |
+| `REDIS_PASSWORD` | _(vide)_ | Mot de passe Redis |
 | `S3_ACCESS_KEY` | — | Access Key ID (**requis**) |
 | `S3_SECRET_KEY` | — | Secret Key (**requis**) |
 | `ENCRYPTION_KEY` | _(vide)_ | Doit correspondre à la valeur du gateway |
-
----
-
-## Kafka — authentification SASL/TLS
-
-Le gateway et le relay supportent tous deux SASL (PLAIN, SCRAM-SHA-256, SCRAM-SHA-512) et TLS avec CA personnalisée, configurés via `config.yaml`.
-
-En production (Strimzi) le cluster tourne sur le port **9093** (`SASL_SSL`). Les credentials sont injectés depuis des Secrets Kubernetes.
-
-### Prérequis Strimzi
-
-**KafkaUser `kevent-gateway`** (namespace `infra-kafka`) — ACLs minimales :
-
-| Ressource | Type | Pattern | Opérations |
-|---|---|---|---|
-| `jobs.*` | topic | prefix | `Read`, `Write`, `Create`, `Describe` |
-| `kevent-gateway` | group | prefix | `Read`, `Describe`, `Delete` |
-
-**KafkaUser `kevent-relay`** (namespace `infra-kafka`) — ACLs minimales :
-
-| Ressource | Type | Pattern | Opérations |
-|---|---|---|---|
-| `jobs.*` | topic | prefix | `Read`, `Write`, `Create`, `Describe` |
-| `inference-*` | group | prefix | `Read`, `Describe`, `Delete` |
-
-### Secret SASL (à créer dans le namespace du gateway)
-
-```bash
-kubectl get secret kevent-gateway -n infra-kafka -o yaml \
-  | sed 's/namespace: infra-kafka/namespace: default/' \
-  | kubectl apply -f -
-```
-
-Le secret doit contenir la clé `KAFKA_SASL_PASSWORD` — **sans newline final** (erreur courante lors de la création manuelle).
 
 ---
 
@@ -393,18 +348,14 @@ helm upgrade --install kevent-gateway ./helm/gateway \
 ```yaml
 image:
   repository: ghcr.io/ia-generative/kevent-ai/gateway
-  tag: v0.9.0
+  tag: v0.14.0
 
-kafka:
-  brokers: "default-kafka-bootstrap.infra-kafka.svc.cluster.local:9093"
-  sasl:
-    enabled: true
-    mechanism: SCRAM-SHA-512
-    username: kevent-gateway
-    existingSecret: "kevent-gateway"
-  tls:
-    enabled: true
-    existingCACertSecret: "default-cluster-ca-cert"
+config:
+  redis:
+    addr: "redis:6379"
+  s3:
+    endpoint: "https://s3.fr-par.scw.cloud"
+    bucket: "kevent-jobs"
 
 services:
   - type: audio
@@ -416,8 +367,6 @@ services:
       translation:
         - "/v1/audio/translations"
     inferenceURL: "http://kevent-transcription-predictor.default.svc.cluster.local"
-    inputTopic: "jobs.whisper-large-v3.input"
-    resultTopic: "jobs.whisper-large-v3.results"
     acceptedExts: [".mp3", ".wav", ".m4a", ".ogg", ".flac"]
     maxFileSizeMB: 500
 ```
@@ -426,9 +375,9 @@ services:
 
 ## Ajouter un service d'inférence
 
-Aucun changement de code n'est nécessaire. Il suffit d'ajouter un bloc dans `config.yaml` (gateway) et de déployer un Relay Deployment configuré avec le `input_topic` et le `consumer_group` correspondants.
+Aucun changement de code n'est nécessaire. Il suffit d'ajouter un bloc dans `config.yaml` (gateway) et de déployer un Relay Deployment configuré avec le bon `model`.
 
-**Gateway `config.yaml`** (service avec Kafka) :
+**Gateway `config.yaml`** (service async + sync) :
 
 ```yaml
 services:
@@ -438,13 +387,13 @@ services:
       diarization:
         - "/v1/audio/diarizations"
     inference_url: "http://kevent-diarization-predictor.default.svc.cluster.local"
-    input_topic: jobs.pyannote-audio-3.1.input
-    result_topic: jobs.pyannote-audio-3.1.results
     accepted_exts: [".mp3", ".wav", ".m4a", ".ogg", ".flac"]
     max_file_size_mb: 500
 ```
 
-**Gateway `config.yaml`** (service sync-direct, sans Kafka) :
+La queue Redis `relay:pyannote-audio-3.1:pending` est créée automatiquement à la première soumission de job. Aucune configuration de topic préalable n'est nécessaire.
+
+**Gateway `config.yaml`** (service sync-direct uniquement) :
 
 ```yaml
 services:
@@ -454,25 +403,23 @@ services:
       rerank:
         - "/rerank"
     inference_url: "http://kevent-reranker-predictor.default.svc.cluster.local"
-    # Pas de async (pas de relay queue) → sync-direct uniquement
+    # Pas de relay → sync-direct uniquement
     # POST /jobs/reranker → 405  |  POST /rerank → proxy direct
 ```
 
 **Relay** (`relay/config.yaml` ou ConfigMap) :
 
 ```yaml
-kafka:
-  input_topic: "jobs.pyannote-audio-3.1.input"
-  consumer_group: "kevent-relay-pyannote"
+model: "pyannote-audio-3.1"   # détermine la queue relay:pyannote-audio-3.1:pending
+redis:
+  addr: "${REDIS_ADDR:-redis:6379}"
 ```
 
 > **Multi-modèles par type** : plusieurs entrées peuvent partager le même `type` avec des `model` différents. Le gateway sélectionne le backend d'après le champ `model` de la requête. Le champ `default: true` désigne le modèle utilisé si `model` est absent et que plusieurs modèles sont configurés.
 
 > **Multi-opérations par modèle** : un même modèle peut exposer plusieurs opérations (ex: transcription et translation) via `operations`. En mode async, préciser l'opération avec `-F operation=transcription` quand le modèle en propose plusieurs.
 
-> **Service sync-direct** : un service sans `input_topic`/`result_topic` est traité entièrement en proxy direct. Kafka n'est pas initialisé si aucun service ne configure de topic.
-
-> **Pré-requis Kafka** : si des topics sont configurés, `input_topic` et `result_topic` doivent être créés avant le démarrage (`AllowAutoTopicCreation: false`). Topics manquants → 500 à la soumission ou boucle infinie côté consumer.
+> **Service sync-direct** : un service sans relay est traité entièrement en proxy direct — aucune queue Redis n'est créée pour ce type.
 
 ---
 
@@ -685,15 +632,18 @@ Métriques Prometheus au format text (scraping compatible avec Prometheus / Vict
 
 ---
 
-## Contrat Kafka (mode async)
+## Contrat async (queue Redis)
 
-### InputEvent — publié par le gateway sur `input_topic`
+Le gateway et le relay communiquent via Redis. Les données du job sont stockées dans Redis JSON ; les fichiers d'entrée/sortie sont dans S3.
+
+### Job record — stocké par le gateway dans Redis
 
 ```json
 {
   "job_id": "550e8400-e29b-41d4-a716-446655440000",
   "service_type": "audio",
   "model": "whisper-large-v3",
+  "status": "pending",
   "input_ref": "550e8400-.../input.wav",
   "inference_url": "/v1/audio/transcriptions",
   "created_at": "2026-03-05T10:00:00Z"
@@ -703,25 +653,19 @@ Métriques Prometheus au format text (scraping compatible avec Prometheus / Vict
 | Champ | Description |
 |---|---|
 | `input_ref` | Clé objet S3 du fichier d'entrée |
-| `inference_url` | Chemin OpenAI à appeler sur le modèle local (appendé à `inference.base_url` du relay) — dérivé du premier path de l'opération choisie |
+| `inference_url` | Chemin à appeler sur le modèle local (appendé à `inference.base_url` du relay) — dérivé du premier path de l'opération choisie |
 
-### ResultEvent — publié par le relay sur `result_topic`
+### Séquence de file d'attente
 
-```json
-{
-  "job_id": "550e8400-e29b-41d4-a716-446655440000",
-  "service_type": "audio",
-  "status": "completed",
-  "result_ref": "550e8400-.../result.json",
-  "completed_at": "2026-03-05T10:04:32Z"
-}
 ```
-
-| Champ | Description |
-|---|---|
-| `status` | `completed` ou `failed` |
-| `result_ref` | Clé objet S3 du fichier résultat (si `completed`) |
-| `error` | Message d'erreur lisible (si `failed`) |
+Gateway   RPUSH relay:<model>:pending <job_id>
+Relay     BLMOVE relay:<model>:pending relay:<model>:processing LEFT RIGHT
+Relay     [traite le job]
+Relay     HSET job:<id> status completed result_ref ...
+Relay     PUBLISH jobs:<model>:completed <job_id>
+Relay     LREM relay:<model>:processing 1 <job_id>
+Gateway   [reçoit PUBLISH, met à jour Redis, déclenche webhook]
+```
 
 ---
 
@@ -753,9 +697,7 @@ Les deux composants exposent des métriques Prometheus sur `GET /metrics`.
 | `kevent_request_duration_seconds` | histogram | `mode`, `service_type`, `model` | Latence bout-en-bout du handler |
 | `kevent_s3_operation_duration_seconds` | histogram | `operation` (upload/get/delete) | Latence des opérations S3 |
 | `kevent_s3_errors_total` | counter | `operation` | Erreurs S3 |
-| `kevent_kafka_publish_duration_seconds` | histogram | `topic` | Latence des écritures Kafka |
-| `kevent_kafka_publish_errors_total` | counter | `topic` | Erreurs de publication Kafka |
-| `kevent_redis_operation_duration_seconds` | histogram | `operation` (save_job/get_job/delete_job/update_job_result) | Latence des opérations Redis |
+| `kevent_redis_operation_duration_seconds` | histogram | `operation` (save_job/get_job/delete_job/update_job_result/push_queue) | Latence des opérations Redis |
 | `kevent_redis_errors_total` | counter | `operation` | Erreurs Redis |
 | `kevent_jobs_by_consumer_total` | counter | `mode`, `service_type`, `model`, `consumer` | Jobs soumis par consumer (uniquement si `consumer_header` configuré) |
 | `kevent_llm_requests_total` | counter | `service_type`, `model`, `backend_model`, `provider`, `user_type`, `status` | Requêtes LLM proxy |
@@ -774,12 +716,13 @@ Les deux composants exposent des métriques Prometheus sur `GET /metrics`.
 
 | Métrique | Type | Labels | Description |
 |---|---|---|---|
-| `kevent_relay_jobs_total` | counter | `service_type`, `status` (completed/failed) | Jobs traités (mode async via Kafka) |
+| `kevent_relay_jobs_total` | counter | `service_type`, `status` (completed/failed) | Jobs traités |
 | `kevent_relay_inference_duration_seconds` | histogram | `service_type` | Durée de l'appel à l'API d'inférence locale |
 | `kevent_relay_input_size_bytes` | histogram | `service_type` | Taille des fichiers d'entrée téléchargés depuis S3 |
 | `kevent_relay_s3_operation_duration_seconds` | histogram | `operation` (get/put/delete) | Latence des opérations S3 |
 | `kevent_relay_s3_errors_total` | counter | `operation` | Erreurs S3 |
-| `kevent_relay_kafka_publish_errors_total` | counter | — | Erreurs de publication des result events |
+| `kevent_relay_redis_publish_errors_total` | counter | — | Erreurs de publication Redis pub/sub (jobs completed) |
+| `kevent_relay_redis_done_errors_total` | counter | — | Erreurs lors de la suppression du job de la processing list |
 
 ### Exemple de configuration Prometheus
 
@@ -807,11 +750,9 @@ scrape_configs:
 │   ├── service/registry.go      # Registre config-driven (routing sync + async, défaut par type)
 │   ├── storage/
 │   │   ├── s3.go                # Client S3 (AWS SDK v2)
-│   │   └── redis.go             # Persistance des jobs (JSON blob + TTL)
-│   ├── kafka/
-│   │   ├── auth.go              # Helpers SASL (PLAIN/SCRAM) + TLS
-│   │   ├── producer.go          # Producteur Kafka — un writer par topic
-│   │   └── consumer.go          # Consumer résultats — une goroutine par result_topic
+│   │   └── redis.go             # Persistance des jobs (JSON blob + TTL) + RPUSH/LPUSH queue
+│   ├── consumer/
+│   │   └── manager.go           # Subscriptions Redis pub/sub (jobs:<model>:completed)
 │   ├── ratelimit/
 │   │   └── ratelimit.go         # Fixed-window rate limiting Redis (Lua INCR+EXPIRE)
 │   ├── cache/
@@ -833,15 +774,16 @@ scrape_configs:
 ├── relay/                       # Relay Deployment (module Go séparé : kevent/relay)
 │   ├── cmd/relay/main.go
 │   ├── internal/
-│   │   ├── config/config.go     # Config relay : inference.base_url + extra_fields
-│   │   ├── kafka/               # SASL + TLS, consumer pull, publisher résultats
+│   │   ├── config/config.go     # Config relay : model, redis, inference.base_url + extra_fields
+│   │   ├── queue/               # BLMOVE pop, Publish (pub/sub), Done (remove from processing)
+│   │   ├── store/               # GetJob, UpdateJobResult (Redis JSON)
 │   │   ├── relay/               # Traitement des jobs async
 │   │   ├── metrics/             # Définitions Prometheus relay — GET /metrics
 │   │   ├── adapter/             # Adapter multipart générique (model + extra_fields + file)
 │   │   └── storage/             # Client S3
 │   └── config.yaml              # Config template (env vars expansées au démarrage)
 ├── helm/gateway/                # Chart Helm du gateway (inclut Redis-HA)
-├── k8s/                         # Manifestes Kubernetes (KafkaUser, Relay Deployment, KEDA ScaledObject)
+├── k8s/                         # Manifestes Kubernetes (Relay Deployment, KEDA ScaledObject)
 ├── config.yaml                  # Configuration par défaut du gateway
 └── Dockerfile                   # Multi-stage build → image distroless (~10 MB)
 ```

@@ -28,14 +28,12 @@ sum by (status, mode, service_type) (
 
 Common causes:
 - S3 unavailable → check `kevent_s3_errors_total`
-- Kafka unavailable → check `kevent_kafka_publish_errors_total`
-- Redis unavailable → gateway logs will show connection errors
+- Redis unavailable → check `kevent_redis_errors_total`, gateway logs will show connection errors
 - Upstream inference service returning errors (sync mode)
 
 ## Mitigation
 
-1. Check S3, Kafka, and Redis connectivity from the gateway pod
+1. Check S3 and Redis connectivity from the gateway pod
 2. If S3 is down: async jobs will fail at upload — check bucket and credentials
-3. If Kafka is down: async submissions fail at enqueue — check broker reachability
-4. If Redis is down: sync-over-Kafka jobs will stall — check Redis HA haproxy endpoint
-5. Scale the gateway deployment if the issue is resource exhaustion
+3. If Redis is down: async submissions fail at enqueue and job state is lost — check Redis HA haproxy endpoint
+4. Scale the gateway deployment if the issue is resource exhaustion

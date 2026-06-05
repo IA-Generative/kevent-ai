@@ -3,11 +3,11 @@
 kevent-ai consists of two independent components deployed separately:
 
 - **Gateway** — HTTP server that accepts requests, routes them, and returns results
-- **Relay** — standalone Kafka pull consumer deployed alongside the inference pod, processing async jobs
+- **Relay** — standalone Kubernetes Deployment alongside the inference pod; one pod per job lifecycle
 
 ## Infrastructure dependencies
 
-![Architecture overview](overview.drawio.png)
+![Architecture overview](overview.png)
 
 ## Component responsibilities
 
@@ -18,22 +18,24 @@ kevent-ai consists of two independent components deployed separately:
 - Enforces per-consumer, per-service rate limits (Redis fixed-window)
 - Uploads input files to S3
 - Persists job records in Redis (configurable TTL per status via `lifecycle.job_ttl`)
-- Publishes `InputEvent` messages to Kafka
-- Consumes `ResultEvent` messages and notifies clients
+- Pushes the job ID to `relay:<model>:pending` (RPUSH, or LPUSH for priority jobs)
+- Subscribes to `jobs:<model>:completed` (Redis pub/sub) to detect relay completion
+- Notifies clients: updates Redis record and triggers webhook if `callback_url` set
 - Proxies sync requests directly to `inference_url`
 - LLM proxy for JSON requests: provider translation, response caching, consumer token tracking
 
 ### Relay
 
 - Runs as a separate container in the inference Deployment (not a sidecar)
-- Pulls `InputEvent` messages from Kafka via a long-running consumer loop (kafka-go Reader, manual commit)
-- Waits for the local inference service to be ready before consuming
+- Waits for the local inference service to be ready (`/health` poll)
+- Pops one job from `relay:<model>:pending` via `BLMOVE LEFT RIGHT` (moves it to `relay:<model>:processing`)
+- Subscribes to `relay:<model>:cancel` before reading the job to avoid a cancel-race window
 - Downloads input from S3
 - Calls the local inference model
-- Uploads results to S3
-- Publishes `ResultEvent` to Kafka
-- Annotates pod with `pod-deletion-cost` during active inference to prevent eviction
-- Scaled by KEDA on Kafka consumer lag (`lagThreshold: 1`, `minReplicaCount: 0`)
+- Uploads result to S3
+- Publishes to `jobs:<model>:completed` (Redis pub/sub) and removes job from the processing list
+- **One job per pod lifecycle** — the pod exits (code 0) after processing; KEDA creates a fresh pod for the next job
+- Scaled by KEDA on Redis list length (`relay:<model>:pending`), `minReplicaCount: 0`
 
 ## Data flow
 

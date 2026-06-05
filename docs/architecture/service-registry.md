@@ -18,11 +18,7 @@ services:
         - "/v1/audio/translations"
     inference_url: "http://..."        # backend base URL (path appended at runtime)
 
-    # Async / Kafka
-    input_topic: jobs.whisper.input
-    result_topic: jobs.whisper.results
-
-    # File validation
+    # File validation (async mode only)
     accepted_exts: [".mp3", ".wav", ".m4a", ".ogg", ".flac"]
     max_file_size_mb: 500
 
@@ -131,4 +127,4 @@ See [LLM proxy](llm-proxy.md) for full documentation.
 
 ## Hot reload
 
-The service registry is reloaded atomically via `POST /-/reload`. The HTTP router is swapped, Kafka consumers are reconciled (stopped for removed topics, started for new ones). Infrastructure (S3, Redis, Kafka connection) is not re-initialised.
+The service registry is reloaded atomically via `POST /-/reload`. The HTTP router is swapped with the new registry. Infrastructure (S3, Redis) is not re-initialised.
