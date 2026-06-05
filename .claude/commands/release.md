@@ -7,8 +7,9 @@ allowed-tools: Read, Edit, Write, Glob, Grep, Bash(git *), Bash(go build *), Bas
 
 - Current branch: !`git branch --show-current`
 - Git status: !`git status --short`
-- Recent commits since last tag: !`git log --oneline $(git describe --tags --abbrev=0 2>/dev/null || echo "")..HEAD 2>/dev/null | head -20`
-- Current tags: !`git tag --sort=-version:refname | head -10`
+- Recent commits (last 20): !`git log --oneline -20`
+- Recent gateway tags: !`git tag --sort=-version:refname | grep "^gateway/" | head -5`
+- Recent relay tags: !`git tag --sort=-version:refname | grep "^relay/" | head -5`
 - Current Chart.yaml: !`cat helm/gateway/Chart.yaml`
 - Current values image.tag: !`grep 'tag:' helm/gateway/values.yaml | head -1`
 - Current CHANGELOG (last 30 lines): !`tail -30 CHANGELOG.md`
