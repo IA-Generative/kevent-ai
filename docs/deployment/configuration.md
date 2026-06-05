@@ -28,7 +28,7 @@ Leave empty in deployments without upstream authentication — no behaviour chan
 
 ### `priority_header`
 
-When set and a request carries this header, the job is published to `services[].priority_topic` instead of `input_topic`. A dedicated relay Deployment consuming the priority topic processes these jobs independently of the normal async queue.
+When set and a request carries this header, the job is inserted at the **head** of the Redis queue (`LPUSH relay:<model>:pending`) instead of the tail (`RPUSH`). The relay always pops from the head (`BLMOVE LEFT RIGHT`), so priority jobs are picked up first by the next available pod.
 
 Leave empty to disable priority routing.
 
@@ -88,22 +88,6 @@ Per-consumer, per-service fixed-window rate limiting backed by Redis. Returns `4
 | `period` | Window duration: `30s`, `1m`, `1h`, `24h` |
 
 Leave `rate_limits` empty to disable. See [Rate limiting](../architecture/rate-limiting.md) for details.
-
-## Kafka
-
-```yaml
-kafka:
-  brokers:
-    - "kafka:9092"
-  consumer_group: "kevent-gateway"
-  sasl:
-    mechanism: "SCRAM-SHA-512"   # PLAIN | SCRAM-SHA-256 | SCRAM-SHA-512
-    username: "${KAFKA_USERNAME}"
-    password: "${KAFKA_PASSWORD}"
-  tls:
-    enabled: true
-    ca_cert_path: "/etc/ssl/certs/kafka-ca.crt"
-```
 
 ## S3
 
@@ -215,12 +199,7 @@ services:
         - "/v1/audio/translations"
     inference_url: "http://backend:80"     # base URL; original path appended
 
-    # Async routing
-    input_topic: "jobs.whisper.input"
-    result_topic: "jobs.whisper.results"
-
-
-    # File validation
+    # File validation (async mode only)
     accepted_exts: [".mp3", ".wav", ".m4a", ".ogg", ".flac"]
     max_file_size_mb: 500
 
@@ -266,9 +245,7 @@ services:
 | `operations` | no | `{}` | Map of operation name → URL paths |
 | `inference_url` | no | `""` | Backend base URL for direct proxy (single backend, legacy — use `backends` for multi-backend) |
 | `backends` | no | `[]` | List of backends with weighted routing. Takes precedence over `inference_url` when set. |
-| `input_topic` | no | `""` | Kafka input topic for async jobs |
-| `result_topic` | no | `""` | Kafka result topic for async jobs |
-| `accepted_exts` | no | any | Allowed file extensions (e.g. `.mp3`) |
+| `accepted_exts` | no | any | Allowed file extensions (e.g. `.mp3`) — async mode only |
 | `max_file_size_mb` | no | `100` | Max upload size in MB |
 | `inference_headers` | no | `{}` | HTTP headers injected on every sync-direct / LLM proxy request |
 | `provider` | no | `""` | LLM provider: `openai`, `anthropic`, `ollama`, `passthrough` |
@@ -324,7 +301,7 @@ inference_headers:
 
 ## Hot reload
 
-`POST /-/reload` re-reads the config file and atomically swaps the router. Kafka consumers are reconciled (stopped for removed topics, started for new ones). S3, Redis, and Kafka connections are not re-initialised.
+`POST /-/reload` re-reads the config file and atomically swaps the router. S3 and Redis connections are not re-initialised.
 
 The `configmap-reload` sidecar can trigger this automatically on ConfigMap changes.
 
@@ -332,11 +309,11 @@ Parameters updated at runtime without pod restart:
 
 | Parameter | Notes |
 |---|---|
-| `services.*` | Full registry rebuild; Kafka consumers reconciled |
+| `services.*` | Full registry rebuild |
 | `lifecycle.*` (all fields) | Including `gc.enabled`, `gc.interval`, `gc.orphan_min_age`, `job_ttl.*` |
 | `redis.pending_max_age` | Picked up on the next GC tick |
 | `rate_limits` | Applied immediately to new requests |
 | `audit_log` | Toggled without restart |
 | `server.user_type_header` | Applied to new requests |
 
-Not hot-reloadable (restart required): `redis.addr`, `s3.*`, `kafka.*`, `server.addr`, `server.*_timeout`, `metrics.top_consumers`.
+Not hot-reloadable (restart required): `redis.addr`, `s3.*`, `server.addr`, `server.*_timeout`, `metrics.top_consumers`.

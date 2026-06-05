@@ -27,7 +27,7 @@ helm upgrade --install kevent-gateway ./helm/gateway -f values.yaml
 
 ```yaml
 image:
-  tag: "v0.13.0"
+  tag: "v0.14.0"
 
 config:
   s3:
@@ -36,9 +36,6 @@ config:
     bucket: "my-kevent-jobs"
   redis:
     addr: "redis:6379"
-  kafka:
-    brokers:
-      - "kafka:9092"
 
 secrets:
   s3AccessKey: "my-access-key"
@@ -82,27 +79,21 @@ extraEnvVars:
         key: key
 ```
 
-## Apply Strimzi Kafka users
-
-```bash
-kubectl apply -f examples/kafka-users.yaml -n <kafka-namespace>
-```
-
-See `examples/kafka-users.yaml` in the repository root. Adjust the `strimzi.io/cluster` label and namespace to match your Strimzi installation.
-
 ## Deploy relay (Deployment + KEDA)
 
-The relay runs as a standalone Deployment alongside the inference container. Apply the manifests from the repository:
+The relay runs as a standalone Deployment alongside the inference container. Each pod processes one job and exits — KEDA creates a new pod when the Redis queue is non-empty.
+
+Apply the manifests from the repository:
 
 ```bash
-# ConfigMap
+# ConfigMap (relay config.yaml)
 kubectl apply -f k8s/relay-cm.yaml
 
 # Deployment (2 containers: inference model + relay)
 kubectl apply -f k8s/deployment-transcription.yaml
 
-# KEDA ScaledObject (scales on Kafka consumer lag)
+# KEDA ScaledObject (scales on Redis list length)
 kubectl apply -f k8s/keda-transcription.yaml
 ```
 
-The KEDA ScaledObject uses `lagThreshold: 1` and `minReplicaCount: 0` — pods scale to zero when no jobs are pending. Replace the `<placeholder>` values (broker address, secret names, image tags) before applying.
+The KEDA ScaledObject targets `relay:<model>:pending` list length with `listLength: 1` and `minReplicaCount: 0` — pods scale to zero when the queue is empty. Replace the `<placeholder>` values (Redis address, secret names, image tags) before applying.
