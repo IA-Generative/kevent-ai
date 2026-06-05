@@ -217,8 +217,9 @@ func (h *JobHandler) Submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	priority := h.priorityHeader != "" && r.Header.Get(h.priorityHeader) != ""
 	mode := "async"
-	if h.priorityHeader != "" && r.Header.Get(h.priorityHeader) != "" {
+	if priority {
 		mode = "async-priority"
 	}
 
@@ -233,6 +234,7 @@ func (h *JobHandler) Submit(w http.ResponseWriter, r *http.Request) {
 		Params:       params,
 		CallbackURL:  callbackURL,
 		ConsumerName: consumerName,
+		Priority:     priority,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
