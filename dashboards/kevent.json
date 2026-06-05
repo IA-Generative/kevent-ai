@@ -447,7 +447,7 @@
         },
         "textMode": "auto"
       },
-      "title": "Jobs soumis/s",
+      "title": "Jobs soumis (total)",
       "type": "stat",
       "targets": [
         {
@@ -455,7 +455,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(kevent_async_jobs_submitted_total[5m]))",
+          "expr": "sum(kevent_async_jobs_submitted_total)",
           "legendFormat": "{{service_type}} / {{model}}",
           "refId": "A"
         }
@@ -1525,13 +1525,13 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "topk(20, sum by (consumer) (rate(kevent_jobs_by_consumer_total{consumer=~\"$consumer\"}[1h])))",
+          "expr": "topk(20, sum by (consumer) (kevent_jobs_by_consumer_total{consumer=~\"$consumer\"}))",
           "interval": "",
           "legendFormat": "{{consumer}}",
           "refId": "A"
         }
       ],
-      "title": "Top consumers \u2014 d\u00e9bit (1h glissante)",
+      "title": "Top consumers \u2014 volume total",
       "type": "bargauge"
     },
     {
@@ -1602,13 +1602,13 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "topk(20, sum by (consumer, mode) (rate(kevent_jobs_by_consumer_total{consumer=~\"$consumer\"}[1h])))",
+          "expr": "topk(20, sum by (consumer, mode) (kevent_jobs_by_consumer_total{consumer=~\"$consumer\"}))",
           "interval": "",
           "legendFormat": "{{consumer}} / {{mode}}",
           "refId": "A"
         }
       ],
-      "title": "Top consumers \u2014 d\u00e9bit (1h) par mode",
+      "title": "Top consumers \u2014 volume total par mode",
       "type": "bargauge"
     },
     {
