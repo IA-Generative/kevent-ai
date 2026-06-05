@@ -77,13 +77,12 @@ nav:
   - Deployment:
       - Helm chart: deployment/helm.md
       - Configuration reference: deployment/configuration.md
-      - Kafka & SASL: deployment/kafka.md
+      - Relay queue (Redis): deployment/queue.md
   - Contributing:
       - Gitflow: contributing/gitflow.md
       - Releasing: contributing/releasing.md
   - Runbooks:
       - Gateway — High Error Rate: runbooks/KeventGatewayHighErrorRate.md
-      - Gateway — Kafka Publish Errors: runbooks/KeventGatewayKafkaPublishErrors.md
       - Gateway — S3 Errors: runbooks/KeventGatewayS3Errors.md
       - Gateway — Rate Limit High Rejection Rate: runbooks/KeventGatewayRateLimitHighRejectionRate.md
       - Gateway — Rate Limit Errors: runbooks/KeventGatewayRateLimitErrors.md
