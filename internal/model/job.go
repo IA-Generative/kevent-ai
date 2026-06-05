@@ -26,6 +26,7 @@ type Job struct {
 	InferenceURL  string            `json:"inference_url,omitempty"`
 	Params        map[string]string `json:"params,omitempty"`
 	ConsumerName  string            `json:"consumer_name,omitempty"` // set from configurable HTTP header (e.g. X-Consumer-Username)
+	Priority      bool              `json:"priority,omitempty"`      // true = inserted at head of relay queue (LPUSH)
 	Error         string            `json:"error,omitempty"`
 	CreatedAt     time.Time         `json:"created_at"`
 	UpdatedAt     time.Time         `json:"updated_at"`

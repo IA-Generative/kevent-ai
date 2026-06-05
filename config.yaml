@@ -5,9 +5,9 @@ server:
   # enforced by Knative timeoutSeconds on the InferenceService side.
   write_timeout: 0s
   idle_timeout: 120s
-  # priority_header: HTTP header set by APISIX on SA consumer requests.
-  # When present and the service has a priority_topic, the job is routed
-  # to that topic and processed with elevated priority by the relay.
+  # priority_header: HTTP header that marks high-priority submissions (e.g. "X-Priority").
+  # When set and the header is present in the request, the job is inserted at the
+  # HEAD of the relay queue (LPUSH) so the next available relay picks it up first.
   # Leave empty to disable priority routing.
   priority_header: "${PRIORITY_HEADER:-}"
   # consumer_header: HTTP header injected by APISIX after authentication to
@@ -67,9 +67,10 @@ lifecycle:
   # Example: "24h", "72h"
   job_ttl:
     global: "${LIFECYCLE_JOB_TTL:-}"
-    # completed: "${LIFECYCLE_JOB_TTL_COMPLETED:-}"
-    # pending:   "${LIFECYCLE_JOB_TTL_PENDING:-}"
-    # failed:    "${LIFECYCLE_JOB_TTL_FAILED:-}"
+    # completed:  "${LIFECYCLE_JOB_TTL_COMPLETED:-}"
+    # pending:    "${LIFECYCLE_JOB_TTL_PENDING:-}"
+    # failed:     "${LIFECYCLE_JOB_TTL_FAILED:-}"
+    # cancelled:  "${LIFECYCLE_JOB_TTL_CANCELLED:-}"
   # gc: unified background garbage collector.
   # enabled: false by default — set to true to activate.
   # interval: how often the GC runs (default 15m).
@@ -144,7 +145,7 @@ services:
     accepted_exts: [".pdf", ".jpg", ".jpeg", ".png", ".tiff", ".bmp"]
     max_file_size_mb: 50
 
-  # ── Example: add a new model variant for the same service type ─────────────
+  # ── Example: add a second model variant for the same service type ──────────
   # - type: audio
   #   model: "whisper-large-v3-turbo"
   #   operations:
@@ -153,8 +154,6 @@ services:
   #     translation:
   #       - "/v1/audio/translations"
   #   inference_url: "http://kevent-transcription-turbo-predictor.default.svc.cluster.local"
-  #   input_topic: jobs.whisper-large-v3-turbo.input
-  #   result_topic: jobs.whisper-large-v3-turbo.results
   #   accepted_exts: [".mp3", ".wav", ".m4a", ".ogg", ".flac"]
   #   max_file_size_mb: 500
 
