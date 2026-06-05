@@ -9,9 +9,8 @@ The 95th percentile inference duration exceeds the configured threshold (default
 
 ## Impact
 
-- Sync-over-Kafka clients are held open longer, increasing `kevent_sync_jobs_in_flight`
 - Async jobs complete later than expected
-- Risk of Knative `timeoutSeconds` being hit, causing relay context cancellation
+- Relay pod remains running longer — KEDA may create additional pods if the queue keeps growing
 
 ## Diagnosis
 
@@ -43,6 +42,6 @@ Common causes:
 ## Mitigation
 
 1. If caused by large inputs: expected behaviour — consider raising the alerting threshold or use `max_file_size_mb` to limit input size
-2. If GPU contention: lower `containerConcurrency` on the InferenceService to prevent concurrent GPU usage
-3. If cold start: configure Knative `minReplicas: 1` to avoid scale-to-zero for latency-sensitive services
+2. If GPU contention: the relay processes one job per pod lifecycle, so each pod has exclusive GPU access — check if multiple pods are starting simultaneously
+3. If cold start: increase `queue_pop_timeout` in relay config to give the inference service more time to initialise before the pod exits
 4. Check model pod resource limits — GPU memory pressure can slow inference significantly

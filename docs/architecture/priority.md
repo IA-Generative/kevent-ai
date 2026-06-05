@@ -1,33 +1,30 @@
 # Priority routing
 
-Priority routing lets SA (service account) consumers bypass the normal async queue, ensuring low-latency processing for premium workloads.
+Priority routing lets SA (service account) consumers bypass the normal async queue, ensuring their jobs are picked up first by the next available relay pod.
 
 ## How it works
 
-When a request carries the priority header (`server.priority_header`), the gateway publishes the `InputEvent` to `priority_topic` instead of `input_topic`.
+The relay's `BLMOVE` always pops from the **left** (head) of `relay:<model>:pending`. The gateway normally appends jobs to the **right** (`RPUSH`). For priority jobs, it appends to the **left** (`LPUSH`) instead — so they land at the head of the queue and are picked up before any normal job already waiting.
 
 ```
-Normal async:   jobs.<model>.input    → relay consumer group (standard)
-Priority async: jobs.<model>.priority → relay consumer group (dedicated deployment)
+Normal async:   RPUSH relay:<model>:pending  → job appended at tail
+Priority async: LPUSH relay:<model>:pending  → job inserted at head
 ```
 
-A dedicated relay Deployment — configured to consume `priority_topic` with its own consumer group — processes priority jobs independently of the normal async queue. Because each relay is a long-running pull consumer, there is no shared `syncPriority` flag: isolation is achieved at the Kafka consumer group level.
+Because the relay pops from the left (`BLMOVE LEFT RIGHT`), priority jobs are always picked up next regardless of how many normal jobs are already in the queue.
 
 ## Configuration
 
 ```yaml
 server:
   priority_header: "X-Priority"   # header name to check on incoming requests
-
-services:
-  - type: audio
-    model: "whisper-large-v3"
-    input_topic: jobs.whisper-large-v3.input
-    priority_topic: jobs.whisper-large-v3.priority   # omit to disable priority routing
-    result_topic: jobs.whisper-large-v3.results
 ```
 
-Deploy a second relay instance with `kafka.input_topic: jobs.whisper-large-v3.priority` and a distinct `kafka.consumer_group` to consume priority jobs.
+When the header is present in a `POST /jobs/{service_type}` request, the job is marked `priority: true` and inserted at the head of the queue. Leave the field empty to disable priority routing.
+
+## Single-deployment model
+
+Unlike the previous Kafka-based approach (which required a dedicated relay Deployment consuming a separate topic), the Redis LPUSH mechanism works within the **same relay Deployment**. No second relay is needed — the head-of-queue position is sufficient to ensure priority pick-up.
 
 ## Consumer identification and isolation
 
@@ -37,7 +34,7 @@ When `server.consumer_header` is set (e.g. `X-Consumer-Username`, injected by AP
 2. Maintains `consumer:{name}:jobs` sorted set (score = Unix timestamp, same TTL as job)
 3. Exposes `GET /jobs` to list a consumer's jobs (paginated, most-recent-first)
 4. Enforces ownership on `GET /jobs/{service_type}/{id}`: if the header is present, the job's `consumer_name` must match — returns `404` on mismatch
-5. Increments `kevent_jobs_by_consumer_total{mode, service_type, model, consumer}`
+5. Increments `kevent_jobs_by_consumer_total{mode, service_type, model, consumer}` with `mode=async-priority` for priority jobs
 
 ```yaml
 server:

@@ -1,6 +1,6 @@
 # kevent-ai
 
-**kevent-ai** is an AI inference job gateway for Kubernetes/Knative. It exposes an HTTP API that accepts file uploads, enqueues them as Kafka jobs, and returns results asynchronously — or synchronously for low-latency use cases.
+**kevent-ai** is an AI inference job gateway for Kubernetes. It exposes an HTTP API that accepts file uploads, enqueues them as Redis jobs, and returns results asynchronously — or synchronously for low-latency use cases.
 
 ## Quick start
 
@@ -46,13 +46,13 @@ Two independent Go binaries, two Docker images:
 | **Gateway** | `ghcr.io/ia-generative/kevent-ai/gateway` | `cmd/gateway/main.go` |
 | **Relay** | `ghcr.io/ia-generative/kevent-ai/relay` | `relay/cmd/relay/main.go` |
 
-The **relay** runs as a standalone Kubernetes Deployment alongside the inference pod. It pulls jobs from Kafka via a long-running consumer loop, calls the local inference model, and publishes results. Autoscaling is handled by KEDA on Kafka consumer lag.
+The **relay** runs as a standalone Kubernetes Deployment alongside the inference pod. Each pod pops one job from a Redis list (`BLMOVE`), calls the local inference model, and exits — KEDA scales on Redis queue depth and terminates idle pods.
 
 ## Key features
 
 - Config-driven service registry — add a new model with a YAML block, no code change
 - Hot-reload via `POST /-/reload` — update config without pod restart
-- Priority routing — dedicated Kafka topic for SA/priority consumers
+- Priority routing — Redis `LPUSH` inserts priority jobs at the head of the queue
 - Consumer tracking — link jobs to API consumers via a configurable header
 - **LLM proxy** — built-in OpenAI/Anthropic/Ollama/passthrough proxy with response caching and consumer token metrics
 - **Rate limiting** — per-consumer Redis fixed-window limits, configurable per service type and user type
@@ -61,7 +61,7 @@ The **relay** runs as a standalone Kubernetes Deployment alongside the inference
 - Prometheus metrics — requests, latency, tokens, cache hits, rate limits, top-N consumer usage, PII blocks
 - OpenAPI 3.0 spec generated at runtime from the live registry
 - AES-256-GCM at-rest encryption for S3 objects
-- KEDA autoscaling — relay scales on Kafka consumer lag, scale-to-zero supported
+- KEDA autoscaling — relay scales on Redis queue depth, scale-to-zero supported
 
 ## Links
 

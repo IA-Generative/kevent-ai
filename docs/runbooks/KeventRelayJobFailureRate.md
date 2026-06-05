@@ -9,7 +9,7 @@ More than 10% (warning) or 30% (critical) of jobs processed by relay sidecars ar
 
 ## Impact
 
-Async jobs complete with status `failed`. The gateway notifies clients via webhook (if configured) with the error. Sync-over-Kafka jobs return an error in the HTTP response body.
+Async jobs complete with status `failed`. The gateway notifies clients via webhook (if configured) with the error. Clients polling `GET /jobs/{type}/{id}` receive `status: failed` with an error message.
 
 ## Diagnosis
 
