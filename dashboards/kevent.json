@@ -15,7 +15,7 @@
       }
     ]
   },
-  "description": "kevent AI inference gateway & relay sidecar — Prometheus metrics",
+  "description": "kevent AI inference gateway & relay sidecar \u2014 Prometheus metrics",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -33,7 +33,7 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "kevent — Gateway & Relay",
+  "title": "kevent \u2014 Gateway & Relay",
   "uid": "kevent-gw-relay-v1",
   "version": 4,
   "templating": {
@@ -89,7 +89,7 @@
         "y": 0
       },
       "id": 1,
-      "title": "Gateway — Requêtes",
+      "title": "Gateway \u2014 Requ\u00eates",
       "type": "row"
     },
     {
@@ -144,7 +144,7 @@
           "sort": "desc"
         }
       },
-      "title": "Taux de requêtes",
+      "title": "Taux de requ\u00eates",
       "type": "timeseries",
       "targets": [
         {
@@ -153,7 +153,7 @@
             "uid": "${datasource}"
           },
           "expr": "sum by (mode, service_type, status) (rate(kevent_requests_total[5m]))",
-          "legendFormat": "{{mode}} / {{service_type}} — {{status}}",
+          "legendFormat": "{{mode}} / {{service_type}} \u2014 {{status}}",
           "refId": "A"
         }
       ]
@@ -210,7 +210,7 @@
           "sort": "desc"
         }
       },
-      "title": "Latence requêtes (p50 / p95 / p99)",
+      "title": "Latence requ\u00eates (p50 / p95 / p99)",
       "type": "timeseries",
       "targets": [
         {
@@ -251,7 +251,7 @@
         "y": 9
       },
       "id": 7,
-      "title": "Gateway — S3",
+      "title": "Gateway \u2014 S3",
       "type": "row"
     },
     {
@@ -306,7 +306,7 @@
           "sort": "desc"
         }
       },
-      "title": "S3 — Latence p95 par opération",
+      "title": "S3 \u2014 Latence p95 par op\u00e9ration",
       "type": "timeseries",
       "targets": [
         {
@@ -372,7 +372,7 @@
           "sort": "desc"
         }
       },
-      "title": "S3 — Erreurs/s par opération",
+      "title": "S3 \u2014 Erreurs/s par op\u00e9ration",
       "type": "timeseries",
       "targets": [
         {
@@ -395,7 +395,7 @@
         "y": 18
       },
       "id": 50,
-      "title": "Jobs async — Vue d'ensemble",
+      "title": "Jobs async \u2014 Vue d'ensemble",
       "type": "row"
     },
     {
@@ -447,7 +447,7 @@
         },
         "textMode": "auto"
       },
-      "title": "Jobs soumis (24h)",
+      "title": "Jobs soumis/s",
       "type": "stat",
       "targets": [
         {
@@ -455,7 +455,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "increase(kevent_async_jobs_submitted_total[24h])",
+          "expr": "sum(rate(kevent_async_jobs_submitted_total[5m]))",
           "legendFormat": "{{service_type}} / {{model}}",
           "refId": "A"
         }
@@ -579,7 +579,7 @@
           "sort": "desc"
         }
       },
-      "title": "Jobs annulés/s",
+      "title": "Jobs annul\u00e9s/s",
       "type": "timeseries",
       "targets": [
         {
@@ -654,7 +654,7 @@
           "sort": "desc"
         }
       },
-      "title": "Jobs stale purgés/s",
+      "title": "Jobs stale purg\u00e9s/s",
       "type": "timeseries",
       "targets": [
         {
@@ -677,7 +677,7 @@
         "y": 35
       },
       "id": 210,
-      "title": "Relay — K8s",
+      "title": "Relay \u2014 K8s",
       "type": "row"
     },
     {
@@ -795,8 +795,8 @@
           "sort": "desc"
         }
       },
-      "description": "Proxy du throughput — 1 restart = 1 job traité",
-      "title": "Relay — Débit jobs (pod restarts/s)",
+      "description": "Proxy du throughput \u2014 1 restart = 1 job trait\u00e9",
+      "title": "Relay \u2014 D\u00e9bit jobs (pod restarts/s)",
       "type": "timeseries",
       "targets": [
         {
@@ -863,7 +863,7 @@
         }
       },
       "description": "0=ok, !=0=erreur",
-      "title": "Relay — Exit codes dernière terminaison",
+      "title": "Relay \u2014 Exit codes derni\u00e8re terminaison",
       "type": "timeseries",
       "targets": [
         {
@@ -929,7 +929,7 @@
           "sort": "desc"
         }
       },
-      "title": "Queue relay — Profondeur par modèle",
+      "title": "Queue relay \u2014 Profondeur par mod\u00e8le",
       "type": "timeseries",
       "targets": [
         {
@@ -952,7 +952,7 @@
         "y": 52
       },
       "id": 18,
-      "title": "Relay — S3",
+      "title": "Relay \u2014 S3",
       "type": "row"
     },
     {
@@ -1007,7 +1007,7 @@
           "sort": "desc"
         }
       },
-      "title": "Relay — S3 latence p95 par opération",
+      "title": "Relay \u2014 S3 latence p95 par op\u00e9ration",
       "type": "timeseries",
       "targets": [
         {
@@ -1073,7 +1073,7 @@
           "sort": "desc"
         }
       },
-      "title": "Relay — Erreurs S3/s",
+      "title": "Relay \u2014 Erreurs S3/s",
       "type": "timeseries",
       "targets": [
         {
@@ -1096,7 +1096,7 @@
         "y": 61
       },
       "id": 28,
-      "title": "Gateway — Redis",
+      "title": "Gateway \u2014 Redis",
       "type": "row"
     },
     {
@@ -1190,7 +1190,7 @@
           "refId": "B"
         }
       ],
-      "title": "Redis — Latence p95 par opération",
+      "title": "Redis \u2014 Latence p95 par op\u00e9ration",
       "type": "timeseries"
     },
     {
@@ -1274,7 +1274,7 @@
           "refId": "A"
         }
       ],
-      "title": "Redis — Erreurs/s par opération",
+      "title": "Redis \u2014 Erreurs/s par op\u00e9ration",
       "type": "timeseries"
     },
     {
@@ -1286,7 +1286,7 @@
         "y": 70
       },
       "id": 31,
-      "title": "Gateway — Consumers",
+      "title": "Gateway \u2014 Consumers",
       "type": "row"
     },
     {
@@ -1454,7 +1454,7 @@
           "refId": "A"
         }
       ],
-      "title": "Soumissions par consumer/s — détail modèle",
+      "title": "Soumissions par consumer/s \u2014 d\u00e9tail mod\u00e8le",
       "type": "timeseries"
     },
     {
@@ -1525,13 +1525,13 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "topk(20, sum by (consumer) (increase(kevent_jobs_by_consumer_total{consumer=~\"$consumer\"}[1h])))",
+          "expr": "topk(20, sum by (consumer) (rate(kevent_jobs_by_consumer_total{consumer=~\"$consumer\"}[1h])))",
           "interval": "",
           "legendFormat": "{{consumer}}",
           "refId": "A"
         }
       ],
-      "title": "Top consumers — volume total (1h glissante)",
+      "title": "Top consumers \u2014 d\u00e9bit (1h glissante)",
       "type": "bargauge"
     },
     {
@@ -1602,13 +1602,13 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "topk(20, sum by (consumer, mode) (increase(kevent_jobs_by_consumer_total{consumer=~\"$consumer\"}[1h])))",
+          "expr": "topk(20, sum by (consumer, mode) (rate(kevent_jobs_by_consumer_total{consumer=~\"$consumer\"}[1h])))",
           "interval": "",
           "legendFormat": "{{consumer}} / {{mode}}",
           "refId": "A"
         }
       ],
-      "title": "Top consumers — volume total (1h) par mode",
+      "title": "Top consumers \u2014 d\u00e9bit (1h) par mode",
       "type": "bargauge"
     },
     {
@@ -1620,7 +1620,7 @@
         "y": 87
       },
       "id": 36,
-      "title": "Gateway — Rate Limiting",
+      "title": "Gateway \u2014 Rate Limiting",
       "type": "row"
     },
     {
@@ -1628,7 +1628,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "Taux de requêtes rejetées (429) par le rate limiter, par service_type. Augmente quand un consumer dépasse son quota.",
+      "description": "Taux de requ\u00eates rejet\u00e9es (429) par le rate limiter, par service_type. Augmente quand un consumer d\u00e9passe son quota.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1711,7 +1711,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "Taux de requêtes rejetées (429) par user_type (header OPA). Permet de voir quel profil d'utilisateur est le plus throttlé.",
+      "description": "Taux de requ\u00eates rejet\u00e9es (429) par user_type (header OPA). Permet de voir quel profil d'utilisateur est le plus throttl\u00e9.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1794,7 +1794,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "Part des requêtes rejetées par le rate limiter sur le total évalué. Un pic indique une pression forte sur un service.",
+      "description": "Part des requ\u00eates rejet\u00e9es par le rate limiter sur le total \u00e9valu\u00e9. Un pic indique une pression forte sur un service.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1877,7 +1877,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "Erreurs Redis lors de l'évaluation du rate limit. Les requêtes sont laissées passer (fail-open). Une valeur non nulle indique un problème Redis.",
+      "description": "Erreurs Redis lors de l'\u00e9valuation du rate limit. Les requ\u00eates sont laiss\u00e9es passer (fail-open). Une valeur non nulle indique un probl\u00e8me Redis.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1976,7 +1976,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "Nombre de consumers distincts actifs par user_type, calculé via PromQL group(). Nécessite consumer_header et rate_limits configurés. Reflète la fenêtre de rétention Prometheus (typiquement 15j).",
+      "description": "Nombre de consumers distincts actifs par user_type, calcul\u00e9 via PromQL group(). N\u00e9cessite consumer_header et rate_limits configur\u00e9s. Refl\u00e8te la fen\u00eatre de r\u00e9tention Prometheus (typiquement 15j).",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -2064,7 +2064,7 @@
         "y": 112
       },
       "id": 42,
-      "title": "Gateway — LLM Proxy",
+      "title": "Gateway \u2014 LLM Proxy",
       "type": "row"
     },
     {
@@ -2072,7 +2072,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "Débit des requêtes LLM proxy, par modèle et statut HTTP. Inclut cache hits (provider=cache) et erreurs backend.",
+      "description": "D\u00e9bit des requ\u00eates LLM proxy, par mod\u00e8le et statut HTTP. Inclut cache hits (provider=cache) et erreurs backend.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -2136,7 +2136,7 @@
           "sort": "desc"
         }
       },
-      "title": "LLM — Taux de requêtes/s par modèle",
+      "title": "LLM \u2014 Taux de requ\u00eates/s par mod\u00e8le",
       "type": "timeseries",
       "targets": [
         {
@@ -2145,7 +2145,7 @@
             "uid": "${datasource}"
           },
           "expr": "sum by (model, status) (rate(kevent_llm_requests_total[5m]))",
-          "legendFormat": "{{model}} — {{status}}",
+          "legendFormat": "{{model}} \u2014 {{status}}",
           "refId": "A"
         }
       ]
@@ -2155,7 +2155,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "Latence totale des requêtes LLM proxy (cache miss + appel backend). Cache hits exclus (provider=cache).",
+      "description": "Latence totale des requ\u00eates LLM proxy (cache miss + appel backend). Cache hits exclus (provider=cache).",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -2219,7 +2219,7 @@
           "sort": "desc"
         }
       },
-      "title": "LLM — Latence end-to-end p50 / p95 / p99",
+      "title": "LLM \u2014 Latence end-to-end p50 / p95 / p99",
       "type": "timeseries",
       "targets": [
         {
@@ -2256,7 +2256,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "Débit de tokens par type (prompt/completion) et par modèle. Multiplier par 60 pour avoir tokens/min.",
+      "description": "D\u00e9bit de tokens par type (prompt/completion) et par mod\u00e8le. Multiplier par 60 pour avoir tokens/min.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -2320,7 +2320,7 @@
           "sort": "desc"
         }
       },
-      "title": "LLM — Tokens consommés/s (prompt & completion)",
+      "title": "LLM \u2014 Tokens consomm\u00e9s/s (prompt & completion)",
       "type": "timeseries",
       "targets": [
         {
@@ -2329,7 +2329,7 @@
             "uid": "${datasource}"
           },
           "expr": "sum by (model, type) (rate(kevent_llm_tokens_total[5m]))",
-          "legendFormat": "{{model}} — {{type}}",
+          "legendFormat": "{{model}} \u2014 {{type}}",
           "refId": "A"
         }
       ]
@@ -2339,7 +2339,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "Pourcentage de requêtes servies depuis le cache Redis. 0% = cache désactivé (TTL=0) ou tous les prompts sont uniques.",
+      "description": "Pourcentage de requ\u00eates servies depuis le cache Redis. 0% = cache d\u00e9sactiv\u00e9 (TTL=0) ou tous les prompts sont uniques.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -2403,7 +2403,7 @@
           "sort": "desc"
         }
       },
-      "title": "LLM — Cache hit rate (%)",
+      "title": "LLM \u2014 Cache hit rate (%)",
       "type": "timeseries",
       "targets": [
         {
@@ -2422,7 +2422,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "Volume de hits et misses cache par modèle. Un hit économise un appel backend complet.",
+      "description": "Volume de hits et misses cache par mod\u00e8le. Un hit \u00e9conomise un appel backend complet.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -2486,7 +2486,7 @@
           "sort": "desc"
         }
       },
-      "title": "LLM — Cache hits & misses/s",
+      "title": "LLM \u2014 Cache hits & misses/s",
       "type": "timeseries",
       "targets": [
         {
@@ -2523,7 +2523,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "Consommation de tokens ventilée par profil utilisateur (header user_type_header). Utile pour facturation interne.",
+      "description": "Consommation de tokens ventil\u00e9e par profil utilisateur (header user_type_header). Utile pour facturation interne.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -2587,7 +2587,7 @@
           "sort": "desc"
         }
       },
-      "title": "LLM — Tokens par user_type",
+      "title": "LLM \u2014 Tokens par user_type",
       "type": "timeseries",
       "targets": [
         {
@@ -2596,7 +2596,7 @@
             "uid": "${datasource}"
           },
           "expr": "sum by (user_type, type) (rate(kevent_llm_tokens_total[5m]))",
-          "legendFormat": "{{user_type}} — {{type}}",
+          "legendFormat": "{{user_type}} \u2014 {{type}}",
           "refId": "A"
         }
       ]
