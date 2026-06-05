@@ -41,9 +41,16 @@ var (
 		Help: "Total number of S3 operation errors.",
 	}, []string{"operation"})
 
-	// KafkaPublishErrorsTotal counts result-event publish failures.
-	KafkaPublishErrorsTotal = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "kevent_relay_kafka_publish_errors_total",
-		Help: "Total number of Kafka result-event publish errors.",
+	// RedisPublishErrorsTotal counts failures publishing the completion notification
+	// to the Redis pub/sub channel (jobs:<model>:completed).
+	RedisPublishErrorsTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "kevent_relay_redis_publish_errors_total",
+		Help: "Total number of Redis pub/sub publish errors on job completion.",
+	})
+
+	// RedisDoneErrorsTotal counts failures removing the job from the processing list.
+	RedisDoneErrorsTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "kevent_relay_redis_done_errors_total",
+		Help: "Total number of Redis errors when removing job from the processing list.",
 	})
 )

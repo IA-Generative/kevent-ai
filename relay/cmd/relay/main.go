@@ -16,6 +16,7 @@ import (
 
 	"kevent/relay/internal/adapter"
 	"kevent/relay/internal/config"
+	"kevent/relay/internal/metrics"
 	"kevent/relay/internal/model"
 	"kevent/relay/internal/queue"
 	relayproc "kevent/relay/internal/relay"
@@ -39,9 +40,11 @@ func (p *redisPublisher) PublishResult(ctx context.Context, jobID string, status
 	}
 	if err := p.q.Publish(ctx, jobID); err != nil {
 		slog.Warn("failed to publish job completion notification", "job_id", jobID, "error", err)
+		metrics.RedisPublishErrorsTotal.Inc()
 	}
 	if err := p.q.Done(ctx, jobID); err != nil {
 		slog.Warn("failed to remove job from processing list", "job_id", jobID, "error", err)
+		metrics.RedisDoneErrorsTotal.Inc()
 	}
 	return nil
 }
