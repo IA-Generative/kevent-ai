@@ -16,6 +16,23 @@ Versioning: each component is versioned independently — see tag conventions be
 
 ## Gateway
 
+### [v0.14.1] — 2026-06-05
+
+#### Added
+
+- **Priority queue** (`server.priority_header`): jobs are inserted at the head of the Redis queue (`LPUSH relay:<model>:pending`) when the configured header is present. No dedicated relay Deployment required — the relay's `BLMOVE LEFT RIGHT` naturally dequeues priority jobs first.
+- `kevent_async_jobs_submitted_total` counter (labels: `service_type`, `model`, `mode=async|async-priority`) — emitted at submission time.
+
+#### Changed
+
+- **Grafana dashboard**: removed Kafka/Knative/relay panels; added "Jobs async — Vue d'ensemble" row and "Relay — K8s" row (kube-state-metrics + redis_exporter). Bargauge/stat panels use raw counter values instead of `rate()`/`increase()`.
+
+#### Removed
+
+- `kevent_kafka_publish_duration_seconds` and `kevent_kafka_publish_errors_total` Prometheus metrics (Kafka was removed in v0.14.0; these counters were never emitted).
+
+---
+
 ### [v0.14.0] — 2026-06-04
 
 #### Changed
